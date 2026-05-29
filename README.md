@@ -260,17 +260,6 @@ python -m xbot.cli.main run
 python -m pytest -q
 ```
 
-## Git 提交说明
-
-本仓库已设置本地提交身份：
-
-```text
-user.name=NanSsye
-user.email=169164040+NanSsye@users.noreply.github.com
-```
-
-因此后续在本仓库提交会归属到 GitHub 账号 `NanSsye`。
-
 ## 相关文档
 
 - [后端框架设计文档](docs/backend-framework-design.md)
