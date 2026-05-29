@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from uuid import uuid4
 
@@ -55,6 +56,16 @@ class ToolCallResult(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class AgentRuntimeEvent(BaseModel):
+    task_id: str
+    type: str
+    content: object
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+AgentEventSubscriber = Callable[[AgentRuntimeEvent], Awaitable[None] | None]
+
+
 class AgentRuntime:
     def __init__(
         self,
@@ -84,6 +95,7 @@ class AgentRuntime:
         self.skill_tools = SkillToolProvider(workspace=self.workspace, skills=self.skills)
         self._static_prompt_cache: tuple[tuple[object, ...], str] | None = None
         self._skill_prompt_cache: tuple[int, str] | None = None
+        self._event_subscribers: set[AgentEventSubscriber] = set()
         register_builtin_tools(
             self.tools,
             workspace=self.workspace,
@@ -108,6 +120,14 @@ class AgentRuntime:
     def attach_reply_sender(self, send_reply) -> None:
         self.background.attach_reply_sender(send_reply)
 
+    def subscribe_events(self, subscriber: AgentEventSubscriber) -> Callable[[], None]:
+        self._event_subscribers.add(subscriber)
+
+        def unsubscribe() -> None:
+            self._event_subscribers.discard(subscriber)
+
+        return unsubscribe
+
     async def run_task(self, input_text: str, source: str = "api") -> AgentResult:
         task_id = str(uuid4())
         logger.info("Agent 任务开始: task_id={} source={} input_chars={}", task_id, source, len(input_text))
@@ -115,8 +135,10 @@ class AgentRuntime:
             logger.info("Agent 任务写入存储开始: task_id={}", task_id)
             async with self.repository_provider() as repo:
                 await repo.create_task(task_id, source, input_text)
-                await repo.add_event(task_id, "task.received", input_text)
+            await self._add_event(task_id, "task.received", input_text)
             logger.info("Agent 任务写入存储完成: task_id={}", task_id)
+        else:
+            await self._add_event(task_id, "task.received", input_text)
         memory_item = await self.memory.add("episodic", f"Task received from {source}: {input_text}")
         logger.info("Agent 任务进入 LLM: task_id={}", task_id)
         output = await self._run_llm(task_id, input_text, source=source)
@@ -131,8 +153,10 @@ class AgentRuntime:
             async with self.repository_provider() as repo:
                 await repo.save_memory(memory_item, source=source)
                 await repo.finish_task(result)
-                await repo.add_event(task_id, "task.completed", result.output)
+            await self._add_event(task_id, "task.completed", result.output)
             logger.info("Agent 任务结果写入存储完成: task_id={}", task_id)
+        else:
+            await self._add_event(task_id, "task.completed", result.output)
         return result
 
     async def continue_task(self, task_id: str, user_input: str) -> AgentResult:
@@ -273,6 +297,16 @@ class AgentRuntime:
 
     def mcp_status(self) -> dict:
         return self.mcp.status()
+
+    def visible_tools(self, *, source: str = "api") -> list[dict]:
+        toolsets = toolsets_for_source(self.config, source)
+        context = source_context(source)
+        return self.tools.list_tools(
+            toolsets=toolsets,
+            platform=context.get("platform"),
+            scope=context.get("scope"),
+            mode=self.config.mode,
+        )
 
     async def reload_mcp(self) -> dict:
         await self.mcp.reload()
@@ -419,12 +453,28 @@ class AgentRuntime:
         return tool.risk_level in {"read"}
 
     async def _add_event(self, task_id: str, event_type: str, content: object) -> None:
+        event = AgentRuntimeEvent(task_id=task_id, type=event_type, content=content)
+        await self._publish_event(event)
         if not self.repository_provider:
             return
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
         async with self.repository_provider() as repo:
             await repo.add_event(task_id, event_type, content)
+
+    async def _publish_event(self, event: AgentRuntimeEvent) -> None:
+        for subscriber in list(self._event_subscribers):
+            try:
+                result = subscriber(event)
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception as exc:
+                logger.warning(
+                    "Agent event subscriber failed: task_id={} type={} error={}",
+                    event.task_id,
+                    event.type,
+                    exc,
+                )
 
     def _summarize_payload(self, value: object) -> object:
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)

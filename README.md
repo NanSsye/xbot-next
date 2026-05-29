@@ -385,7 +385,49 @@ python -m xbot.cli.main db-bootstrap
 python -m xbot.cli.main db-upgrade
 python -m xbot.cli.main db-current
 python -m xbot.cli.main run
+python -m xbot.cli.main chat
 python -m pytest -q
+```
+
+## 终端 Agent 对话
+
+不经过微信通道时，可以直接在终端里和 Agent 对话：
+
+```bat
+xbot
+python -m xbot.cli.main chat
+```
+
+可选参数：
+
+```bat
+xbot chat --tui
+python -m xbot.cli.main chat --session dev-1 --cwd D:\项目\项目\xbot\xbot-next
+python -m xbot.cli.main chat --verbose
+python -m xbot.cli.main chat --fancy-input
+python -m xbot.cli.main chat --tui
+```
+
+终端模式默认使用 Windows 原生输入，中文输入法兼容性最好；需要命令补全和本地输入历史时，可以加 `--fancy-input` 启用 `prompt_toolkit`。
+Agent 执行过程中默认使用紧凑事件流：只显示一次 `thinking...`，工具完成/失败时显示简短结果；`--verbose` 会额外显示 LLM、task 和工具开始事件。终端保持打开时，后台任务完成、失败或取消也会主动打印提示。
+当前终端会话会保留最近的 Agent 事件和后台任务事件，方便事后用命令回看，不需要翻滚动日志。
+终端对话模式会把框架运行日志写入 `logs/xbot-terminal.log`，避免 INFO 日志刷屏污染对话区；`--debug` 会重新把调试日志输出到控制台。
+`--tui` 会进入 Textual 全屏终端界面，左侧显示对话，右侧显示工具事件和后台任务事件，底部输入框继续复用同一套 slash command。
+安装为可编辑包后，`xbot` 不带子命令会进入普通终端对话模式，中文输入兼容性更好；`xbot chat --fancy-input` 用于启用补全/历史；`xbot chat --tui` 用于进入全屏 TUI；`xbot run` 仍用于启动后端服务。
+
+内置命令：
+
+```text
+/help       查看命令
+/exit       退出
+/status     查看 runtime、LLM、MCP 状态
+/tools      查看当前终端可见工具
+/tasks      查看后台任务
+/task ID    查看后台任务详情
+/replay ID  重放失败后台任务
+/events N   查看最近 N 条 Agent 工具/LLM/task 事件
+/logs N     同时查看最近 N 条 Agent 事件和后台任务事件
+/new        开启新的终端会话
 ```
 
 ## 相关文档

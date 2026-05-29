@@ -12,6 +12,7 @@ class PluginContext:
     name: str
     data_dir: Path
     config: dict[str, Any]
+    plugins: Any | None = None
     agent: Any | None = None
     send_reply: Callable[[Reply], Awaitable[None]] | None = None
     conversations: Any | None = None

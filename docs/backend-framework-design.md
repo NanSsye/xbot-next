@@ -151,7 +151,9 @@
 - [x] Agent 工具体验对齐 Codex 四阶段第一版完成：后台任务 overview API、失败任务 replay API、通道场景按 provider metadata 自动后台执行策略已落地。
 - [x] Agent 工具调用解析增强：支持宽容解析非标准 `{"tool": ...}`、半坏 `tool_calls` JSON，并防止内部工具调用 JSON 外泄到用户回复。
 - [x] `filesystem.read_file` 已增加目录路径保护，目录读取会提示改用 `filesystem.list_dir`，避免 Windows 上目录读取显示为权限错误。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `82 passed`。
+- [x] 终端 Agent 对话模式第一阶段完成：新增 `python -m xbot.cli.main chat`，复用同一套 `AgentRuntime`、toolset、后台任务和 slash command。
+- [x] 终端 Agent 对话模式五阶段第一版完成：终端会话内保留最近 Agent 事件和后台任务事件，新增 `/events [n]` 与 `/logs [n]` 用于回看工具执行链路和后台任务结果。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `102 passed`。
 
 进行中：
 
@@ -160,6 +162,7 @@
 - [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息和回复链路；下一步验证长连接重连、群聊高频消息、异常消息格式和生产日志可观测性。
 - [ ] Agent 工具 provider 四阶段：浏览器会话生命周期接入 runtime stop、数据库更多方言边界验证、GitHub 写操作审批细化、插件工具权限持久化开关和前端 UI。
 - [ ] Agent 工具体验对齐 Codex 五阶段：真正前端后台任务页面、后台任务失败原因聚合、按工具/平台配置自动后台策略。
+- [x] 终端 Agent 对话模式六阶段第一版完成：新增 `chat --tui` Textual 全屏终端 UI，左侧对话、右侧事件、底部输入框，复用现有 slash command、AgentRuntime、工具事件和后台任务事件；考虑 Windows 中文输入法兼容性，`xbot` 无参数默认进入原生输入的普通终端对话模式，`--fancy-input` 才启用 prompt_toolkit 补全/历史。
 
 尚未开始：
 
@@ -1640,6 +1643,203 @@ policy_denied
 5. [x] 将浏览器截图、浏览器 session actions、GitHub Actions logs、长 skill.run 标记为可后台执行。
 6. [x] 接入 reply router：通道消息触发后台任务后，完成时主动回发最终结果。
 7. [x] 将后台任务状态和事件持久化到 PostgreSQL，内存实现只保留给 dev/test fallback。
+
+### 17.6 终端 Agent 对话模式规划
+
+下一阶段需要补一个终端交互模式，让用户不经过微信、不经过 HTTP API 页面，直接在命令行里和同一套 `AgentRuntime` 对话。这更接近 Codex/Hermes 的使用方式：终端是一个一等入口，既能聊天，也能调用工具、显示工具进度、继续上下文和管理后台任务。
+
+它不是新的 Agent，也不是单独实现一套工具系统，而是复用当前后端已有能力：
+
+```text
+terminal user
+  -> xbot cli chat / xbot tui
+  -> AgentRuntime.run_task / continue_task
+  -> ToolRegistry / ToolExecutor / BackgroundTaskManager
+  -> filesystem / shell / browser / git / github / skill / plugin tools
+  -> terminal renderer
+```
+
+#### 17.6.1 目标
+
+终端对话模式要解决这些问题：
+
+- 不启动微信通道也能直接测试 Agent 能力。
+- 不需要前端页面，也能在服务器/NAS/Windows 控制台里管理和调试。
+- 长任务、工具调用、后台任务能在终端显示进度和状态。
+- 插件、skill、工具 provider 调试可以直接在本地终端完成。
+- 终端会话和微信会话使用同一套 Agent 记忆、策略、工具和审计表。
+
+第一阶段目标是 CLI chat，不追求复杂全屏 UI；第二阶段再做 TUI。
+
+#### 17.6.2 交互形态
+
+第一阶段命令：
+
+```text
+python -m xbot.cli.main chat
+python -m xbot.cli.main agent chat
+xbot chat
+```
+
+交互示例：
+
+```text
+xbot> 你好
+assistant> 你好，我是 xbot Agent。
+
+xbot> 列出 plugins 目录
+tool filesystem.list_dir {"path":"plugins"}
+assistant> 当前 plugins 目录包含：agent_chat、echo、manage_plugin、image_gen。
+
+xbot> /tools
+xbot> /tasks
+xbot> /exit
+```
+
+建议内置命令：
+
+```text
+/help       查看终端命令
+/exit       退出
+/status     显示 runtime、LLM、storage、toolset 状态
+/tools      列出当前可见工具
+/tasks      列出后台任务
+/task ID    查看后台任务详情
+/replay ID  重放失败后台任务
+/memories   查看最近 Agent 记忆
+/clear      清空当前终端屏幕，不删除会话
+/new        开启新的终端会话
+```
+
+#### 17.6.3 输出规则
+
+终端输出可以比微信更透明，但仍要分层：
+
+- 默认只显示用户输入、最终回答和简短工具状态。
+- `--verbose` 模式显示工具名称、耗时、状态、错误摘要。
+- `--debug` 模式显示完整工具 payload/result 摘要和 LLM raw id。
+- 不在终端默认输出密钥、token、cookie、完整环境变量。
+- 工具调用 JSON 不作为“助手回答”展示，而是作为事件行展示。
+
+推荐展示：
+
+```text
+● user
+  列出 skill 目录
+
+◇ tool filesystem.list_dir  completed  12ms
+
+● assistant
+  当前 skill 有：code_assistant、微信发送skill、dakka-image-generator。
+```
+
+#### 17.6.4 会话和上下文
+
+终端对话应该有独立 source：
+
+```text
+source = "terminal:local:<session_id>"
+```
+
+规则：
+
+- 每次 `xbot chat` 默认创建一个新的 terminal conversation。
+- 可用 `--session <id>` 继续指定会话。
+- 可用 `--cwd <path>` 指定工作目录，影响 Agent workspace root 或输入上下文。
+- 终端消息进入 conversation store，和微信消息一样可以被压缩摘要。
+- Agent 输入要带入 terminal metadata：cwd、用户名、主机名、shell、Python venv、当前 git repo。
+
+建议输入模板：
+
+```text
+Terminal message received.
+platform: terminal
+adapter: cli
+session_id: ...
+cwd: ...
+shell: powershell
+content: ...
+```
+
+#### 17.6.5 工具和权限
+
+终端模式的工具可见性应独立于微信私聊/群聊：
+
+```toml
+[agent.toolsets]
+terminal = [
+  "core",
+  "filesystem",
+  "filesystem_write",
+  "skill",
+  "shell",
+  "environment",
+  "task",
+  "browser",
+  "database",
+  "git",
+  "plugin"
+]
+```
+
+默认策略：
+
+- `developer` 模式：可读文件、可写 workspace、shell 仍按 `XBOT_AGENT_ALLOW_SHELL` 控制。
+- `admin` 模式：终端可使用所有已注册工具，但继续写审计日志。
+- 终端模式不能因为是本机就绕过 `PolicyEngine`。
+- 删除文件、数据库写入、系统命令等危险行为继续走现有 policy。
+
+#### 17.6.6 后台任务
+
+终端对话要和后台任务系统打通：
+
+- Agent 启动长任务后，终端立即显示 task id。
+- 后台任务完成时，如果当前终端还活着，可以打印完成事件。
+- 如果终端已经退出，结果仍写入 PostgreSQL，用户下次 `/tasks` 可查看。
+- `/replay ID` 调用现有 replay API/Runtime 方法。
+
+终端里长任务不应该阻塞输入循环。可以先用轮询，后续再做事件订阅。
+
+#### 17.6.7 实现建议
+
+第一阶段实现轻量 CLI，不引入复杂 TUI 依赖：
+
+- 在 `src/xbot/cli/main.py` 增加 `chat` 命令。
+- 复用 `build_context(load_settings())` 创建完整 runtime。
+- 启动 engine，但可以选择不启动 adapters：第一版建议增加 `runtime profile` 或 `chat` 参数控制。
+- 读取 stdin 循环，调用 `ctx.agent.run_task()`。
+- 输出 final answer。
+- 捕获 Ctrl+C，优雅 stop engine。
+
+模块建议：
+
+```text
+src/xbot/cli/chat.py
+  -> TerminalChatSession
+  -> TerminalRenderer
+  -> slash command parser
+```
+
+后续 TUI 可以再引入：
+
+- `rich`：彩色输出、表格、panel、progress。
+- `prompt_toolkit`：历史记录、补全、多行输入。
+- `textual`：全屏 TUI，任务列表、工具事件、日志面板。
+
+#### 17.6.8 落地顺序
+
+1. [x] 新增 `xbot chat` / `python -m xbot.cli.main chat` 命令。
+2. [x] 增加 `TerminalChatSession`，复用 `AgentRuntime`。
+3. [x] 增加 terminal source/context 输入模板。
+4. [x] 增加 terminal toolset 可见性配置。
+5. [x] 支持 `/help`、`/exit`、`/status`、`/tools`、`/tasks`、`/task`、`/replay`、`/events`、`/logs`、`/new`。
+6. [x] 工具事件简要显示，默认隐藏内部 JSON。
+7. [x] 后台任务完成事件在终端中可见。
+8. [x] 支持 `--session` 继续会话和 `--cwd` 指定工作目录。
+9. [x] 第二阶段升级为 rich/prompt_toolkit TUI-lite：彩色面板、表格、spinner、命令补全和历史记录；Windows 下默认关闭 prompt_toolkit 输入以保证中文 IME，可用 `--fancy-input` 手动启用。
+10. [x] 第三阶段补终端内事件回看：`/events [n]` 查看最近 Agent 事件，`/logs [n]` 同时查看 Agent 事件和后台任务事件。
+11. [x] 第六阶段做全屏 Textual UI 第一版：`chat --tui` 提供左侧会话、右侧工具事件、底部输入框；`xbot` 无参数默认进入中文输入兼容性更好的原生输入普通终端对话。
+12. [ ] 下一阶段增强 Textual UI：任务列表面板、工具列表面板、快捷键切换视图、后台任务重放确认弹窗。
 
 ## 18. Skill 体系
 

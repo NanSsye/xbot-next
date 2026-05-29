@@ -8,6 +8,7 @@ from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.llm import LLMResponse
 from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import AgentConfig, AgentToolsetConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
+from xbot.messaging.models import Message
 from xbot.plugins.base import PluginBase
 from xbot.plugins.manager import PluginManager
 from xbot.skills.manager import SkillManager
@@ -515,6 +516,82 @@ class PermissionToolPlugin(PluginBase):
     assert tools[0]["metadata"]["modes"] == ["admin"]
 
 
+@pytest.mark.anyio
+async def test_manage_plugin_lists_plugins_from_chat_command():
+    replies = []
+    plugins = PluginManager(PluginConfig(directory="plugins"))
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    plugins.attach_runtime(send_reply=send_reply)
+    await plugins.load_all()
+    message = Message(
+        platform="wechat",
+        adapter="wechat869",
+        conversation_id="44694849727@chatroom",
+        sender_id="xianan96928",
+        content="插件列表",
+        raw={"scope": "group", "sender_wxid": "xianan96928"},
+    )
+
+    await plugins.dispatch_message(message)
+
+    assert replies
+    assert "插件列表" in replies[0].content
+    assert "manage_plugin" in replies[0].content
+    assert "agent_chat" in replies[0].content
+
+
+@pytest.mark.anyio
+async def test_plugin_manager_reload_reloads_code_and_unloads_old_instance(tmp_path):
+    plugin_dir = tmp_path / "hot_plugin"
+    marker = tmp_path / "unloaded.txt"
+    plugin_dir.mkdir()
+    (plugin_dir / "plugin.toml").write_text(
+        '''
+name = "hot_plugin"
+version = "0.1.0"
+entry = "main:HotPlugin"
+enabled = true
+'''.strip(),
+        encoding="utf-8",
+    )
+    (plugin_dir / "main.py").write_text(
+        f'''
+from pathlib import Path
+from xbot.plugins.base import PluginBase
+
+
+class HotPlugin(PluginBase):
+    version = "one"
+
+    async def on_unload(self):
+        Path(r"{marker}").write_text("old unloaded", encoding="utf-8")
+'''.strip(),
+        encoding="utf-8",
+    )
+    plugins = PluginManager(PluginConfig(directory=str(tmp_path)))
+    await plugins.load_all()
+    assert plugins._plugins["hot_plugin"].version == "one"
+
+    (plugin_dir / "main.py").write_text(
+        '''
+from xbot.plugins.base import PluginBase
+
+
+class HotPlugin(PluginBase):
+    version = "two"
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    assert await plugins.reload("hot_plugin") is True
+
+    assert marker.read_text(encoding="utf-8") == "old unloaded"
+    assert plugins._plugins["hot_plugin"].version == "two"
+
+
 def test_agent_system_prompt_includes_current_time():
     runtime = AgentRuntime(AgentConfig(timezone="Asia/Shanghai"), plugins=None, skills=None)
     prompt = runtime._agent_system_prompt()
@@ -947,6 +1024,30 @@ async def test_background_task_persists_same_task_serially():
 
     assert repo.violations == 0
     assert repo.calls >= 3
+
+
+@pytest.mark.anyio
+async def test_background_task_subscriber_receives_completion():
+    from xbot.agent.background import BackgroundTaskManager
+
+    seen = []
+
+    async def runner():
+        return {"output": "done"}
+
+    async def subscriber(record):
+        seen.append((record.id, record.status, record.result))
+
+    manager = BackgroundTaskManager()
+    manager.subscribe(subscriber)
+    record = manager.start(kind="tool", runner=runner, description="test")
+
+    for _ in range(50):
+        if seen:
+            break
+        await anyio.sleep(0.02)
+
+    assert seen == [(record.id, "completed", {"output": "done"})]
 
 
 @pytest.mark.anyio

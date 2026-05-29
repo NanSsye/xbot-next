@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import sys
+from uuid import uuid4
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -23,11 +25,16 @@ class PluginLoader:
         if not module_name or not attr:
             raise PluginLoadError(f"Invalid plugin entry: {manifest.entry}")
         module_path = plugin_dir / f"{module_name}.py"
-        spec = importlib.util.spec_from_file_location(f"xbot_plugin_{manifest.name}", module_path)
+        importlib.invalidate_caches()
+        module_key = f"xbot_plugin_{manifest.name}_{uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(module_key, module_path)
         if spec is None or spec.loader is None:
             raise PluginLoadError(f"Cannot load plugin module: {module_path}")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        cls = getattr(module, attr)
-        return cls() if inspect.isclass(cls) else cls
-
+        sys.modules[module_key] = module
+        try:
+            spec.loader.exec_module(module)
+            cls = getattr(module, attr)
+            return cls() if inspect.isclass(cls) else cls
+        finally:
+            sys.modules.pop(module_key, None)

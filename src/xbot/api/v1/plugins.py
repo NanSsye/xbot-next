@@ -20,8 +20,16 @@ async def list_plugin_agent_tools(ctx: AppContext = Depends(get_context)) -> dic
 
 @router.post("/reload")
 async def reload_plugins(ctx: AppContext = Depends(get_context)) -> dict:
-    await ctx.plugins.load_all()
+    await ctx.plugins.reload_all()
     return {"success": True, "data": ctx.plugins.list_plugins()}
+
+
+@router.post("/{name}/reload")
+async def reload_plugin(name: str, ctx: AppContext = Depends(get_context)) -> dict:
+    reloaded = await ctx.plugins.reload(name)
+    if not reloaded:
+        raise HTTPException(status_code=404, detail=f"Plugin not found: {name}")
+    return {"success": True, "data": {"name": name, "reloaded": True}}
 
 
 @router.get("/{name}/agent-tools")

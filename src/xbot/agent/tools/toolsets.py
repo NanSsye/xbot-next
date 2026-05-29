@@ -13,6 +13,8 @@ def toolsets_for_source(config, source: str) -> set[str] | None:
             return set(config.toolsets.group)
         if context.get("scope") == "private":
             return set(config.toolsets.private)
+    if source.startswith("terminal:"):
+        return set(config.toolsets.terminal)
     return set(config.toolsets.api)
 
 

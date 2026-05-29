@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -39,9 +40,11 @@ class PluginManager:
         root = Path(self.config.directory)
         if not root.exists():
             return
+        discovered: set[str] = set()
         for plugin_dir in sorted(p for p in root.iterdir() if p.is_dir()):
             try:
                 manifest = self.loader.load_manifest(plugin_dir)
+                discovered.add(manifest.name)
                 self._manifests[manifest.name] = manifest
                 self._paths[manifest.name] = plugin_dir
                 persisted_enabled = await self._get_persisted_enabled(manifest.name)
@@ -60,6 +63,50 @@ class PluginManager:
                 )
             except Exception as exc:
                 logger.warning(f"Failed to load plugin {plugin_dir}: {exc}")
+        for name in set(self._manifests) - discovered:
+            await self._unload_instance(name)
+            self._manifests.pop(name, None)
+            self._paths.pop(name, None)
+
+    async def reload_all(self) -> None:
+        for name in list(self._plugins):
+            await self._unload_instance(name)
+        await self.load_all()
+
+    async def reload(self, name: str) -> bool:
+        await self._unload_instance(name)
+        root = Path(self.config.directory)
+        plugin_dir = self._paths.get(name)
+        if plugin_dir is None:
+            candidates = [path for path in root.iterdir() if path.is_dir()] if root.exists() else []
+            for candidate in candidates:
+                try:
+                    manifest = self.loader.load_manifest(candidate)
+                except Exception:
+                    continue
+                if manifest.name == name:
+                    plugin_dir = candidate
+                    self._manifests[name] = manifest
+                    self._paths[name] = candidate
+                    break
+        if plugin_dir is None:
+            return False
+        try:
+            manifest = self.loader.load_manifest(plugin_dir)
+            self._manifests[name] = manifest
+            self._paths[name] = plugin_dir
+            enabled = await self._get_persisted_enabled(name)
+            enabled = manifest.enabled if enabled is None else enabled
+            await self._persist_manifest(manifest, plugin_dir, enabled)
+            if not enabled or name in self._disabled:
+                return True
+            instance = self.loader.load_instance(plugin_dir, manifest)
+            self._plugins[name] = instance
+            await self._call(instance.on_load, self._context(name))
+            return True
+        except Exception as exc:
+            logger.warning("Failed to reload plugin {}: {}", name, exc)
+            return False
 
     def list_plugins(self) -> list[dict]:
         return [
@@ -169,10 +216,13 @@ class PluginManager:
             return False
         self._disabled.add(name)
         await self._persist_enabled(name, False)
+        await self._unload_instance(name)
+        return True
+
+    async def _unload_instance(self, name: str) -> None:
         instance = self._plugins.pop(name, None)
         if instance is not None:
             await self._call(instance.on_unload)
-        return True
 
     async def dispatch_message(self, message: Message) -> None:
         candidates = sorted(
@@ -207,15 +257,32 @@ class PluginManager:
         return await anyio.to_thread.run_sync(lambda: func(*args))
 
     def _context(self, name: str) -> PluginContext:
+        plugin_dir = Path(self.config.directory) / name
         return PluginContext(
             name=name,
-            data_dir=Path(self.config.directory) / name / "data",
-            config={},
+            data_dir=plugin_dir / "data",
+            config=self._load_plugin_config(plugin_dir, name),
+            plugins=self,
             agent=self._agent,
             send_reply=self._send_reply,
             conversations=self._conversations,
             settings=self._settings,
         )
+
+    def _load_plugin_config(self, plugin_dir: Path, name: str) -> dict:
+        config_path = plugin_dir / "config.toml"
+        if not config_path.exists():
+            return {}
+        try:
+            with config_path.open("rb") as fh:
+                data = tomllib.load(fh)
+        except Exception as exc:
+            logger.warning("Failed to load plugin config: plugin={} path={} error={}", name, config_path, exc)
+            return {}
+        section = data.get(name)
+        if isinstance(section, dict):
+            return section
+        return data
 
     async def _handle_plugin_result(self, result) -> bool:
         if result is None or result is False:

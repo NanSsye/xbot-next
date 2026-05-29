@@ -1,0 +1,24 @@
+name = "manage_plugin"
+version = "0.1.0"
+entry = "main:ManagePlugin"
+author = "xbot"
+description = "Manage xbot-next plugins from chat commands."
+enabled = true
+
+[routing]
+enabled = true
+priority = 10
+exclusive = true
+message_types = ["text"]
+exact = [
+  "加载所有插件",
+  "卸载所有插件",
+  "重载所有插件",
+  "插件列表",
+]
+prefixes = [
+  "加载插件",
+  "卸载插件",
+  "重载插件",
+  "插件信息",
+]

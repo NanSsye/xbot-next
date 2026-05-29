@@ -198,6 +198,22 @@ class AgentToolsetConfig(BaseModel):
     group: list[str] = Field(
         default_factory=lambda: ["core", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
     )
+    terminal: list[str] = Field(
+        default_factory=lambda: [
+            "core",
+            "filesystem",
+            "filesystem_write",
+            "skill",
+            "shell",
+            "mcp",
+            "environment",
+            "task",
+            "browser",
+            "database",
+            "git",
+            "plugin",
+        ]
+    )
     admin: list[str] = Field(
         default_factory=lambda: [
             "core",
@@ -391,6 +407,10 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if agent_toolsets_group := env.get("XBOT_AGENT_TOOLSETS_GROUP"):
         data.setdefault("agent", {}).setdefault("toolsets", {})["group"] = _env_list(
             agent_toolsets_group
+        )
+    if agent_toolsets_terminal := env.get("XBOT_AGENT_TOOLSETS_TERMINAL"):
+        data.setdefault("agent", {}).setdefault("toolsets", {})["terminal"] = _env_list(
+            agent_toolsets_terminal
         )
     if agent_toolsets_admin := env.get("XBOT_AGENT_TOOLSETS_ADMIN"):
         data.setdefault("agent", {}).setdefault("toolsets", {})["admin"] = _env_list(

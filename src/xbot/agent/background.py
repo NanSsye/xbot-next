@@ -14,6 +14,7 @@ from xbot.messaging.models import Reply
 TaskRunner = Callable[[], Awaitable[Any]]
 RepositoryProvider = Callable[[], Any]
 ReplySender = Callable[[Reply], Awaitable[None]]
+BackgroundTaskSubscriber = Callable[["BackgroundTaskRecord"], Awaitable[None] | None]
 
 
 class BackgroundTaskRecord(BaseModel):
@@ -64,9 +65,18 @@ class BackgroundTaskManager:
         self._records: dict[str, BackgroundTaskRecord] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._persist_locks: dict[str, asyncio.Lock] = {}
+        self._subscribers: set[BackgroundTaskSubscriber] = set()
 
     def attach_reply_sender(self, send_reply: ReplySender | None) -> None:
         self.send_reply = send_reply
+
+    def subscribe(self, subscriber: BackgroundTaskSubscriber) -> Callable[[], None]:
+        self._subscribers.add(subscriber)
+
+        def unsubscribe() -> None:
+            self._subscribers.discard(subscriber)
+
+        return unsubscribe
 
     def start(
         self,
@@ -131,6 +141,7 @@ class BackgroundTaskManager:
         record.status = "cancelled"
         record.finished_at = datetime.utcnow()
         self._persist_later(record)
+        await self._publish(record)
         return record
 
     async def stop(self) -> None:
@@ -168,6 +179,7 @@ class BackgroundTaskManager:
             record.finished_at = datetime.utcnow()
         finally:
             self._persist_later(record)
+            await self._publish(record)
             await self._notify_if_needed(record)
             self._tasks.pop(task_id, None)
 
@@ -184,6 +196,21 @@ class BackgroundTaskManager:
                     await repo.upsert_background_task(record)
         except Exception as exc:
             logger.warning("Background task persistence failed: task_id={} error={}", record.id, exc)
+
+    async def _publish(self, record: BackgroundTaskRecord) -> None:
+        snapshot = record.model_copy(deep=True)
+        for subscriber in list(self._subscribers):
+            try:
+                result = subscriber(snapshot)
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception as exc:
+                logger.warning(
+                    "Background task subscriber failed: task_id={} status={} error={}",
+                    record.id,
+                    record.status,
+                    exc,
+                )
 
     async def _notify_if_needed(self, record: BackgroundTaskRecord) -> None:
         notify = record.metadata.get("notify") if isinstance(record.metadata, dict) else None
