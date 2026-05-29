@@ -71,6 +71,18 @@ class PluginManager:
             for manifest in self._manifests.values()
         ]
 
+    def iter_agent_tools(self):
+        for name, plugin in self._plugins.items():
+            if name in self._disabled:
+                continue
+            provider = getattr(plugin, "agent_tools", None)
+            if not provider:
+                continue
+            try:
+                yield name, list(provider() or [])
+            except Exception as exc:
+                logger.warning("Plugin agent tool provider failed: plugin={} error={}", name, exc)
+
     async def enable(self, name: str) -> bool:
         manifest = self._manifests.get(name)
         plugin_dir = self._paths.get(name)

@@ -19,7 +19,10 @@ from xbot.agent.policy import PolicyEngine
 from xbot.agent.tool_executor import ToolExecutor
 from xbot.agent.tool_registry import ToolRegistry
 from xbot.agent.tools import register_builtin_tools
+from xbot.agent.tools.browser_provider import register_browser_tools
 from xbot.agent.tools.cache_policy import ToolCachePolicy
+from xbot.agent.tools.git_provider import register_git_tools
+from xbot.agent.tools.plugin_provider import register_plugin_tools
 from xbot.agent.tools.skill_provider import SkillToolProvider
 from xbot.agent.tools.toolsets import source_context, toolsets_for_source
 from xbot.agent.workspace import Workspace
@@ -78,8 +81,12 @@ class AgentRuntime:
             skills=self.skills,
             run_skill=self.skill_tools.run_skill,
         )
+        register_browser_tools(self.tools, workspace=self.workspace)
+        register_git_tools(self.tools, workspace=self.workspace)
 
     async def start(self) -> None:
+        register_plugin_tools(self.tools, self.plugins)
+        self._static_prompt_cache = None
         await self.mcp.start()
 
     async def stop(self) -> None:

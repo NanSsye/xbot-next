@@ -4,7 +4,9 @@ import pytest
 
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.llm import LLMResponse
+from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import AgentConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
+from xbot.plugins.base import PluginBase
 from xbot.plugins.manager import PluginManager
 from xbot.skills.manager import SkillManager
 
@@ -244,9 +246,74 @@ def test_agent_toolset_visibility_filters_prompt_tools():
     prompt = runtime._agent_system_prompt(source="channel:wechat:wechat869:group:123@chatroom")
 
     assert '"toolset": "shell"' not in prompt
+    assert '"toolset": "browser"' not in prompt
+    assert '"toolset": "database"' not in prompt
+    assert '"toolset": "git"' not in prompt
     assert "filesystem.write_file" not in prompt
     assert "filesystem.delete_path" not in prompt
     assert '"toolset": "filesystem"' in prompt
+
+
+def test_agent_admin_prompt_includes_extended_tool_providers():
+    runtime = AgentRuntime(AgentConfig(mode="admin", admin_mode_allowed=True), plugins=None, skills=None)
+    prompt = runtime._agent_system_prompt(source="api")
+
+    assert "browser.screenshot_url" in prompt
+    assert "git.status" in prompt
+    assert "github.repo_info" in prompt
+
+
+@pytest.mark.anyio
+async def test_agent_registers_plugin_tool_provider():
+    class FakePlugin(PluginBase):
+        name = "fake"
+
+        def agent_tools(self):
+            async def handler(payload):
+                return {"ok": payload.get("value")}
+
+            return [
+                ToolDefinition(
+                    name="plugin.fake_echo",
+                    description="Echo a value from a plugin tool.",
+                    risk_level="read",
+                    handler=handler,
+                    toolset="plugin",
+                    source="plugin",
+                    cacheable=True,
+                )
+            ]
+
+    class FakePlugins:
+        def iter_agent_tools(self):
+            return [("fake", list(FakePlugin().agent_tools()))]
+
+    runtime = AgentRuntime(AgentConfig(), plugins=FakePlugins(), skills=None)
+    await runtime.start()
+    tool = runtime.tools.get("plugin.fake_echo")
+
+    assert tool is not None
+    assert tool.source == "plugin:fake"
+    assert tool.toolset == "plugin"
+    result = await runtime.execute_tool("plugin.fake_echo", {"value": "x"})
+    assert result.output == {"ok": "x"}
+
+
+@pytest.mark.anyio
+async def test_database_tool_rejects_mutating_sql(tmp_path):
+    from xbot.agent.tools.database_provider import register_database_tools
+
+    class FakeStorage:
+        session_factory = None
+
+    storage = FakeStorage()
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None)
+    register_database_tools(runtime.tools, storage=storage)
+
+    result = await runtime.execute_tool("database.query", {"sql": "delete from users"})
+
+    assert result.status == "denied"
+    assert "read-only" in result.error
 
 
 def test_agent_system_prompt_includes_current_time():

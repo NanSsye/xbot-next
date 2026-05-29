@@ -33,6 +33,9 @@ dev = [
 mcp = [
   "mcp>=1.0.0"
 ]
+browser = [
+  "playwright>=1.45.0"
+]
 
 [project.scripts]
 xbot = "xbot.cli.main:app"

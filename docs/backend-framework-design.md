@@ -142,14 +142,15 @@
 - [x] `skill.run` 具体执行逻辑已从 `AgentRuntime` 迁出到 `xbot.agent.tools.skill_provider.SkillToolProvider`。
 - [x] MCP 增强第一版完成：支持 include/exclude 工具过滤、server status、reload API、按 server source 重新注册工具和更完整错误状态。
 - [x] Toolset 可见性第一版完成：Agent prompt 构建时按 API/私聊/群聊/admin 选择可见 toolset，避免群聊默认暴露 shell、文件写入和删除工具。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `63 passed`。
+- [x] Agent 工具 provider 扩展第一版完成：Plugin 工具 provider、浏览器截图、只读数据库查询、Git/GitHub 只读工具已接入同一套 metadata/toolset/cache/policy 模型。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `66 passed`。
 
 进行中：
 
 - [ ] Toolset 二阶段：当前已按 API/私聊/群聊/admin 控制可见范围；下一步细化到具体 adapter、用户身份、群管理员和会话状态。
 - [ ] MCP 二阶段：当前已有 include/exclude、status、reload 和失败状态记录；下一步补自动重连退避、周期健康检查、失败工具降级和连接池隔离。
 - [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息和回复链路；下一步验证长连接重连、群聊高频消息、异常消息格式和生产日志可观测性。
-- [ ] Agent 工具 provider 扩展：Plugin 工具 provider、浏览器、数据库、Git/GitHub 工具集接入同一套 metadata/toolset/cache/policy 模型。
+- [ ] Agent 工具 provider 二阶段：浏览器交互动作、数据库 schema introspection、GitHub issue/PR 操作和插件工具 manifest 化。
 
 尚未开始：
 
@@ -1457,7 +1458,8 @@ wechat                -> 微信发送/媒体工具
 
 - [ ] MCP 自动重连退避和健康检查。
 - [ ] Toolset 按具体用户、群管理员和 adapter 配置继续细化。
-- [ ] Plugin 工具 provider 和浏览器/数据库/Git 工具集接入同一套 metadata。
+- [x] Plugin 工具 provider 和浏览器/数据库/Git 工具集接入同一套 metadata。
+- [ ] 浏览器交互动作、数据库 schema introspection、GitHub issue/PR 操作继续扩展。
 
 ## 18. Skill 体系
 

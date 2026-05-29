@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from xbot.agent.tool_registry import ToolDefinition
 from xbot.messaging.models import Message
 from xbot.plugins.context import PluginContext
 
@@ -17,3 +20,5 @@ class PluginBase:
     async def on_message(self, message: Message, ctx: PluginContext) -> None:
         return None
 
+    def agent_tools(self) -> Iterable[ToolDefinition]:
+        return ()

@@ -43,6 +43,15 @@ class ToolRegistry:
         if removed:
             self._revision += 1
 
+    def unregister_source_prefix(self, source_prefix: str) -> None:
+        removed = [
+            name for name, tool in self._tools.items() if tool.source.startswith(source_prefix)
+        ]
+        for name in removed:
+            del self._tools[name]
+        if removed:
+            self._revision += 1
+
     def get(self, name: str) -> ToolDefinition | None:
         return self._tools.get(name)
 

@@ -184,6 +184,9 @@ class AgentToolsetConfig(BaseModel):
             "skill",
             "shell",
             "mcp",
+            "browser",
+            "database",
+            "git",
         ]
     )
     private: list[str] = Field(default_factory=lambda: ["core", "filesystem", "skill", "mcp"])
@@ -197,6 +200,9 @@ class AgentToolsetConfig(BaseModel):
             "skill",
             "shell",
             "mcp",
+            "browser",
+            "database",
+            "git",
         ]
     )
 
