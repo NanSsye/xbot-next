@@ -19,6 +19,7 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.workspace.roots == ["."]
     assert settings.agent.llm.enabled is False
     assert settings.agent.llm.provider == "openai_compatible"
+    assert settings.agent.mcp.enabled is True
     assert settings.adapters.wechat869.enabled is False
 
 
@@ -38,6 +39,7 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ROOTS", "C:/tmp;D:/project")
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ALLOW_ALL_FILESYSTEM", "true")
     monkeypatch.setenv("XBOT_AGENT_CACHE_TOOL_RESULT_TTL_SECONDS", "90")
+    monkeypatch.setenv("XBOT_AGENT_MCP_ENABLED", "false")
     monkeypatch.setenv("XBOT_WECHAT869_ENABLED", "true")
     monkeypatch.setenv("XBOT_WECHAT869_HOST", "wechat.local")
     monkeypatch.setenv("XBOT_WECHAT869_PORT", "8848")
@@ -58,6 +60,7 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.workspace.allow_all_filesystem is True
     assert settings.agent.cache.enabled is True
     assert settings.agent.cache.tool_result_ttl_seconds == 90
+    assert settings.agent.mcp.enabled is False
     assert settings.adapters.wechat869.enabled is True
     assert settings.adapters.wechat869.host == "wechat.local"
     assert settings.adapters.wechat869.port == 8848

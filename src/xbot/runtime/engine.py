@@ -20,6 +20,7 @@ class XBotEngine:
         self._storage = None
         self._message_store = None
         self._consumer_task: asyncio.Task | None = None
+        self._agent = None
 
     def attach_managers(self, plugins, skills, adapters) -> None:
         self._plugins = plugins
@@ -34,6 +35,9 @@ class XBotEngine:
         self._storage = storage
         self._message_store = message_store
 
+    def attach_agent(self, agent) -> None:
+        self._agent = agent
+
     async def start(self) -> None:
         if self._status.state == "running":
             return
@@ -42,6 +46,8 @@ class XBotEngine:
             await self._plugins.load_all()
         if self._skills and self.settings.skills.auto_load:
             await self._skills.load_all()
+        if self._agent and self.settings.agent.enabled:
+            await self._agent.start()
         if self._adapters:
             await self._adapters.start_enabled()
         if self._consumer and self._queue and self._consumer_task is None:
@@ -58,6 +64,8 @@ class XBotEngine:
             self._status.state = "stopped"
             return
         self._status.state = "stopping"
+        if self._agent:
+            await self._agent.stop()
         if self._adapters:
             await self._adapters.stop_all()
         if self._consumer_task:

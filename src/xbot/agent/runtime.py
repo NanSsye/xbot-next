@@ -16,6 +16,7 @@ from xbot.agent.cache import TTLCache, stable_cache_key
 from xbot.agent.compression import MemoryCompressor
 from xbot.agent.llm import LLMMessage, create_llm_provider
 from xbot.agent.memory import MemoryStore
+from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
 from xbot.agent.policy import PolicyEngine
 from xbot.agent.tool_executor import ToolExecutor
@@ -60,6 +61,7 @@ class AgentRuntime:
         self.workspace = Workspace(config.workspace_root, self.policy)
         self.tools = ToolRegistry()
         self.executor = ToolExecutor(self.tools)
+        self.mcp = MCPClientManager(config.mcp, self.tools)
         self.memory = MemoryStore()
         self.compressor = MemoryCompressor()
         self.planner = AgentPlanner()
@@ -68,6 +70,12 @@ class AgentRuntime:
         self._static_prompt_cache: tuple[tuple[int, int], str] | None = None
         self._skill_prompt_cache: tuple[int, str] | None = None
         self._register_builtin_tools()
+
+    async def start(self) -> None:
+        await self.mcp.start()
+
+    async def stop(self) -> None:
+        await self.mcp.stop()
 
     async def run_task(self, input_text: str, source: str = "api") -> AgentResult:
         task_id = str(uuid4())
@@ -208,6 +216,9 @@ class AgentRuntime:
 
     def llm_status(self) -> dict:
         return self.llm.status()
+
+    def mcp_status(self) -> dict:
+        return self.mcp.status()
 
     def _register_builtin_tools(self) -> None:
         async def read_file(payload: dict):

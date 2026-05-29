@@ -249,6 +249,72 @@ skills/微信发送skill/wechat-869.json
 
 该文件包含真实地址和 key，已被 `.gitignore` 忽略，不会提交。
 
+## MCP 使用
+
+`xbot-next` 支持可选的原生 MCP client。启动时会连接配置的 MCP servers，自动发现工具，并注册成 Agent 可调用的一等工具。
+
+MCP 工具命名规则：
+
+```text
+mcp_{server_name}_{tool_name}
+```
+
+例如：
+
+```text
+mcp_time_get_current_time
+mcp_filesystem_read_file
+mcp_github_list_issues
+```
+
+### 安装 MCP SDK
+
+MCP 是可选依赖。未安装时会自动跳过 MCP 工具发现，不影响主程序启动。
+
+```bat
+pip install -e .[mcp]
+```
+
+### 配置 stdio MCP server
+
+在 `configs/xbot.toml` 中添加：
+
+```toml
+[agent.mcp]
+enabled = true
+
+[agent.mcp.servers.time]
+command = "uvx"
+args = ["mcp-server-time"]
+timeout = 120
+connect_timeout = 60
+```
+
+### 配置 HTTP MCP server
+
+```toml
+[agent.mcp.servers.company_api]
+url = "https://mcp.example.com/mcp"
+timeout = 180
+connect_timeout = 60
+
+[agent.mcp.servers.company_api.headers]
+Authorization = "Bearer change-me"
+```
+
+### 安全说明
+
+stdio MCP server 不会继承完整系统环境变量，只会继承基础安全环境变量。需要传给 MCP server 的 token 或 key 必须显式写到 server 的 `env` 配置里：
+
+```toml
+[agent.mcp.servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[agent.mcp.servers.github.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "change-me"
+```
+
 ## 常用命令
 
 ```bat

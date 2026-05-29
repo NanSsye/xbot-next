@@ -148,6 +148,22 @@ class AgentLLMConfig(BaseModel):
     temperature: float = 0.2
 
 
+class AgentMCPServerConfig(BaseModel):
+    enabled: bool = True
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout: int = 120
+    connect_timeout: int = 60
+
+
+class AgentMCPConfig(BaseModel):
+    enabled: bool = True
+    servers: dict[str, AgentMCPServerConfig] = Field(default_factory=dict)
+
+
 class AgentCacheConfig(BaseModel):
     enabled: bool = True
     tool_result_ttl_seconds: int = 30
@@ -169,6 +185,7 @@ class AgentConfig(BaseModel):
     approval: AgentApprovalConfig = Field(default_factory=AgentApprovalConfig)
     memory: AgentMemoryConfig = Field(default_factory=AgentMemoryConfig)
     llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig)
+    mcp: AgentMCPConfig = Field(default_factory=AgentMCPConfig)
     cache: AgentCacheConfig = Field(default_factory=AgentCacheConfig)
 
 
@@ -312,6 +329,10 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if agent_cache_skills := env.get("XBOT_AGENT_CACHE_SKILLS"):
         data.setdefault("agent", {}).setdefault("cache", {})["skills"] = _env_bool(
             agent_cache_skills
+        )
+    if agent_mcp_enabled := env.get("XBOT_AGENT_MCP_ENABLED"):
+        data.setdefault("agent", {}).setdefault("mcp", {})["enabled"] = _env_bool(
+            agent_mcp_enabled
         )
     if wechat869_enabled := env.get("XBOT_WECHAT869_ENABLED"):
         data.setdefault("adapters", {}).setdefault("wechat869", {})["enabled"] = _env_bool(

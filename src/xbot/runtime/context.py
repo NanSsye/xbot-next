@@ -105,6 +105,7 @@ def build_context(settings: Settings) -> AppContext:
     engine = XBotEngine(settings)
     engine.attach_managers(plugins=plugins, skills=skills, adapters=adapters)
     engine.attach_storage(storage=storage, message_store=messages)
+    engine.attach_agent(agent)
     plugins.attach_runtime(
         agent=agent,
         send_reply=engine.send_reply,
