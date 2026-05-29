@@ -13,11 +13,21 @@ class SkillLoader:
         if not manifest_path.exists():
             raise SkillLoadError(f"Missing skill manifest: {manifest_path}")
         with manifest_path.open("rb") as fh:
-            return SkillManifest.model_validate(tomllib.load(fh))
+            return SkillManifest.model_validate(self._normalize_manifest(tomllib.load(fh)))
+
+    def _normalize_manifest(self, data: dict) -> dict:
+        if "name" in data:
+            return data
+        skill = data.get("skill")
+        if not isinstance(skill, dict):
+            return data
+        normalized = dict(skill)
+        if "tools" in data and "tools" not in normalized:
+            normalized["tools"] = data["tools"]
+        return normalized
 
     def load_instructions(self, skill_dir: Path) -> str:
         skill_path = skill_dir / "SKILL.md"
         if not skill_path.exists():
             raise SkillLoadError(f"Missing skill instructions: {skill_path}")
         return skill_path.read_text(encoding="utf-8")
-

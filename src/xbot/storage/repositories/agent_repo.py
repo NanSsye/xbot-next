@@ -6,7 +6,12 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from xbot.storage.models import AgentEventRecord, AgentMemoryRecord, AgentTaskRecord
+from xbot.storage.models import (
+    AgentBackgroundTaskRecord,
+    AgentEventRecord,
+    AgentMemoryRecord,
+    AgentTaskRecord,
+)
 
 
 class AgentRepository:
@@ -55,6 +60,37 @@ class AgentRepository:
                 created_at=datetime.utcnow(),
             )
         )
+
+    async def upsert_background_task(self, item) -> None:
+        result_json = json.dumps(item.result, ensure_ascii=False, default=str) if item.result is not None else None
+        metadata_json = json.dumps(item.metadata or {}, ensure_ascii=False, default=str)
+        record = AgentBackgroundTaskRecord(
+            id=item.id,
+            kind=item.kind,
+            status=item.status,
+            source=item.source,
+            description=item.description,
+            progress=item.progress,
+            result_json=result_json,
+            error=item.error,
+            metadata_json=metadata_json,
+            created_at=item.created_at,
+            started_at=item.started_at,
+            finished_at=item.finished_at,
+            updated_at=datetime.utcnow(),
+        )
+        await self.session.merge(record)
+
+    async def get_background_task(self, task_id: str) -> AgentBackgroundTaskRecord | None:
+        return await self.session.get(AgentBackgroundTaskRecord, task_id)
+
+    async def list_background_tasks(self, limit: int = 50) -> list[AgentBackgroundTaskRecord]:
+        result = await self.session.execute(
+            select(AgentBackgroundTaskRecord)
+            .order_by(AgentBackgroundTaskRecord.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def save_memory(
         self,

@@ -26,6 +26,15 @@ class AgentMemoryRequest(BaseModel):
     summary: str
 
 
+class BackgroundTaskRequest(BaseModel):
+    tool: str
+    payload: dict = {}
+    source: str = "api"
+    description: str = ""
+    notify: dict | None = None
+    replayable: bool = True
+
+
 @router.get("/tools")
 async def list_tools(
     toolset: str | None = None,
@@ -43,6 +52,30 @@ async def list_tools(
             mode=ctx.agent.config.mode,
         ),
     }
+
+
+@router.get("/tools/visibility")
+async def tool_visibility(ctx: AppContext = Depends(get_context)) -> dict:
+    mode = ctx.agent.config.mode
+    config = ctx.agent.config.toolsets
+    sources = {
+        "api": set(config.api),
+        "private": set(config.private),
+        "group": set(config.group),
+        "admin": None if mode == "admin" else set(config.admin),
+    }
+    data = {
+        "mode": mode,
+        "toolsets": config.model_dump(mode="json"),
+        "sources": {},
+    }
+    for source, toolsets in sources.items():
+        tools = ctx.agent.tools.list_tools(toolsets=toolsets, mode=mode)
+        data["sources"][source] = {
+            "tool_count": len(tools),
+            "tools": tools,
+        }
+    return {"success": True, "data": data}
 
 
 @router.get("/llm/status")
@@ -92,6 +125,67 @@ async def validate_policy(ctx: AppContext = Depends(get_context)) -> dict:
 async def create_task(payload: AgentTaskRequest, ctx: AppContext = Depends(get_context)) -> dict:
     result = await ctx.agent.run_task(payload.input, source=payload.source)
     return {"success": True, "data": result.model_dump()}
+
+
+@router.post("/background-tasks")
+async def create_background_task(
+    payload: BackgroundTaskRequest, ctx: AppContext = Depends(get_context)
+) -> dict:
+    async def runner():
+        result = await ctx.agent.execute_tool(payload.tool, payload.payload, source="background")
+        return result.model_dump(mode="json")
+
+    record = ctx.agent.background.start(
+        kind="tool",
+        runner=runner,
+        source=payload.source,
+        description=payload.description or f"Run {payload.tool}",
+        metadata={
+            "tool": payload.tool,
+            "payload": payload.payload,
+            "notify": payload.notify,
+            "replayable": payload.replayable,
+        },
+    )
+    return {"success": True, "data": record.model_dump(mode="json")}
+
+
+@router.get("/background-tasks/overview")
+async def background_task_overview(limit: int = 20, ctx: AppContext = Depends(get_context)) -> dict:
+    return {"success": True, "data": await ctx.agent.background_task_overview(limit)}
+
+
+@router.get("/background-tasks")
+async def list_background_tasks(limit: int = 50, ctx: AppContext = Depends(get_context)) -> dict:
+    return {
+        "success": True,
+        "data": [item.model_dump(mode="json") for item in await ctx.agent.list_background_tasks(limit)],
+    }
+
+
+@router.get("/background-tasks/{task_id}")
+async def get_background_task(task_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    record = await ctx.agent.get_background_task(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Background task not found: {task_id}")
+    return {"success": True, "data": record.model_dump(mode="json")}
+
+
+@router.post("/background-tasks/{task_id}/replay")
+async def replay_background_task(task_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    try:
+        record = await ctx.agent.replay_background_task(task_id)
+    except XBotError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "data": record.model_dump(mode="json")}
+
+
+@router.post("/background-tasks/{task_id}/cancel")
+async def cancel_background_task(task_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    record = await ctx.agent.background.cancel(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Background task not found: {task_id}")
+    return {"success": True, "data": record.model_dump(mode="json")}
 
 
 @router.get("/memories")

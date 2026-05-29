@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from uuid import uuid4
 
 import anyio
 from pydantic import BaseModel, Field
 
+from xbot.agent.background import BackgroundTaskManager
+from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.cache import TTLCache
 from xbot.agent.compression import MemoryCompressor
 from xbot.agent.llm import LLMMessage, create_llm_provider
@@ -21,9 +23,12 @@ from xbot.agent.tool_registry import ToolRegistry
 from xbot.agent.tools import register_builtin_tools
 from xbot.agent.tools.browser_provider import register_browser_tools
 from xbot.agent.tools.cache_policy import ToolCachePolicy
+from xbot.agent.tools.environment_provider import register_environment_tools
+from xbot.agent.tools.fallback_policy import ToolError, ToolFallbackPolicy
 from xbot.agent.tools.git_provider import register_git_tools
 from xbot.agent.tools.plugin_provider import register_plugin_tools
 from xbot.agent.tools.skill_provider import SkillToolProvider
+from xbot.agent.tools.task_provider import register_task_tools
 from xbot.agent.tools.toolsets import source_context, toolsets_for_source
 from xbot.agent.workspace import Workspace
 from xbot.core.config import AgentConfig
@@ -45,6 +50,8 @@ class ToolCallResult(BaseModel):
     status: str
     output: object | None = None
     error: str | None = None
+    error_type: str | None = None
+    fallback: dict | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -66,12 +73,14 @@ class AgentRuntime:
         self.tools = ToolRegistry()
         self.executor = ToolExecutor(self.tools)
         self.mcp = MCPClientManager(config.mcp, self.tools)
+        self.background = BackgroundTaskManager(repository_provider=repository_provider)
         self.memory = MemoryStore()
         self.compressor = MemoryCompressor()
         self.planner = AgentPlanner()
         self.llm = llm_provider or create_llm_provider(config.llm)
         self._tool_result_cache = TTLCache(config.cache.tool_result_ttl_seconds)
         self.cache_policy = ToolCachePolicy(config, self.workspace, self.policy, self.skills)
+        self.fallback_policy = ToolFallbackPolicy(policy=self.policy)
         self.skill_tools = SkillToolProvider(workspace=self.workspace, skills=self.skills)
         self._static_prompt_cache: tuple[tuple[object, ...], str] | None = None
         self._skill_prompt_cache: tuple[int, str] | None = None
@@ -81,16 +90,23 @@ class AgentRuntime:
             skills=self.skills,
             run_skill=self.skill_tools.run_skill,
         )
+        register_environment_tools(self.tools, workspace=self.workspace)
         register_browser_tools(self.tools, workspace=self.workspace)
         register_git_tools(self.tools, workspace=self.workspace)
+        register_task_tools(self.tools, background=self.background, execute_tool=self._execute_tool_for_task)
 
     async def start(self) -> None:
         register_plugin_tools(self.tools, self.plugins)
         self._static_prompt_cache = None
+        await self._restore_background_tasks()
         await self.mcp.start()
 
     async def stop(self) -> None:
+        await self.background.stop()
         await self.mcp.stop()
+
+    def attach_reply_sender(self, send_reply) -> None:
+        self.background.attach_reply_sender(send_reply)
 
     async def run_task(self, input_text: str, source: str = "api") -> AgentResult:
         task_id = str(uuid4())
@@ -173,6 +189,9 @@ class AgentRuntime:
                     return result
             output = await self.executor.execute(tool_name, payload)
         except PolicyDeniedError as exc:
+            fallback = self.fallback_policy.explain(
+                ToolError(tool=tool_name, payload=payload, error=exc, denied=True)
+            )
             logger.warning(
                 "Agent 工具调用被策略拒绝: task_id={} tool={} error={}",
                 task_id,
@@ -184,14 +203,27 @@ class AgentRuntime:
                 tool=tool_name,
                 status="denied",
                 error=str(exc),
+                error_type=fallback["error_type"],
+                fallback=fallback,
             )
             await self._add_event(
                 task_id,
                 "tool.denied",
-                {"tool": tool_name, "risk_level": tool.risk_level, "error": str(exc)},
+                {
+                    "tool": tool_name,
+                    "risk_level": tool.risk_level,
+                    "error": str(exc),
+                    "fallback": fallback,
+                },
             )
             return result
         except Exception as exc:
+            fallback = self.fallback_policy.explain(
+                ToolError(tool=tool_name, payload=payload, error=exc)
+            )
+            auto_result = await self._auto_fallback(task_id, fallback)
+            if auto_result is not None:
+                fallback["auto_result"] = auto_result
             logger.warning(
                 "Agent 工具调用失败: task_id={} tool={} error={}",
                 task_id,
@@ -203,11 +235,18 @@ class AgentRuntime:
                 tool=tool_name,
                 status="failed",
                 error=str(exc),
+                error_type=fallback["error_type"],
+                fallback=fallback,
             )
             await self._add_event(
                 task_id,
                 "tool.failed",
-                {"tool": tool_name, "risk_level": tool.risk_level, "error": str(exc)},
+                {
+                    "tool": tool_name,
+                    "risk_level": tool.risk_level,
+                    "error": str(exc),
+                    "fallback": fallback,
+                },
             )
             return result
         result = ToolCallResult(task_id=task_id, tool=tool_name, status="completed", output=output)
@@ -239,6 +278,145 @@ class AgentRuntime:
         await self.mcp.reload()
         self._static_prompt_cache = None
         return self.mcp.status()
+
+    async def list_background_tasks(self, limit: int = 50) -> list[BackgroundTaskRecord]:
+        if not self.repository_provider:
+            return self.background.list(limit)
+        async with self.repository_provider() as repo:
+            records = await repo.list_background_tasks(limit)
+        memory = {item.id: item for item in self.background.list(limit)}
+        items = [memory.get(record.id) or BackgroundTaskRecord.from_storage(record) for record in records]
+        memory_ids = {item.id for item in items}
+        items.extend(item for item in self.background.list(limit) if item.id not in memory_ids)
+        return sorted(items, key=lambda item: item.created_at, reverse=True)[:limit]
+
+    async def get_background_task(self, task_id: str) -> BackgroundTaskRecord | None:
+        item = self.background.get(task_id)
+        if item is not None or not self.repository_provider:
+            return item
+        async with self.repository_provider() as repo:
+            record = await repo.get_background_task(task_id)
+        return BackgroundTaskRecord.from_storage(record) if record else None
+
+    async def background_task_overview(self, limit: int = 20) -> dict:
+        tasks = await self.list_background_tasks(limit)
+        counts: dict[str, int] = {}
+        replayable = []
+        for item in tasks:
+            counts[item.status] = counts.get(item.status, 0) + 1
+            if self._can_replay_background_task(item):
+                replayable.append(item.model_dump(mode="json"))
+        candidates = [
+            item
+            for item in self.tools.list_tools(mode=self.config.mode)
+            if item.get("metadata", {}).get("background_candidate")
+        ]
+        return {
+            "counts": counts,
+            "recent": [item.model_dump(mode="json") for item in tasks],
+            "replayable": replayable,
+            "background_candidate_tools": candidates,
+        }
+
+    async def replay_background_task(self, task_id: str) -> BackgroundTaskRecord:
+        record = await self.get_background_task(task_id)
+        if record is None:
+            raise XBotError(f"Background task not found: {task_id}")
+        if record.status == "completed":
+            raise XBotError(f"Background task already completed: {task_id}")
+        if not self._can_replay_background_task(record):
+            raise XBotError(f"Background task is not safely replayable: {task_id}")
+        tool_name = str(record.metadata.get("tool") or "")
+        payload = record.metadata.get("payload") or {}
+
+        async def runner(tool_name=tool_name, payload=payload):
+            return await self._execute_tool_for_task(tool_name, payload)
+
+        return self.background.replay(record, runner)
+
+    async def _execute_tool_for_task(self, tool_name: str, payload: dict) -> dict:
+        result = await self.execute_tool(tool_name, payload, source="background")
+        return result.model_dump(mode="json")
+
+    async def _auto_fallback(self, task_id: str, fallback: dict) -> dict | None:
+        suggested_tool_name = fallback.get("suggested_tool")
+        suggested_payload = fallback.get("suggested_payload")
+        if not suggested_tool_name or not isinstance(suggested_payload, dict):
+            return None
+        suggested_tool = self.tools.get(str(suggested_tool_name))
+        if suggested_tool is None:
+            return None
+        if suggested_tool_name == "task.start":
+            nested_tool = self.tools.get(str(suggested_payload.get("tool") or ""))
+            if nested_tool is None or nested_tool.risk_level not in {"read"}:
+                return None
+        elif suggested_tool.risk_level not in {"read"}:
+            return None
+        try:
+            output = await self.executor.execute(str(suggested_tool_name), suggested_payload)
+        except Exception as exc:
+            return {
+                "tool": suggested_tool_name,
+                "payload": suggested_payload,
+                "status": "failed",
+                "error": str(exc),
+            }
+        await self._add_event(
+            task_id,
+            "tool.fallback_completed",
+            {"tool": suggested_tool_name, "payload": suggested_payload, "output": self._summarize_payload(output)},
+        )
+        return {
+            "tool": suggested_tool_name,
+            "payload": suggested_payload,
+            "status": "completed",
+            "output": output,
+        }
+
+    async def _restore_background_tasks(self) -> None:
+        if not self.repository_provider:
+            return
+        try:
+            async with self.repository_provider() as repo:
+                records = await repo.list_background_tasks(200)
+        except Exception as exc:
+            logger.warning("Background task restore failed: {}", exc)
+            return
+        for storage_record in records:
+            record = BackgroundTaskRecord.from_storage(storage_record)
+            if record.status in {"completed", "cancelled"}:
+                self.background.remember(record)
+                continue
+            if self._can_replay_background_task(record):
+                tool_name = str(record.metadata.get("tool") or "")
+                payload = record.metadata.get("payload") or {}
+
+                async def runner(tool_name=tool_name, payload=payload):
+                    return await self._execute_tool_for_task(tool_name, payload)
+
+                self.background.replay(record, runner)
+                logger.info("Background task replay queued: task_id={} tool={}", record.id, tool_name)
+            else:
+                record.status = "failed"
+                record.error = record.error or "Background task was interrupted and is not replayable."
+                record.finished_at = datetime.utcnow()
+                self.background.remember(record)
+                self.background._persist_later(record)
+
+    def _can_replay_background_task(self, record: BackgroundTaskRecord) -> bool:
+        metadata = record.metadata or {}
+        if not metadata.get("replayable", False):
+            return False
+        if int(metadata.get("replay_count") or 0) >= 1:
+            return False
+        tool_name = str(metadata.get("tool") or "")
+        payload = metadata.get("payload") or {}
+        if not tool_name or not isinstance(payload, dict):
+            return False
+        tool = self.tools.get(tool_name)
+        if tool is None:
+            return False
+        return tool.risk_level in {"read"}
 
     async def _add_event(self, task_id: str, event_type: str, content: object) -> None:
         if not self.repository_provider:
@@ -320,6 +498,11 @@ class AgentRuntime:
             if not plan.tool_calls:
                 cleaned = self.planner.clean_final_output(plan.final or response.content)
                 if (
+                    (
+                        self.planner.contains_tool_call_intent(response.content)
+                        and not cleaned.strip()
+                    )
+                    or
                     self.planner.is_empty_final_response(response.content)
                     or not cleaned.strip()
                     or self._must_continue_for_missing_tool(input_text, cleaned, used_tool)
@@ -343,6 +526,7 @@ class AgentRuntime:
                                 "If the request depends on current project files, directories, plugins, skills, "
                                 "config, logs, or runtime state, you must call tools first. "
                                 "Do not say you are checking; actually request tool_calls. "
+                                "If you return tool_calls, the JSON must be valid and complete. "
                                 "Otherwise return JSON with a non-empty final answer."
                             ),
                         )
@@ -357,15 +541,21 @@ class AgentRuntime:
                 )
 
             tool_results = []
+            background_started = False
             for call in plan.tool_calls:
+                tool_name, payload = self._prepare_tool_call(call.tool, call.payload, source, input_text)
                 result = await self.execute_tool(
-                    call.tool,
-                    call.payload,
+                    tool_name,
+                    payload,
                     task_id=task_id,
                     source="agent",
                 )
                 used_tool = True
+                if tool_name == "task.start" and result.status == "completed":
+                    background_started = True
                 tool_results.append(result.model_dump(mode="json"))
+            if background_started and self._should_return_after_background(source):
+                return self._background_started_message(tool_results)
             messages.append(LLMMessage(role="assistant", content=response.content))
             messages.append(
                 LLMMessage(
@@ -426,6 +616,83 @@ class AgentRuntime:
             return match.group(1).strip()
         return input_text
 
+    def _prepare_tool_call(
+        self,
+        tool_name: str,
+        payload: dict,
+        source: str,
+        input_text: str,
+    ) -> tuple[str, dict]:
+        if self._should_auto_background(tool_name, payload, source):
+            payload = {
+                "tool": tool_name,
+                "payload": payload,
+                "description": f"Run {tool_name} in background",
+                "replayable": True,
+            }
+            tool_name = "task.start"
+        if tool_name != "task.start":
+            return tool_name, payload
+        enriched = dict(payload)
+        if self._is_wechat869_source(source):
+            enriched.pop("notify", None)
+            return tool_name, enriched
+        if not isinstance(enriched.get("notify"), dict):
+            notify = self._notification_target(source, input_text)
+            if notify:
+                enriched["notify"] = notify
+        return tool_name, enriched
+
+    def _should_auto_background(self, tool_name: str, payload: dict, source: str) -> bool:
+        if tool_name == "task.start" or source == "background":
+            return False
+        if not source.startswith("channel:"):
+            return False
+        if isinstance(payload, dict) and payload.get("foreground") is True:
+            return False
+        tool = self.tools.get(tool_name)
+        if tool is None:
+            return False
+        return bool((tool.metadata or {}).get("background_candidate"))
+
+    def _background_started_message(self, tool_results: list[dict]) -> str:
+        task_ids = []
+        for result in tool_results:
+            if result.get("tool") != "task.start" or result.get("status") != "completed":
+                continue
+            output = result.get("output")
+            if isinstance(output, dict) and output.get("id"):
+                task_ids.append(str(output["id"]))
+        if task_ids:
+            return f"后台任务已开始，完成后会自动回发结果。任务ID：{', '.join(task_ids)}"
+        return "后台任务已开始，完成后会自动回发结果。"
+
+    def _should_return_after_background(self, source: str) -> bool:
+        return not self._is_wechat869_source(source)
+
+    def _is_wechat869_source(self, source: str) -> bool:
+        parts = source.split(":", 3)
+        return len(parts) >= 3 and parts[0] == "channel" and parts[2] == "wechat869"
+
+    def _notification_target(self, source: str, input_text: str) -> dict | None:
+        if not source.startswith("channel:"):
+            return None
+        parts = source.split(":", 3)
+        if len(parts) < 4:
+            return None
+        if parts[2] == "wechat869":
+            return None
+        message_id = ""
+        match = re.search(r"(?m)^message_id:\s*(.+)$", input_text)
+        if match:
+            message_id = match.group(1).strip()
+        return {
+            "platform": parts[1],
+            "adapter": parts[2],
+            "conversation_id": parts[3],
+            "quote_message_id": message_id or None,
+        }
+
     def _agent_system_prompt(self, *, source: str = "api") -> str:
         current_time = self._current_time_prompt()
         static_prompt = self._static_agent_prompt(source=source)
@@ -461,6 +728,11 @@ class AgentRuntime:
             "- Do not answer project/file/plugin/skill inventory questions from memory.\n"
             "- To list plugin names, call filesystem.list_dir with path \"plugins\" first, then summarize the directory names.\n"
             "- To inspect a file, call filesystem.read_file first.\n"
+            "- To inspect a directory, call filesystem.list_dir. Never call filesystem.read_file on a directory.\n"
+            "- If the user asks about installed commands, browser availability, ports, proxies, or runtime environment, call environment.snapshot or environment.which first.\n"
+            "- Tools marked with metadata.background_candidate are good candidates for task.start when the request may take time or the user does not need an immediate result.\n"
+            "- For long-running screenshots, browser interactions, downloads, GitHub Actions logs, or skill execution, prefer task.start so the request can run in the background.\n"
+            "- If a tool result contains fallback guidance or suggested_tool, use that guidance before retrying.\n"
             "- To run a skill script or local command, call shell.exec only when policy allows it.\n"
             "- Browser GUI control and screenshots are not available unless a browser/screenshot skill or tool is listed.\n"
             "- If the user asks for an unavailable capability, explain that it is not currently available instead of waiting or pretending to do it.\n"
@@ -512,8 +784,12 @@ class AgentRuntime:
         try:
             now = datetime.now(ZoneInfo(str(timezone_name)))
         except ZoneInfoNotFoundError:
-            timezone_name = "UTC"
-            now = datetime.now(timezone.utc)
+            if str(timezone_name) in {"Asia/Shanghai", "Asia/Chongqing"}:
+                now = datetime.now(timezone(timedelta(hours=8), name="Asia/Shanghai"))
+                timezone_name = "Asia/Shanghai"
+            else:
+                timezone_name = "UTC"
+                now = datetime.now(timezone.utc)
         return (
             "Current runtime time:\n"
             f"- timezone: {timezone_name}\n"

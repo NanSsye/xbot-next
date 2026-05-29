@@ -135,7 +135,7 @@
 - [x] Wechat869 Adapter 已接入本项目内部实现：支持 WS 收消息、私聊/群聊识别、@ 识别、文本清洗、队列发布和文本回复。
 - [x] Wechat869 媒体发送 Skill 第一版已接入：Agent 可通过 `skill.run` 调用 869 发送文本、图片、视频、语音、音乐、链接和文件。
 - [x] MCP 原生支持第一版完成：支持配置 stdio / Streamable HTTP MCP server，启动时发现工具并注册为 `mcp_{server}_{tool}`。
-- [x] MCP 配置已接入 `.env` / `configs/xbot.toml`，缺少 `mcp` 可选依赖时会降级跳过并记录 warning。
+- [x] MCP 配置已接入 `.env` / `configs/xbot.toml`，`mcp` SDK 已提升为主依赖，安装项目时默认具备 MCP client 能力。
 - [x] Agent 工具体系规范化第一步完成：内置 `filesystem`、`shell`、`skill` 工具注册已从 `AgentRuntime` 拆到 `xbot.agent.tools.builtin`。
 - [x] Tool metadata 第一版完成：`ToolDefinition` 已支持 `toolset`、`source`、`cacheable`、`timeout_seconds`、`invalidates_cache` 和 `metadata`。
 - [x] 工具缓存策略已从 `AgentRuntime` 迁出到 `xbot.agent.tools.cache_policy.ToolCachePolicy`，由 tool metadata 决定是否缓存和是否清空缓存。
@@ -143,14 +143,23 @@
 - [x] MCP 增强第一版完成：支持 include/exclude 工具过滤、server status、reload API、按 server source 重新注册工具和更完整错误状态。
 - [x] Toolset 可见性第一版完成：Agent prompt 构建时按 API/私聊/群聊选择可见 toolset；admin 模式默认可见所有已注册工具。
 - [x] Agent 工具 provider 扩展第一版完成：Plugin 工具 provider、浏览器截图、只读数据库查询、Git/GitHub 只读工具已接入同一套 metadata/toolset/cache/policy 模型。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `66 passed`。
+- [x] Agent 工具 provider 二阶段完成：浏览器交互动作、数据库 schema introspection、GitHub issue/PR 操作和插件工具 manifest 化已接入。
+- [x] Agent 工具 provider 三阶段第一版完成：浏览器持久会话工具、SQLAlchemy inspector 跨方言数据库 schema introspection、GitHub GraphQL/Actions 工具、插件工具权限查询 API 已接入同一套 metadata/toolset/cache/policy 模型。
+- [x] Agent 工具体验对齐 Codex 第一版完成：EnvironmentProvider、BackgroundTaskManager、ToolFallbackPolicy 已接入，支持环境探测、后台工具任务、结构化错误和 fallback 建议。
+- [x] Agent 工具体验对齐 Codex 二阶段第一版完成：后台任务完成后可按通道主动回发，后台任务已接入 PostgreSQL 持久化表，fallback 已支持只读建议工具自动降级执行。
+- [x] Agent 工具体验对齐 Codex 三阶段第一版完成：长任务工具已标记 `background_candidate`，后台任务可恢复/安全重放只读任务，timeout fallback 可自动转入后台任务。
+- [x] Agent 工具体验对齐 Codex 四阶段第一版完成：后台任务 overview API、失败任务 replay API、通道场景按 provider metadata 自动后台执行策略已落地。
+- [x] Agent 工具调用解析增强：支持宽容解析非标准 `{"tool": ...}`、半坏 `tool_calls` JSON，并防止内部工具调用 JSON 外泄到用户回复。
+- [x] `filesystem.read_file` 已增加目录路径保护，目录读取会提示改用 `filesystem.list_dir`，避免 Windows 上目录读取显示为权限错误。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `82 passed`。
 
 进行中：
 
 - [ ] Toolset 二阶段：当前已按 API/私聊/群聊控制可见范围，admin 默认全部可见；下一步细化到具体 adapter、用户身份、群管理员和会话状态。
 - [ ] MCP 二阶段：当前已有 include/exclude、status、reload 和失败状态记录；下一步补自动重连退避、周期健康检查、失败工具降级和连接池隔离。
 - [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息和回复链路；下一步验证长连接重连、群聊高频消息、异常消息格式和生产日志可观测性。
-- [ ] Agent 工具 provider 二阶段：浏览器交互动作、数据库 schema introspection、GitHub issue/PR 操作和插件工具 manifest 化。
+- [ ] Agent 工具 provider 四阶段：浏览器会话生命周期接入 runtime stop、数据库更多方言边界验证、GitHub 写操作审批细化、插件工具权限持久化开关和前端 UI。
+- [ ] Agent 工具体验对齐 Codex 五阶段：真正前端后台任务页面、后台任务失败原因聚合、按工具/平台配置自动后台策略。
 
 尚未开始：
 
@@ -1459,7 +1468,178 @@ wechat                -> 微信发送/媒体工具
 - [ ] MCP 自动重连退避和健康检查。
 - [ ] Toolset 按具体用户、群管理员和 adapter 配置继续细化。
 - [x] Plugin 工具 provider 和浏览器/数据库/Git 工具集接入同一套 metadata。
-- [ ] 浏览器交互动作、数据库 schema introspection、GitHub issue/PR 操作继续扩展。
+- [x] 浏览器交互动作、数据库 schema introspection、GitHub issue/PR 操作和插件工具 manifest 化。
+- [x] 浏览器持久会话、数据库跨方言 introspection、GitHub GraphQL/Actions 能力和插件工具权限查询 API。
+
+### 17.5 对齐 Codex 式工具体验
+
+当前框架已经建立了 `tool_registry -> tool_executor -> provider handler` 的治理链路。这个链路不能移除，因为权限、审计、缓存、toolset 可见性、插件扩展和 MCP 工具统一注册都依赖它。真正需要优化的不是“少一层”，而是让这层更薄、更快、更可观测，并把长任务和错误恢复交给专门模块处理。
+
+#### 17.5.1 工具链路优化原则
+
+保留统一链路：
+
+```text
+LLM plan
+  -> ToolRegistry
+  -> ToolExecutor
+  -> Provider handler
+  -> ToolResult
+  -> LLM continue/final
+```
+
+优化方向：
+
+- `ToolRegistry` 只负责定义、metadata、可见性和查找。
+- `ToolExecutor` 只负责执行调度、timeout、sync/async 隔离、审计和统一错误包装。
+- 具体能力全部放到 provider，不允许继续塞进 `AgentRuntime`。
+- 对高频只读工具使用 metadata 驱动缓存，避免 LLM 循环里重复读取相同状态。
+- 对长耗时工具支持后台任务，不阻塞微信/HTTP 请求等待完整结果。
+
+#### 17.5.2 EnvironmentProvider
+
+目标：让 Agent 主动知道当前运行环境，而不是每次靠模型猜或盲目调用 shell。
+
+新增 toolset：
+
+```text
+environment
+```
+
+建议工具：
+
+```text
+environment.snapshot
+environment.which
+environment.network
+environment.ports
+environment.runtime
+```
+
+返回信息包括：
+
+- 操作系统、架构、当前用户、工作目录。
+- Python 版本、虚拟环境路径、pip 可用性。
+- Git、GitHub CLI、Node、npm、Playwright、浏览器安装状态。
+- 代理环境变量和常用网络连通性。
+- 常用端口占用，例如 8080、5432、5433、6379。
+- 磁盘剩余空间和 workspace 访问状态。
+
+设计要求：
+
+- `environment.snapshot` 默认只读、可缓存，缓存时间短，例如 30 秒。
+- 不暴露敏感环境变量原值，只返回是否存在和脱敏预览。
+- 优先使用 Python 标准库和安全命令探测，不让模型自己拼复杂 shell。
+- Agent prompt 中应明确：遇到“能不能打开浏览器”“为什么工具不可用”“端口是否占用”等问题，优先调用 environment 工具。
+
+#### 17.5.3 BackgroundTaskManager
+
+目标：解决截图、下载、浏览器操作、GitHub Actions 日志读取、长时间 skill 执行这类任务阻塞聊天通道的问题。
+
+核心模型：
+
+```text
+Agent request
+  -> start background task
+  -> immediate ack reply
+  -> task events/progress
+  -> final result pushed to conversation
+```
+
+建议 API：
+
+```text
+POST   /api/v1/agent/background-tasks
+GET    /api/v1/agent/background-tasks/overview
+GET    /api/v1/agent/background-tasks
+GET    /api/v1/agent/background-tasks/{task_id}
+POST   /api/v1/agent/background-tasks/{task_id}/replay
+POST   /api/v1/agent/background-tasks/{task_id}/cancel
+```
+
+建议工具：
+
+```text
+task.start
+task.status
+task.cancel
+task.list
+```
+
+执行规则：
+
+- 长任务不直接占用 `agent_chat` 的消息处理超时时间。
+- 微信场景中，任务开始后先回复“任务已开始”，完成后通过 reply router 主动发送结果。
+- 每个后台任务记录 `status`、`progress`、`started_at`、`finished_at`、`source`、`conversation_id`、`sender_id`、`tool_calls`。
+- 支持取消、超时、失败重试和最终结果持久化。
+- 大文件、截图、日志结果只在消息里发摘要，完整内容保存为 workspace 文件或附件。
+
+当前实现状态：
+
+- [x] `BackgroundTaskManager` 已支持本进程后台工具任务、取消、查询和列表。
+- [x] `agent_background_tasks` 表和 Alembic `0003` migration 已加入。
+- [x] 后台任务状态变更会写入 Agent repository。
+- [x] `task.start` 支持 `notify` 元数据；通道 Agent 场景会自动从 `source` 和 `message_id` 注入回发目标。
+- [x] 任务完成、失败或取消后可通过 `engine.send_reply` 主动回发原会话。
+- [x] 服务启动时会恢复后台任务记录；已完成/已取消任务进入内存索引，未完成且 `replayable=true` 的只读工具任务会安全重放一次。
+- [x] 浏览器截图/交互、`skill.run`、`shell.exec`、GitHub Actions logs 已通过 tool metadata 标记为 `background_candidate`。
+- [x] `GET /api/v1/agent/background-tasks/overview` 已提供后台任务恢复 UI 所需的数据面：状态计数、最近任务、可重放任务、后台候选工具。
+- [x] `POST /api/v1/agent/background-tasks/{task_id}/replay` 已支持失败/中断任务安全重放。
+- [x] 通道来源中直接调用 `background_candidate` 工具时，runtime 会自动改写为 `task.start`，API 直接执行保持前台语义。
+
+#### 17.5.4 ToolFallbackPolicy
+
+目标：工具失败后不要只把错误丢回模型，而是由框架提供可解释、可恢复、可降级的策略。
+
+建议错误分类：
+
+```text
+directory_as_file
+path_not_found
+permission_denied
+tool_unavailable
+dependency_missing
+auth_missing
+network_failed
+timeout
+invalid_payload
+policy_denied
+```
+
+典型 fallback：
+
+- `filesystem.read_file` 遇到目录：提示或自动建议 `filesystem.list_dir`。
+- 路径不存在：先 `filesystem.list_dir` 父目录，帮助模型修正路径。
+- Playwright/浏览器缺失：返回明确安装命令和当前依赖状态。
+- GitHub CLI 未登录：提示 `gh auth status` / `gh auth login`。
+- 网络失败：检查代理环境和目标连通性。
+- SQL schema 不支持某方言字段：降级返回表名和列名基础信息。
+- 权限拒绝：返回当前 policy snapshot 中相关字段，避免模型反复尝试同一个被拒绝动作。
+
+实现要求：
+
+- fallback 策略放在 `xbot.agent.tools.fallback_policy`，不要写死在 `AgentRuntime`。
+- `ToolExecutor` 捕获异常后生成结构化 `ToolError`，再交给 fallback policy 决定是否建议新工具调用。
+- 对自动重试设置上限和审计事件，避免无限循环。
+- fallback 结果必须回填给 LLM，但不能直接把内部工具 JSON 暴露给最终用户。
+
+当前实现状态：
+
+- [x] 工具失败结果已包含 `error_type` 和 `fallback`。
+- [x] `fallback.suggested_tool` 为只读工具时，runtime 会自动执行一次并写入 `fallback.auto_result`。
+- [x] 自动 fallback 会记录 `tool.fallback_completed` 审计事件。
+- [x] timeout fallback 会建议 `task.start`，且仅当原工具为只读工具时自动转入后台任务。
+- [x] 写入、删除、shell、外部网络等高风险 fallback 只给建议，不自动执行。
+
+#### 17.5.5 四阶段落地顺序
+
+1. [x] 新增 `EnvironmentProvider`，先实现 `environment.snapshot` 和 `environment.which`。
+2. [x] 在 Agent prompt 中加入环境探测规则，让模型遇到运行时能力问题先调用 environment 工具。
+3. [x] 新增 `ToolError` 结构和 `ToolFallbackPolicy`，先覆盖目录读取、路径不存在、依赖缺失、GitHub 未登录。
+4. [x] 新增 `BackgroundTaskManager` 内存实现和 API，先支持本进程后台任务。
+5. [x] 将浏览器截图、浏览器 session actions、GitHub Actions logs、长 skill.run 标记为可后台执行。
+6. [x] 接入 reply router：通道消息触发后台任务后，完成时主动回发最终结果。
+7. [x] 将后台任务状态和事件持久化到 PostgreSQL，内存实现只保留给 dev/test fallback。
 
 ## 18. Skill 体系
 

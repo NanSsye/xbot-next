@@ -12,6 +12,7 @@ from xbot.messaging.models import Message, Reply
 from xbot.plugins.context import PluginContext
 from xbot.plugins.loader import PluginLoader
 from xbot.plugins.manifest import PluginManifest, PluginRouting
+from xbot.agent.tool_registry import ToolDefinition
 
 
 class PluginManager:
@@ -71,10 +72,47 @@ class PluginManager:
             for manifest in self._manifests.values()
         ]
 
+    def list_agent_tools(self, name: str | None = None) -> list[dict]:
+        if name and name not in self._manifests:
+            return []
+        manifests = [(name, self._manifests[name])] if name else sorted(self._manifests.items())
+        items = []
+        for plugin_name, manifest in manifests:
+            enabled = plugin_name in self._plugins and plugin_name not in self._disabled
+            for item in manifest.agent_tools:
+                metadata = {
+                    **item.metadata,
+                    "plugin": plugin_name,
+                    "platforms": item.platforms,
+                    "scopes": item.scopes,
+                    "modes": item.modes,
+                }
+                items.append(
+                    {
+                        "plugin": plugin_name,
+                        "enabled": enabled,
+                        "name": item.name,
+                        "handler": item.handler,
+                        "description": item.description,
+                        "risk_level": item.risk_level,
+                        "toolset": item.toolset,
+                        "cacheable": item.cacheable,
+                        "timeout_seconds": item.timeout_seconds,
+                        "invalidates_cache": item.invalidates_cache,
+                        "input_schema": item.input_schema,
+                        "metadata": metadata,
+                    }
+                )
+        return items
+
     def iter_agent_tools(self):
         for name, plugin in self._plugins.items():
             if name in self._disabled:
                 continue
+            manifest = self._manifests.get(name)
+            if manifest:
+                for tool in self._manifest_agent_tools(name, plugin, manifest):
+                    yield name, [tool]
             provider = getattr(plugin, "agent_tools", None)
             if not provider:
                 continue
@@ -82,6 +120,36 @@ class PluginManager:
                 yield name, list(provider() or [])
             except Exception as exc:
                 logger.warning("Plugin agent tool provider failed: plugin={} error={}", name, exc)
+
+    def _manifest_agent_tools(self, name: str, plugin, manifest: PluginManifest):
+        for item in manifest.agent_tools:
+            handler = getattr(plugin, item.handler, None)
+            if handler is None:
+                logger.warning(
+                    "Plugin manifest agent tool ignored: plugin={} tool={} missing_handler={}",
+                    name,
+                    item.name,
+                    item.handler,
+                )
+                continue
+            yield ToolDefinition(
+                name=item.name,
+                description=item.description,
+                risk_level=item.risk_level,
+                handler=handler,
+                input_schema=item.input_schema,
+                toolset=item.toolset,
+                source="plugin",
+                cacheable=item.cacheable,
+                timeout_seconds=item.timeout_seconds,
+                invalidates_cache=item.invalidates_cache,
+                metadata={
+                    **item.metadata,
+                    "platforms": item.platforms,
+                    "scopes": item.scopes,
+                    "modes": item.modes,
+                },
+            )
 
     async def enable(self, name: str) -> bool:
         manifest = self._manifests.get(name)

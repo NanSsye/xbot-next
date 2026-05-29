@@ -150,6 +150,7 @@ def _builtin_tool_definitions(**handlers: Callable[[dict[str, Any]], Awaitable[A
             toolset="shell",
             source="builtin",
             timeout_seconds=120,
+            metadata={"background_candidate": True, "background_reason": "shell commands may take time"},
             input_schema={
                 "type": "object",
                 "required": ["command"],
@@ -198,6 +199,7 @@ def _builtin_tool_definitions(**handlers: Callable[[dict[str, Any]], Awaitable[A
             toolset="skill",
             source="skill",
             timeout_seconds=300,
+            metadata={"background_candidate": True, "background_reason": "skill actions may take time"},
             input_schema={
                 "type": "object",
                 "required": ["skill", "action", "args"],

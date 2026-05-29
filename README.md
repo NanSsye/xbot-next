@@ -44,7 +44,10 @@ python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -U pip
 pip install -e .[dev]
+python -m playwright install chromium
 ```
+
+说明：`pip install -e .[dev]` 会安装运行所需主依赖、MCP SDK、Playwright SDK 和测试依赖。`playwright install chromium` 用于下载浏览器内核，浏览器截图工具需要它。
 
 ### 2. 创建本地配置
 
@@ -162,6 +165,68 @@ Agent 可用工具包括：
 - `skill.list`
 - `skill.describe`
 - `skill.run`
+- `environment.snapshot`
+- `environment.which`
+- `environment.ports`
+- `task.start`
+- `task.status`
+- `task.list`
+- `task.cancel`
+- `browser.screenshot_url`
+- `browser.run_actions`
+- `browser.session_open`
+- `browser.session_actions`
+- `browser.session_list`
+- `browser.session_close`
+- `database.query`
+- `database.schema`
+- `git.status`
+- `git.log`
+- `git.diff`
+- `github.repo_info`
+- `github.issue_list`
+- `github.issue_view`
+- `github.issue_create`
+- `github.pr_list`
+- `github.pr_view`
+- `github.pr_comment`
+- `github.graphql`
+- `github.workflow_list`
+- `github.run_list`
+- `github.run_view`
+- `github.run_logs`
+- `github.run_rerun`
+
+插件也可以通过两种方式暴露 Agent 工具：
+
+- 在插件类里实现 `agent_tools()`，返回 `ToolDefinition`。
+- 在 `plugin.toml` 中声明 `[[agent_tools]]`，并绑定插件方法名。
+
+示例：
+
+```toml
+[[agent_tools]]
+name = "plugin.my_tool"
+handler = "my_tool"
+description = "Run my plugin tool."
+risk_level = "read"
+toolset = "plugin"
+platforms = ["wechat"]
+scopes = ["private", "group"]
+modes = ["developer", "admin"]
+```
+
+插件工具权限/可见性查询：
+
+- `GET /api/v1/plugins/agent-tools`
+- `GET /api/v1/plugins/{name}/agent-tools`
+- `GET /api/v1/agent/tools/visibility`
+- `POST /api/v1/agent/background-tasks`
+- `GET /api/v1/agent/background-tasks/overview`
+- `GET /api/v1/agent/background-tasks`
+- `GET /api/v1/agent/background-tasks/{task_id}`
+- `POST /api/v1/agent/background-tasks/{task_id}/replay`
+- `POST /api/v1/agent/background-tasks/{task_id}/cancel`
 
 工具调用规则：
 
@@ -170,6 +235,11 @@ Agent 可用工具包括：
 - 工具结果返回给模型。
 - 循环直到模型返回 `final`。
 - 工具调用过程不会发送给微信用户，只发送最终回答。
+- 长任务可以通过 `task.start` 后台执行；如果带有通道通知信息，完成后会主动回发原会话。
+- 工具失败会返回结构化 `error_type` 和 `fallback`，只读 fallback 会自动尝试一次安全降级。
+- 浏览器、GitHub Actions logs、`skill.run` 等长任务工具会在 metadata 中标记 `background_candidate`。
+- 服务重启后会恢复后台任务记录；未完成且可重放的只读后台任务会安全重放一次。
+- 通道来源中调用 `background_candidate` 工具时，Agent 会自动改为后台任务并在完成后回发。
 
 ## 权限配置
 
@@ -251,7 +321,7 @@ skills/微信发送skill/wechat-869.json
 
 ## MCP 使用
 
-`xbot-next` 支持可选的原生 MCP client。启动时会连接配置的 MCP servers，自动发现工具，并注册成 Agent 可调用的一等工具。
+`xbot-next` 内置原生 MCP client。启动时会连接配置的 MCP servers，自动发现工具，并注册成 Agent 可调用的一等工具。
 
 MCP 工具命名规则：
 
@@ -265,14 +335,6 @@ mcp_{server_name}_{tool_name}
 mcp_time_get_current_time
 mcp_filesystem_read_file
 mcp_github_list_issues
-```
-
-### 安装 MCP SDK
-
-MCP 是可选依赖。未安装时会自动跳过 MCP 工具发现，不影响主程序启动。
-
-```bat
-pip install -e .[mcp]
 ```
 
 ### 配置 stdio MCP server

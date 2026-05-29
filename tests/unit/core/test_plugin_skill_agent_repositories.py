@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 
+import anyio
 import pytest
 
 from xbot.agent.runtime import AgentRuntime
+from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.llm import LLMResponse
 from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import AgentConfig, AgentToolsetConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
@@ -38,6 +40,7 @@ class FakeAgentRepository:
         self.finished = []
         self.events = []
         self.memories = []
+        self.background_tasks = {}
 
     async def create_task(self, task_id, source, input_text):
         self.tasks.append((task_id, source, input_text))
@@ -50,6 +53,15 @@ class FakeAgentRepository:
 
     async def save_memory(self, item, **kwargs):
         self.memories.append((item, kwargs))
+
+    async def upsert_background_task(self, item):
+        self.background_tasks[item.id] = item.model_copy(deep=True)
+
+    async def get_background_task(self, task_id):
+        return self.background_tasks.get(task_id)
+
+    async def list_background_tasks(self, limit=50):
+        return list(self.background_tasks.values())[-limit:]
 
 
 class FakeLLMProvider:
@@ -309,6 +321,52 @@ async def test_agent_registers_plugin_tool_provider():
 
 
 @pytest.mark.anyio
+async def test_agent_registers_plugin_manifest_tool_provider(tmp_path):
+    plugin_dir = tmp_path / "manifest_tool"
+    plugin_dir.mkdir()
+    (plugin_dir / "plugin.toml").write_text(
+        '''
+name = "manifest_tool"
+version = "0.1.0"
+entry = "main:ManifestToolPlugin"
+enabled = true
+
+[[agent_tools]]
+name = "plugin.manifest_echo"
+handler = "echo_tool"
+description = "Echo through manifest-declared tool."
+risk_level = "read"
+toolset = "plugin"
+cacheable = true
+'''.strip(),
+        encoding="utf-8",
+    )
+    (plugin_dir / "main.py").write_text(
+        '''
+from xbot.plugins.base import PluginBase
+
+
+class ManifestToolPlugin(PluginBase):
+    async def echo_tool(self, payload):
+        return {"echo": payload.get("text")}
+'''.strip(),
+        encoding="utf-8",
+    )
+    plugins = PluginManager(PluginConfig(directory=str(tmp_path)))
+    await plugins.load_all()
+    runtime = AgentRuntime(AgentConfig(), plugins=plugins, skills=None)
+    await runtime.start()
+
+    tool = runtime.tools.get("plugin.manifest_echo")
+    result = await runtime.execute_tool("plugin.manifest_echo", {"text": "hello"})
+
+    assert tool is not None
+    assert tool.source == "plugin:manifest_tool"
+    assert tool.metadata["plugin"] == "manifest_tool"
+    assert result.output == {"echo": "hello"}
+
+
+@pytest.mark.anyio
 async def test_database_tool_rejects_mutating_sql(tmp_path):
     from xbot.agent.tools.database_provider import register_database_tools
 
@@ -323,6 +381,138 @@ async def test_database_tool_rejects_mutating_sql(tmp_path):
 
     assert result.status == "denied"
     assert "read-only" in result.error
+
+
+def test_second_stage_provider_tools_are_registered():
+    from xbot.agent.tools.database_provider import register_database_tools
+
+    class FakeStorage:
+        session_factory = None
+
+    runtime = AgentRuntime(AgentConfig(mode="admin", admin_mode_allowed=True), plugins=None, skills=None)
+    register_database_tools(runtime.tools, storage=FakeStorage())
+    tools = {item["name"]: item for item in runtime.tools.list_tools()}
+
+    assert tools["browser.run_actions"]["toolset"] == "browser"
+    assert tools["database.schema"]["toolset"] == "database"
+    assert tools["github.issue_list"]["source"] == "github"
+    assert tools["github.issue_create"]["risk_level"] == "write"
+    assert tools["github.pr_view"]["toolset"] == "git"
+    assert tools["browser.session_open"]["metadata"]["session_persistent"] is True
+    assert tools["browser.session_actions"]["metadata"]["background_candidate"] is True
+    assert tools["skill.run"]["metadata"]["background_candidate"] is True
+    assert tools["github.graphql"]["source"] == "github"
+    assert tools["github.workflow_list"]["toolset"] == "git"
+    assert tools["github.run_logs"]["risk_level"] == "read"
+    assert tools["github.run_logs"]["metadata"]["background_candidate"] is True
+    assert tools["github.run_rerun"]["risk_level"] == "write"
+    assert tools["environment.snapshot"]["toolset"] == "environment"
+    assert tools["environment.which"]["cacheable"] is True
+    assert tools["task.start"]["toolset"] == "task"
+
+
+@pytest.mark.anyio
+async def test_database_schema_uses_sqlalchemy_inspector(monkeypatch):
+    from xbot.agent.tools import database_provider
+
+    class FakeConnection:
+        dialect = type("Dialect", (), {"name": "sqlite"})()
+
+    class FakeSyncSession:
+        def connection(self):
+            return FakeConnection()
+
+    class FakeInspector:
+        default_schema_name = "main"
+
+        def get_schema_names(self):
+            return ["main"]
+
+        def get_table_names(self, schema=None):
+            assert schema == "main"
+            return ["users"]
+
+        def get_columns(self, table_name, schema=None):
+            assert table_name == "users"
+            return [
+                {"name": "id", "type": "INTEGER", "nullable": False, "default": None},
+                {"name": "name", "type": "VARCHAR", "nullable": True, "default": None},
+            ]
+
+        def get_pk_constraint(self, table_name, schema=None):
+            return {"name": "pk_users", "constrained_columns": ["id"]}
+
+        def get_indexes(self, table_name, schema=None):
+            return [{"name": "ix_users_name", "column_names": ["name"], "unique": False}]
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def run_sync(self, fn):
+            return fn(FakeSyncSession())
+
+    class FakeStorage:
+        def session_factory(self):
+            return FakeSession()
+
+    monkeypatch.setattr(database_provider, "inspect", lambda connection: FakeInspector())
+
+    result = await database_provider._schema({}, storage=FakeStorage())
+
+    assert result["dialect"] == "sqlite"
+    assert result["schema"] == "main"
+    assert result["tables"][0]["columns"][0]["primary_key"] is True
+    assert result["tables"][0]["indexes"][0]["name"] == "ix_users_name"
+
+
+@pytest.mark.anyio
+async def test_plugin_manager_lists_manifest_tool_permissions(tmp_path):
+    plugin_dir = tmp_path / "permission_tool"
+    plugin_dir.mkdir()
+    (plugin_dir / "plugin.toml").write_text(
+        '''
+name = "permission_tool"
+version = "0.1.0"
+entry = "main:PermissionToolPlugin"
+enabled = true
+
+[[agent_tools]]
+name = "plugin.permission_echo"
+handler = "echo_tool"
+description = "Echo with manifest permissions."
+risk_level = "read"
+toolset = "plugin"
+platforms = ["wechat"]
+scopes = ["private"]
+modes = ["admin"]
+'''.strip(),
+        encoding="utf-8",
+    )
+    (plugin_dir / "main.py").write_text(
+        '''
+from xbot.plugins.base import PluginBase
+
+
+class PermissionToolPlugin(PluginBase):
+    async def echo_tool(self, payload):
+        return {"echo": payload.get("text")}
+'''.strip(),
+        encoding="utf-8",
+    )
+    plugins = PluginManager(PluginConfig(directory=str(tmp_path)))
+    await plugins.load_all()
+
+    tools = plugins.list_agent_tools("permission_tool")
+
+    assert tools[0]["name"] == "plugin.permission_echo"
+    assert tools[0]["enabled"] is True
+    assert tools[0]["metadata"]["platforms"] == ["wechat"]
+    assert tools[0]["metadata"]["scopes"] == ["private"]
+    assert tools[0]["metadata"]["modes"] == ["admin"]
 
 
 def test_agent_system_prompt_includes_current_time():
@@ -506,6 +696,53 @@ async def test_agent_runtime_never_returns_tool_call_json_as_final_output():
 
 
 @pytest.mark.anyio
+async def test_agent_runtime_extracts_malformed_tool_call_json(tmp_path):
+    (tmp_path / "src").mkdir()
+    llm = FakeLLMProvider(
+        responses=[
+            (
+                '{"tool_calls":[{"tool":"filesystem.list_dir","payload":{"path":"src"}},'
+                '{"tool":"filesystem.list_dir","payload":{"path":"src"}]}'
+            ),
+            '{"final":"已查看 src 目录。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("你好", source="test")
+
+    assert result.output == "已查看 src 目录。"
+    assert "tool_calls" not in result.output
+    assert len(llm.messages) == 2
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_executes_standalone_tool_call_json(tmp_path):
+    target = tmp_path / "project.txt"
+    target.write_text("xbot", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool":"filesystem.read_file","payload":{"path":"project.txt"}}',
+            '{"final":"文件内容是 xbot"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("读取文件", source="test")
+
+    assert result.output == "文件内容是 xbot"
+    assert len(llm.messages) == 2
+
+
+@pytest.mark.anyio
 async def test_agent_runtime_reprompts_after_empty_final_and_then_uses_tool(tmp_path):
     target_dir = tmp_path / "skills"
     target_dir.mkdir()
@@ -552,3 +789,439 @@ async def test_agent_runtime_reprompts_after_premature_final_and_then_uses_tool(
 
     assert result.output == "当前 skill 有 code_assistant"
     assert len(llm.messages) == 3
+
+
+@pytest.mark.anyio
+async def test_filesystem_read_file_reports_directory_error(tmp_path):
+    (tmp_path / "configs").mkdir()
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    result = await runtime.execute_tool("filesystem.read_file", {"path": "configs"})
+
+    assert result.status == "failed"
+    assert "use filesystem.list_dir" in result.error
+    assert result.error_type == "directory_as_file"
+    assert result.fallback["suggested_tool"] == "filesystem.list_dir"
+    assert result.fallback["auto_result"]["status"] == "completed"
+    assert result.fallback["auto_result"]["output"] == []
+
+
+@pytest.mark.anyio
+async def test_environment_snapshot_reports_runtime(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    result = await runtime.execute_tool(
+        "environment.snapshot",
+        {"commands": ["python"], "ports": [1]},
+    )
+
+    assert result.status == "completed"
+    assert result.output["python"]["version"]
+    assert result.output["commands"]["python"]["available"] is True
+    assert result.output["workspace"]["root"] == str(tmp_path.resolve())
+
+
+@pytest.mark.anyio
+async def test_task_start_runs_tool_in_background(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("background ok", encoding="utf-8")
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    started = await runtime.execute_tool(
+        "task.start",
+        {"tool": "filesystem.read_file", "payload": {"path": "notes.txt"}},
+    )
+    task_id = started.output["id"]
+
+    for _ in range(20):
+        record = runtime.background.get(task_id)
+        if record.status == "completed":
+            break
+        await anyio.sleep(0.01)
+
+    status = await runtime.execute_tool("task.status", {"task_id": task_id})
+
+    assert status.output["status"] == "completed"
+    assert status.output["result"]["output"] == "background ok"
+
+
+@pytest.mark.anyio
+async def test_background_task_persists_and_sends_completion_reply(tmp_path):
+    repo = FakeAgentRepository()
+    replies = []
+    target = tmp_path / "notes.txt"
+    target.write_text("notify ok", encoding="utf-8")
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider)
+    runtime.attach_reply_sender(send_reply)
+
+    started = await runtime.execute_tool(
+        "task.start",
+        {
+            "tool": "filesystem.read_file",
+            "payload": {"path": "notes.txt"},
+            "notify": {
+                "platform": "web",
+                "adapter": "web",
+                "conversation_id": "c1",
+                "quote_message_id": "m1",
+            },
+        },
+    )
+    task_id = started.output["id"]
+
+    for _ in range(50):
+        record = runtime.background.get(task_id)
+        if record.status == "completed" and replies and repo.background_tasks.get(task_id):
+            break
+        await anyio.sleep(0.02)
+
+    persisted = await runtime.get_background_task(task_id)
+
+    assert persisted.status == "completed"
+    assert persisted.result["output"] == "notify ok"
+    assert replies[0].conversation_id == "c1"
+    assert replies[0].quote_message_id == "m1"
+    assert replies[0].content == "notify ok"
+
+
+@pytest.mark.anyio
+async def test_background_task_persists_same_task_serially():
+    from xbot.agent.background import BackgroundTaskManager
+
+    class SlowBackgroundRepo:
+        def __init__(self):
+            self.active = set()
+            self.violations = 0
+            self.calls = 0
+
+        async def upsert_background_task(self, item):
+            self.calls += 1
+            if item.id in self.active:
+                self.violations += 1
+            self.active.add(item.id)
+            await anyio.sleep(0.02)
+            self.active.remove(item.id)
+
+    repo = SlowBackgroundRepo()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    async def runner():
+        await anyio.sleep(0.01)
+        return {"output": "ok"}
+
+    manager = BackgroundTaskManager(repository_provider=provider)
+    record = manager.start(kind="tool", runner=runner)
+
+    for _ in range(50):
+        current = manager.get(record.id)
+        if current and current.status == "completed" and not repo.active and repo.calls >= 3:
+            break
+        await anyio.sleep(0.02)
+
+    assert repo.violations == 0
+    assert repo.calls >= 3
+
+
+@pytest.mark.anyio
+async def test_channel_task_start_auto_injects_notification_target(tmp_path):
+    replies = []
+    target = tmp_path / "notes.txt"
+    target.write_text("channel notify ok", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"task.start","payload":{"tool":"filesystem.read_file","payload":{"path":"notes.txt"}}}]}',
+            '{"final":"后台任务已开始。"}',
+        ]
+    )
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    runtime.attach_reply_sender(send_reply)
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: msg-1\ncontent: 读取文件",
+        source="channel:web:web:conversation-1",
+    )
+
+    for _ in range(50):
+        if replies:
+            break
+        await anyio.sleep(0.02)
+
+    assert result.output.startswith("后台任务已开始")
+    assert replies[0].conversation_id == "conversation-1"
+    assert replies[0].quote_message_id == "msg-1"
+    assert replies[0].content == "channel notify ok"
+
+
+@pytest.mark.anyio
+async def test_background_task_replays_interrupted_read_task(tmp_path):
+    repo = FakeAgentRepository()
+    target = tmp_path / "notes.txt"
+    target.write_text("replayed ok", encoding="utf-8")
+
+    record = BackgroundTaskRecord(
+        id="bg-replay",
+        kind="tool",
+        status="running",
+        source="agent",
+        description="Replay read",
+        metadata={
+            "tool": "filesystem.read_file",
+            "payload": {"path": "notes.txt"},
+            "replayable": True,
+        },
+    )
+    repo.background_tasks[record.id] = record
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider)
+    await runtime.start()
+
+    for _ in range(50):
+        replayed = runtime.background.get("bg-replay")
+        if replayed and replayed.status == "completed":
+            break
+        await anyio.sleep(0.02)
+
+    replayed = await runtime.get_background_task("bg-replay")
+
+    assert replayed.status == "completed"
+    assert replayed.result["output"] == "replayed ok"
+    assert replayed.metadata["replayed"] is True
+    assert replayed.metadata["replay_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_timeout_fallback_starts_read_tool_in_background(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    async def slow_read(payload):
+        await anyio.sleep(0.05)
+        return {"ok": True}
+
+    runtime.tools.register(
+        ToolDefinition(
+            name="test.slow_read",
+            description="Slow read test tool.",
+            risk_level="read",
+            handler=slow_read,
+            toolset="core",
+            source="test",
+            timeout_seconds=0.01,
+            metadata={"background_candidate": True},
+            input_schema={"type": "object", "properties": {}},
+        )
+    )
+
+    result = await runtime.execute_tool("test.slow_read", {})
+
+    assert result.status == "failed"
+    assert result.error_type == "timeout"
+    assert result.fallback["auto_result"]["tool"] == "task.start"
+    task_id = result.fallback["auto_result"]["output"]["id"]
+    assert runtime.background.get(task_id).metadata["tool"] == "test.slow_read"
+
+
+@pytest.mark.anyio
+async def test_background_task_overview_lists_candidates_and_replayable(tmp_path):
+    repo = FakeAgentRepository()
+    record = BackgroundTaskRecord(
+        id="bg-overview",
+        kind="tool",
+        status="failed",
+        source="agent",
+        description="Replayable read",
+        metadata={
+            "tool": "filesystem.read_file",
+            "payload": {"path": "missing.txt"},
+            "replayable": True,
+        },
+    )
+    repo.background_tasks[record.id] = record
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider)
+
+    overview = await runtime.background_task_overview()
+
+    assert overview["counts"]["failed"] == 1
+    assert overview["replayable"][0]["id"] == "bg-overview"
+    candidate_names = {item["name"] for item in overview["background_candidate_tools"]}
+    assert "browser.run_actions" in candidate_names
+    assert "skill.run" in candidate_names
+
+
+@pytest.mark.anyio
+async def test_replay_background_task_api_path_requeues_failed_read(tmp_path):
+    repo = FakeAgentRepository()
+    target = tmp_path / "notes.txt"
+    target.write_text("manual replay ok", encoding="utf-8")
+    record = BackgroundTaskRecord(
+        id="bg-manual-replay",
+        kind="tool",
+        status="failed",
+        source="agent",
+        description="Manual replay read",
+        metadata={
+            "tool": "filesystem.read_file",
+            "payload": {"path": "notes.txt"},
+            "replayable": True,
+        },
+    )
+    repo.background_tasks[record.id] = record
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider)
+
+    replayed = await runtime.replay_background_task("bg-manual-replay")
+    for _ in range(50):
+        if replayed.status == "completed":
+            break
+        await anyio.sleep(0.02)
+
+    assert replayed.status == "completed"
+    assert replayed.result["output"] == "manual replay ok"
+    assert replayed.metadata["replay_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_channel_metadata_candidate_tool_auto_runs_in_background(tmp_path):
+    calls = []
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"test.long_read","payload":{"value":"x"}}]}',
+            '{"final":"后台任务已开始。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    async def long_read(payload):
+        calls.append(payload)
+        return f"long {payload['value']}"
+
+    runtime.tools.register(
+        ToolDefinition(
+            name="test.long_read",
+            description="Long read test tool.",
+            risk_level="read",
+            handler=long_read,
+            toolset="core",
+            source="test",
+            timeout_seconds=30,
+            metadata={"background_candidate": True},
+            input_schema={"type": "object", "properties": {"value": {"type": "string"}}},
+        )
+    )
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: m1\ncontent: run long",
+        source="channel:web:web:c1",
+    )
+
+    for _ in range(50):
+        if calls:
+            break
+        await anyio.sleep(0.02)
+    tasks = runtime.background.list()
+
+    assert result.output.startswith("后台任务已开始")
+    assert calls == [{"value": "x"}]
+    assert tasks[0].metadata["tool"] == "test.long_read"
+    assert tasks[0].metadata["notify"]["conversation_id"] == "c1"
+
+
+@pytest.mark.anyio
+async def test_wechat869_background_task_does_not_auto_notify_and_waits_for_final(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("wechat background ok", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"task.start","payload":{"tool":"filesystem.read_file","payload":{"path":"notes.txt"}}}]}',
+            '{"final":"我已经开始处理，稍后根据结果回复。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: m1\ncontent: 读取文件",
+        source="channel:wechat:wechat869:44694849727@chatroom",
+    )
+
+    for _ in range(50):
+        tasks = runtime.background.list()
+        if tasks and tasks[0].status == "completed":
+            break
+        await anyio.sleep(0.02)
+    tasks = runtime.background.list()
+
+    assert result.output == "我已经开始处理，稍后根据结果回复。"
+    assert tasks[0].metadata["tool"] == "filesystem.read_file"
+    assert tasks[0].metadata.get("notify") is None
+    assert len(llm.messages) == 2

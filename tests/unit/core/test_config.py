@@ -20,7 +20,15 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.llm.enabled is False
     assert settings.agent.llm.provider == "openai_compatible"
     assert settings.agent.mcp.enabled is True
-    assert settings.agent.toolsets.group == ["core", "filesystem", "skill", "mcp"]
+    assert settings.agent.toolsets.group == [
+        "core",
+        "filesystem",
+        "skill",
+        "mcp",
+        "environment",
+        "task",
+        "plugin",
+    ]
     assert settings.adapters.wechat869.enabled is False
 
 

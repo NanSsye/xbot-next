@@ -17,7 +17,10 @@ def test_initial_revision_exists():
     assert Path("migrations/versions/0001_initial_schema.py").exists()
 
 
-def test_initial_revision_mentions_all_metadata_tables():
-    revision_text = Path("migrations/versions/0001_initial_schema.py").read_text(encoding="utf-8")
+def test_migrations_mention_all_metadata_tables():
+    revision_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(Path("migrations/versions").glob("*.py"))
+    )
     for table_name in Base.metadata.tables.keys():
         assert f'"{table_name}"' in revision_text

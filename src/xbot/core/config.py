@@ -184,13 +184,20 @@ class AgentToolsetConfig(BaseModel):
             "skill",
             "shell",
             "mcp",
+            "environment",
+            "task",
             "browser",
             "database",
             "git",
+            "plugin",
         ]
     )
-    private: list[str] = Field(default_factory=lambda: ["core", "filesystem", "skill", "mcp"])
-    group: list[str] = Field(default_factory=lambda: ["core", "filesystem", "skill", "mcp"])
+    private: list[str] = Field(
+        default_factory=lambda: ["core", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
+    )
+    group: list[str] = Field(
+        default_factory=lambda: ["core", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
+    )
     admin: list[str] = Field(
         default_factory=lambda: [
             "core",
@@ -200,9 +207,12 @@ class AgentToolsetConfig(BaseModel):
             "skill",
             "shell",
             "mcp",
+            "environment",
+            "task",
             "browser",
             "database",
             "git",
+            "plugin",
         ]
     )
 

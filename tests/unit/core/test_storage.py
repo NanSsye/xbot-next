@@ -78,6 +78,10 @@ def test_conversation_message_record_can_restore_message_fields():
 
 
 def test_agent_tables_exist():
-    assert {"agent_tasks", "agent_memories", "agent_memory_links", "agent_artifacts"}.issubset(
-        Base.metadata.tables.keys()
-    )
+    assert {
+        "agent_tasks",
+        "agent_background_tasks",
+        "agent_memories",
+        "agent_memory_links",
+        "agent_artifacts",
+    }.issubset(Base.metadata.tables.keys())

@@ -7,6 +7,7 @@ from pathlib import Path
 import anyio
 
 from xbot.agent.policy import PolicyEngine
+from xbot.core.exceptions import XBotError
 
 
 class Workspace:
@@ -17,6 +18,8 @@ class Workspace:
     async def read_text(self, path: str) -> str:
         target = self._resolve(path)
         self.policy.assert_file_read_allowed(target)
+        if target.is_dir():
+            raise XBotError(f"Path is a directory, use filesystem.list_dir instead: {target}")
         return await anyio.to_thread.run_sync(lambda: target.read_text(encoding="utf-8"))
 
     async def write_text(self, path: str, content: str) -> None:

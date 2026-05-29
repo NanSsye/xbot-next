@@ -23,15 +23,26 @@ class AgentPlanner:
 
     def parse_llm_response(self, content: str) -> AgentPlan:
         objects = self._extract_json_objects(content)
+        lenient_calls = self._extract_tool_calls_lenient(content)
         if not objects:
-            return AgentPlan(final=content)
+            return AgentPlan(
+                final=None if lenient_calls else content,
+                tool_calls=[
+                    PlannedToolCall(tool=tool, payload=payload)
+                    for tool, payload in lenient_calls
+                ],
+            )
         calls = []
         final = None
         for data in objects:
             if not isinstance(data, dict):
                 continue
+            if data.get("tool") or data.get("name"):
+                calls.append(data)
             calls.extend(data.get("tool_calls") or data.get("tools") or [])
             final = data.get("final") or data.get("answer") or final
+        if not calls and lenient_calls:
+            calls.extend({"tool": tool, "payload": payload} for tool, payload in lenient_calls)
         return AgentPlan(
             final=final,
             tool_calls=[
@@ -53,7 +64,34 @@ class AgentPlanner:
                     return final.strip()
 
         stripped = self._strip_tool_json_blocks(text)
+        if self.contains_tool_call_intent(stripped):
+            return ""
         return stripped.strip()
+
+    def contains_tool_call_intent(self, content: str) -> bool:
+        return bool(re.search(r'"(?:tool_calls|tools)"\s*:', content))
+
+    def _extract_tool_calls_lenient(self, content: str) -> list[tuple[str, dict[str, Any]]]:
+        text = self._strip_code_fences(content.strip())
+        calls: list[tuple[str, dict[str, Any]]] = []
+        tool_pattern = re.compile(r'"(?:tool|name)"\s*:\s*"([^"]+)"')
+        decoder = json.JSONDecoder()
+        for match in tool_pattern.finditer(text):
+            tool_name = match.group(1)
+            payload: dict[str, Any] = {}
+            payload_match = re.search(r'"(?:payload|arguments)"\s*:', text[match.end() :])
+            if payload_match:
+                payload_start = match.end() + payload_match.end()
+                brace_index = text.find("{", payload_start)
+                if brace_index >= 0:
+                    try:
+                        parsed_payload, _ = decoder.raw_decode(text[brace_index:])
+                    except json.JSONDecodeError:
+                        parsed_payload = {}
+                    if isinstance(parsed_payload, dict):
+                        payload = parsed_payload
+            calls.append((tool_name, payload))
+        return calls
 
     def is_empty_final_response(self, content: str) -> bool:
         data = self._extract_json(content)

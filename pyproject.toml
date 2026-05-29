@@ -16,6 +16,8 @@ dependencies = [
   "fastapi>=0.115.0",
   "httpx>=0.27.0",
   "loguru>=0.7.2",
+  "mcp>=1.0.0",
+  "playwright>=1.45.0",
   "pydantic>=2.8.0",
   "pydantic-settings>=2.4.0",
   "redis>=5.0.0",
@@ -30,13 +32,6 @@ dev = [
   "pytest-asyncio>=0.23.0",
   "ruff>=0.5.0"
 ]
-mcp = [
-  "mcp>=1.0.0"
-]
-browser = [
-  "playwright>=1.45.0"
-]
-
 [project.scripts]
 xbot = "xbot.cli.main:app"
 
