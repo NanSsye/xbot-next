@@ -2,17 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from uuid import uuid4
 
 import anyio
 from pydantic import BaseModel, Field
 
-from xbot.agent.cache import TTLCache, stable_cache_key
+from xbot.agent.cache import TTLCache
 from xbot.agent.compression import MemoryCompressor
 from xbot.agent.llm import LLMMessage, create_llm_provider
 from xbot.agent.memory import MemoryStore
@@ -22,6 +19,9 @@ from xbot.agent.policy import PolicyEngine
 from xbot.agent.tool_executor import ToolExecutor
 from xbot.agent.tool_registry import ToolRegistry
 from xbot.agent.tools import register_builtin_tools
+from xbot.agent.tools.cache_policy import ToolCachePolicy
+from xbot.agent.tools.skill_provider import SkillToolProvider
+from xbot.agent.tools.toolsets import source_context, toolsets_for_source
 from xbot.agent.workspace import Workspace
 from xbot.core.config import AgentConfig
 from xbot.core.exceptions import PolicyDeniedError, XBotError
@@ -68,13 +68,15 @@ class AgentRuntime:
         self.planner = AgentPlanner()
         self.llm = llm_provider or create_llm_provider(config.llm)
         self._tool_result_cache = TTLCache(config.cache.tool_result_ttl_seconds)
-        self._static_prompt_cache: tuple[tuple[int, int], str] | None = None
+        self.cache_policy = ToolCachePolicy(config, self.workspace, self.policy, self.skills)
+        self.skill_tools = SkillToolProvider(workspace=self.workspace, skills=self.skills)
+        self._static_prompt_cache: tuple[tuple[object, ...], str] | None = None
         self._skill_prompt_cache: tuple[int, str] | None = None
         register_builtin_tools(
             self.tools,
             workspace=self.workspace,
             skills=self.skills,
-            run_skill=self._run_skill,
+            run_skill=self.skill_tools.run_skill,
         )
 
     async def start(self) -> None:
@@ -94,7 +96,7 @@ class AgentRuntime:
             logger.info("Agent 任务写入存储完成: task_id={}", task_id)
         memory_item = await self.memory.add("episodic", f"Task received from {source}: {input_text}")
         logger.info("Agent 任务进入 LLM: task_id={}", task_id)
-        output = await self._run_llm(task_id, input_text)
+        output = await self._run_llm(task_id, input_text, source=source)
         result = AgentResult(
             task_id=task_id,
             source=source,
@@ -111,7 +113,7 @@ class AgentRuntime:
         return result
 
     async def continue_task(self, task_id: str, user_input: str) -> AgentResult:
-        output = await self._run_llm(task_id, user_input)
+        output = await self._run_llm(task_id, user_input, source="api")
         return AgentResult(task_id=task_id, source="api", status="completed", output=output)
 
     async def cancel_task(self, task_id: str) -> None:
@@ -145,7 +147,7 @@ class AgentRuntime:
             },
         )
         try:
-            cache_key = self._tool_cache_key(tool_name, payload)
+            cache_key = self.cache_policy.key_for(tool, payload)
             if cache_key:
                 cached_output = self._tool_result_cache.get(cache_key)
                 if cached_output is not None:
@@ -206,7 +208,7 @@ class AgentRuntime:
         if cache_key:
             self._tool_result_cache.set(cache_key, output)
             logger.info("Agent 工具缓存写入: task_id={} tool={}", task_id, tool_name)
-        if tool_name in {"filesystem.write_file", "filesystem.delete_path"}:
+        if tool.invalidates_cache:
             self._tool_result_cache.clear()
             logger.info("Agent 工具缓存已清空: task_id={} tool={}", task_id, tool_name)
         await self._add_event(
@@ -226,65 +228,10 @@ class AgentRuntime:
     def mcp_status(self) -> dict:
         return self.mcp.status()
 
-    async def _run_skill(self, payload: dict) -> dict:
-        if not self.skills:
-            raise XBotError("Skill manager is not available.")
-        skill_name = str(payload["skill"])
-        action = str(payload["action"])
-        args = payload.get("args") or {}
-        if not isinstance(args, dict):
-            raise XBotError("skill.run args must be an object.")
-        skill_path = self.skills.get_path(skill_name)
-        if skill_path is None:
-            raise XBotError(f"Skill not found or disabled: {skill_name}")
-        if skill_name == "wechat-869-media-sender":
-            return await self._run_wechat_869_media_skill(skill_path, action, args)
-        raise XBotError(f"Skill does not expose runnable actions yet: {skill_name}")
-
-    async def _run_wechat_869_media_skill(self, skill_path: Path, action: str, args: dict) -> dict:
-        allowed_actions = {
-            "send-image": ["to", "path"],
-            "send-video": ["to", "path"],
-            "send-voice": ["to", "path"],
-            "send-music": ["to", "path"],
-            "send-link": ["to", "url"],
-            "send-file": ["to", "path"],
-            "send-text": ["to", "text"],
-        }
-        if action not in allowed_actions:
-            raise XBotError(f"Unsupported wechat-869-media-sender action: {action}")
-        missing = [name for name in allowed_actions[action] if not args.get(name)]
-        if missing:
-            raise XBotError(f"Missing skill.run args: {', '.join(missing)}")
-        script = skill_path / "send_869_media.py"
-        command_parts = [shlex.quote(sys.executable), shlex.quote(str(script)), action]
-        option_map = {
-            "to": "--to",
-            "path": "--path",
-            "thumb": "--thumb",
-            "thumb_mode": "--thumb-mode",
-            "format": "--format",
-            "seconds": "--seconds",
-            "url": "--url",
-            "title": "--title",
-            "desc": "--desc",
-            "thumb_url": "--thumb-url",
-            "name": "--name",
-            "text": "--text",
-        }
-        for key, option in option_map.items():
-            value = args.get(key)
-            if value in (None, ""):
-                continue
-            command_parts.extend([option, shlex.quote(str(value))])
-        for at in args.get("at", []) or []:
-            command_parts.extend(["--at", shlex.quote(str(at))])
-        return await self.workspace.run_shell(
-            " ".join(command_parts),
-            cwd=".",
-            timeout_seconds=int(args.get("timeout_seconds", 300)),
-            max_output_chars=int(args.get("max_output_chars", 12000)),
-        )
+    async def reload_mcp(self) -> dict:
+        await self.mcp.reload()
+        self._static_prompt_cache = None
+        return self.mcp.status()
 
     async def _add_event(self, task_id: str, event_type: str, content: object) -> None:
         if not self.repository_provider:
@@ -300,9 +247,9 @@ class AgentRuntime:
             return value
         return {"truncated": True, "chars": len(text), "preview": text[:1200]}
 
-    async def _run_llm(self, task_id: str, input_text: str) -> str:
+    async def _run_llm(self, task_id: str, input_text: str, *, source: str = "api") -> str:
         messages = [
-            LLMMessage(role="system", content=self._agent_system_prompt()),
+            LLMMessage(role="system", content=self._agent_system_prompt(source=source)),
             LLMMessage(role="user", content=input_text),
         ]
         last_content = ""
@@ -429,51 +376,6 @@ class AgentRuntime:
         cleaned = self.planner.clean_final_output(last_content)
         return cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
 
-    def _tool_cache_key(self, tool_name: str, payload: dict) -> str | None:
-        if not (
-            self.config.cache.enabled
-            and self.config.cache.tool_results
-            and self.config.cache.tool_result_ttl_seconds > 0
-        ):
-            return None
-        if tool_name == "filesystem.read_file":
-            target = self.workspace._resolve(str(payload["path"]))
-            self.policy.assert_file_read_allowed(target)
-            stat = target.stat()
-            return stable_cache_key(
-                {
-                    "tool": tool_name,
-                    "path": str(target),
-                    "mtime_ns": stat.st_mtime_ns,
-                    "size": stat.st_size,
-                }
-            )
-        if tool_name == "filesystem.list_dir":
-            target = self.workspace._resolve(str(payload.get("path", ".")))
-            self.policy.assert_file_read_allowed(target)
-            stat = target.stat()
-            return stable_cache_key(
-                {
-                    "tool": tool_name,
-                    "path": str(target),
-                    "mtime_ns": stat.st_mtime_ns,
-                    "size": stat.st_size,
-                }
-            )
-        if tool_name == "skill.list":
-            return stable_cache_key(
-                {"tool": tool_name, "skills_revision": self._skills_revision()}
-            )
-        if tool_name == "skill.describe":
-            return stable_cache_key(
-                {
-                    "tool": tool_name,
-                    "skill": payload.get("skill"),
-                    "skills_revision": self._skills_revision(),
-                }
-            )
-        return None
-
     def _must_continue_for_missing_tool(self, input_text: str, output: str, used_tool: bool) -> bool:
         if used_tool:
             return False
@@ -517,27 +419,35 @@ class AgentRuntime:
             return match.group(1).strip()
         return input_text
 
-    def _agent_system_prompt(self) -> str:
+    def _agent_system_prompt(self, *, source: str = "api") -> str:
         current_time = self._current_time_prompt()
-        static_prompt = self._static_agent_prompt()
+        static_prompt = self._static_agent_prompt(source=source)
         return static_prompt + current_time
 
-    def _static_agent_prompt(self) -> str:
+    def _static_agent_prompt(self, *, source: str = "api") -> str:
         if self.config.cache.enabled and self.config.cache.static_prompt:
-            version = (self.tools.revision, self._skills_revision())
+            version = (self.tools.revision, self._skills_revision(), source)
             if self._static_prompt_cache and self._static_prompt_cache[0] == version:
                 return self._static_prompt_cache[1]
-            prompt = self._build_static_agent_prompt()
+            prompt = self._build_static_agent_prompt(source=source)
             self._static_prompt_cache = (version, prompt)
             return prompt
-        return self._build_static_agent_prompt()
+        return self._build_static_agent_prompt(source=source)
 
-    def _build_static_agent_prompt(self) -> str:
+    def _build_static_agent_prompt(self, *, source: str = "api") -> str:
         skill_instructions = self._skill_instructions_prompt()
+        toolsets = toolsets_for_source(self.config, source)
+        context = source_context(source)
+        tools = self.tools.list_tools(
+            toolsets=toolsets,
+            platform=context.get("platform"),
+            scope=context.get("scope"),
+            mode=self.config.mode,
+        )
         return (
             "You are xbot's backend agent. You can request tool calls through JSON only.\n"
             "Available tools:\n"
-            f"{json.dumps(self.tools.list_tools(), ensure_ascii=False)}\n"
+            f"{json.dumps(tools, ensure_ascii=False)}\n"
             f"{skill_instructions}"
             "Important tool-use rules:\n"
             "- If the user asks about current project state, files, directories, plugins, skills, config, logs, or runtime data, you MUST call tools first.\n"

@@ -210,7 +210,43 @@ async def test_agent_runtime_registers_skill_tools_with_schema():
     assert "skill.describe" in tools
     assert "skill.run" in tools
     assert tools["filesystem.list_dir"]["input_schema"]["properties"]["path"]["type"] == "string"
+    assert tools["filesystem.list_dir"]["toolset"] == "filesystem"
+    assert tools["filesystem.list_dir"]["cacheable"] is True
+    assert tools["skill.run"]["source"] == "skill"
     assert "action" in tools["skill.run"]["input_schema"]["required"]
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_uses_tool_metadata_for_cache_invalidation(tmp_path):
+    target = tmp_path / "project.txt"
+    target.write_text("one", encoding="utf-8")
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    first = await runtime.execute_tool("filesystem.read_file", {"path": "project.txt"})
+    second = await runtime.execute_tool("filesystem.read_file", {"path": "project.txt"})
+    await runtime.execute_tool(
+        "filesystem.write_file",
+        {"path": "project.txt", "content": "two"},
+    )
+    third = await runtime.execute_tool("filesystem.read_file", {"path": "project.txt"})
+
+    assert first.output == "one"
+    assert second.output == "one"
+    assert third.output == "two"
+
+
+def test_agent_toolset_visibility_filters_prompt_tools():
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None)
+    prompt = runtime._agent_system_prompt(source="channel:wechat:wechat869:group:123@chatroom")
+
+    assert '"toolset": "shell"' not in prompt
+    assert "filesystem.write_file" not in prompt
+    assert "filesystem.delete_path" not in prompt
+    assert '"toolset": "filesystem"' in prompt
 
 
 def test_agent_system_prompt_includes_current_time():

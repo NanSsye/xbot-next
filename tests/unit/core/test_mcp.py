@@ -40,6 +40,44 @@ async def test_mcp_registers_discovered_tools():
         "tool": "get-current-time",
         "payload": {"timezone": "UTC"},
     }
+    assert tool.toolset == "mcp"
+    assert tool.source == "mcp:time"
+
+
+@pytest.mark.anyio
+async def test_mcp_include_exclude_filters_discovered_tools():
+    registry = ToolRegistry()
+    config = AgentMCPConfig(
+        servers={
+            "time": AgentMCPServerConfig(
+                include_tools=["get-*"],
+                exclude_tools=["get-secret"],
+            )
+        }
+    )
+    manager = MCPClientManager(config, registry)
+    server_config = config.servers["time"]
+
+    class FakeConnection:
+        name = "time"
+        config = server_config
+        registered_tool_names = []
+        tools = [
+            SimpleNamespace(name="get-current-time", description="", inputSchema={}),
+            SimpleNamespace(name="get-secret", description="", inputSchema={}),
+            SimpleNamespace(name="set-current-time", description="", inputSchema={}),
+        ]
+
+        async def call_tool(self, tool_name, payload):
+            return {}
+
+    connection = FakeConnection()
+    manager._register_tools(connection)
+
+    assert registry.get("mcp_time_get_current_time") is not None
+    assert registry.get("mcp_time_get_secret") is None
+    assert registry.get("mcp_time_set_current_time") is None
+    assert connection.registered_tool_names == ["mcp_time_get_current_time"]
 
 
 def test_mcp_stdio_env_is_filtered(monkeypatch):
@@ -55,3 +93,16 @@ def test_mcp_stdio_env_is_filtered(monkeypatch):
     assert env["PATH"] == "safe"
     assert env["EXPLICIT_TOKEN"] == "allowed"
     assert "SECRET_TOKEN" not in env
+
+
+def test_mcp_status_includes_failed_or_not_connected_servers():
+    config = AgentMCPConfig(
+        servers={"time": AgentMCPServerConfig(command="cmd")}
+    )
+    manager = MCPClientManager(config, ToolRegistry())
+    manager._server_errors["time"] = "boom"
+
+    status = manager.status()
+
+    assert status["servers"]["time"]["status"] == "not_connected"
+    assert status["servers"]["time"]["last_error"] == "boom"

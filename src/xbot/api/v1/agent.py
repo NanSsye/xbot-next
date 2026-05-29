@@ -27,13 +27,37 @@ class AgentMemoryRequest(BaseModel):
 
 
 @router.get("/tools")
-async def list_tools(ctx: AppContext = Depends(get_context)) -> dict:
-    return {"success": True, "data": ctx.agent.tools.list_tools()}
+async def list_tools(
+    toolset: str | None = None,
+    platform: str | None = None,
+    scope: str | None = None,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    toolsets = {item.strip() for item in toolset.split(",") if item.strip()} if toolset else None
+    return {
+        "success": True,
+        "data": ctx.agent.tools.list_tools(
+            toolsets=toolsets,
+            platform=platform,
+            scope=scope,
+            mode=ctx.agent.config.mode,
+        ),
+    }
 
 
 @router.get("/llm/status")
 async def llm_status(ctx: AppContext = Depends(get_context)) -> dict:
     return {"success": True, "data": ctx.agent.llm_status()}
+
+
+@router.get("/mcp/status")
+async def mcp_status(ctx: AppContext = Depends(get_context)) -> dict:
+    return {"success": True, "data": ctx.agent.mcp_status()}
+
+
+@router.post("/mcp/reload")
+async def reload_mcp(ctx: AppContext = Depends(get_context)) -> dict:
+    return {"success": True, "data": await ctx.agent.reload_mcp()}
 
 
 @router.post("/tools/{tool_name}/execute")

@@ -17,8 +17,13 @@ class ToolExecutor:
         tool = self.registry.get(name)
         if tool is None:
             raise XBotError(f"Tool not found: {name}")
-        result = tool.handler(payload)
-        if inspect.isawaitable(result):
-            return await result
-        return await anyio.to_thread.run_sync(lambda: result)
+        async def run_handler() -> Any:
+            result = tool.handler(payload)
+            if inspect.isawaitable(result):
+                return await result
+            return await anyio.to_thread.run_sync(lambda: result)
 
+        if tool.timeout_seconds and tool.timeout_seconds > 0:
+            with anyio.fail_after(tool.timeout_seconds):
+                return await run_handler()
+        return await run_handler()

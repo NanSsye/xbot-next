@@ -155,6 +155,8 @@ class AgentMCPServerConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    include_tools: list[str] = Field(default_factory=list)
+    exclude_tools: list[str] = Field(default_factory=list)
     timeout: int = 120
     connect_timeout: int = 60
 
@@ -172,6 +174,33 @@ class AgentCacheConfig(BaseModel):
     skills: bool = True
 
 
+class AgentToolsetConfig(BaseModel):
+    api: list[str] = Field(
+        default_factory=lambda: [
+            "core",
+            "filesystem",
+            "filesystem_write",
+            "filesystem_dangerous",
+            "skill",
+            "shell",
+            "mcp",
+        ]
+    )
+    private: list[str] = Field(default_factory=lambda: ["core", "filesystem", "skill", "mcp"])
+    group: list[str] = Field(default_factory=lambda: ["core", "filesystem", "skill", "mcp"])
+    admin: list[str] = Field(
+        default_factory=lambda: [
+            "core",
+            "filesystem",
+            "filesystem_write",
+            "filesystem_dangerous",
+            "skill",
+            "shell",
+            "mcp",
+        ]
+    )
+
+
 class AgentConfig(BaseModel):
     enabled: bool = True
     mode: Literal["safe", "developer", "admin"] = "developer"
@@ -187,6 +216,7 @@ class AgentConfig(BaseModel):
     llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig)
     mcp: AgentMCPConfig = Field(default_factory=AgentMCPConfig)
     cache: AgentCacheConfig = Field(default_factory=AgentCacheConfig)
+    toolsets: AgentToolsetConfig = Field(default_factory=AgentToolsetConfig)
 
 
 class WebAdapterConfig(BaseModel):
@@ -260,6 +290,10 @@ def _env_bool(value: str) -> bool:
     return value.lower() in {"1", "true", "yes", "on", "admin"}
 
 
+def _env_list(value: str) -> list[str]:
+    return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
+
+
 def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings:
     path = Path(config_file or os.getenv("XBOT_CONFIG_FILE", "configs/xbot.toml"))
     data: dict[str, Any] = {}
@@ -329,6 +363,22 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if agent_cache_skills := env.get("XBOT_AGENT_CACHE_SKILLS"):
         data.setdefault("agent", {}).setdefault("cache", {})["skills"] = _env_bool(
             agent_cache_skills
+        )
+    if agent_toolsets_api := env.get("XBOT_AGENT_TOOLSETS_API"):
+        data.setdefault("agent", {}).setdefault("toolsets", {})["api"] = _env_list(
+            agent_toolsets_api
+        )
+    if agent_toolsets_private := env.get("XBOT_AGENT_TOOLSETS_PRIVATE"):
+        data.setdefault("agent", {}).setdefault("toolsets", {})["private"] = _env_list(
+            agent_toolsets_private
+        )
+    if agent_toolsets_group := env.get("XBOT_AGENT_TOOLSETS_GROUP"):
+        data.setdefault("agent", {}).setdefault("toolsets", {})["group"] = _env_list(
+            agent_toolsets_group
+        )
+    if agent_toolsets_admin := env.get("XBOT_AGENT_TOOLSETS_ADMIN"):
+        data.setdefault("agent", {}).setdefault("toolsets", {})["admin"] = _env_list(
+            agent_toolsets_admin
         )
     if agent_mcp_enabled := env.get("XBOT_AGENT_MCP_ENABLED"):
         data.setdefault("agent", {}).setdefault("mcp", {})["enabled"] = _env_bool(

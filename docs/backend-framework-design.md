@@ -137,15 +137,17 @@
 - [x] MCP 原生支持第一版完成：支持配置 stdio / Streamable HTTP MCP server，启动时发现工具并注册为 `mcp_{server}_{tool}`。
 - [x] MCP 配置已接入 `.env` / `configs/xbot.toml`，缺少 `mcp` 可选依赖时会降级跳过并记录 warning。
 - [x] Agent 工具体系规范化第一步完成：内置 `filesystem`、`shell`、`skill` 工具注册已从 `AgentRuntime` 拆到 `xbot.agent.tools.builtin`。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `59 passed`。
+- [x] Tool metadata 第一版完成：`ToolDefinition` 已支持 `toolset`、`source`、`cacheable`、`timeout_seconds`、`invalidates_cache` 和 `metadata`。
+- [x] 工具缓存策略已从 `AgentRuntime` 迁出到 `xbot.agent.tools.cache_policy.ToolCachePolicy`，由 tool metadata 决定是否缓存和是否清空缓存。
+- [x] `skill.run` 具体执行逻辑已从 `AgentRuntime` 迁出到 `xbot.agent.tools.skill_provider.SkillToolProvider`。
+- [x] MCP 增强第一版完成：支持 include/exclude 工具过滤、server status、reload API、按 server source 重新注册工具和更完整错误状态。
+- [x] Toolset 可见性第一版完成：Agent prompt 构建时按 API/私聊/群聊/admin 选择可见 toolset，避免群聊默认暴露 shell、文件写入和删除工具。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `63 passed`。
 
 进行中：
 
-- [ ] Tool 体系继续规范化：为 `ToolDefinition` 增加 `toolset`、`source`、`cacheable`、`timeout_seconds` 等 metadata。
-- [ ] 把工具缓存策略从 `AgentRuntime` 下沉到 tool metadata 或独立 cache policy。
-- [ ] 把 `skill.run` 的具体 skill action 执行从 `AgentRuntime` 迁出到独立 skill tool provider。
-- [ ] MCP 增强：include/exclude、server status API、重连、热重载和更完整的错误恢复。
-- [ ] Toolset 可见性控制：按平台、私聊/群聊、管理员策略决定工具可见范围。
+- [ ] Toolset 策略继续细化：按具体 adapter、用户身份、群管理员和会话状态进一步控制工具可见性。
+- [ ] MCP 长连接健壮性继续增强：自动重连退避、周期健康检查、失败工具降级和连接池隔离。
 - [ ] 真实环境长连接和群聊高频消息稳定性验证。
 
 尚未开始：
@@ -1422,13 +1424,15 @@ mcp_github_list_issues
 建议内置 toolset：
 
 ```text
-core        -> skill.list, skill.describe
-filesystem  -> filesystem.read_file, filesystem.write_file, filesystem.list_dir, filesystem.delete_path
-shell       -> shell.exec
-skill       -> skill.run
-mcp         -> 所有 mcp_* 工具
-browser     -> 后续浏览器工具
-wechat      -> 微信发送/媒体工具
+core                  -> skill.list, skill.describe
+filesystem            -> filesystem.read_file, filesystem.list_dir
+filesystem_write      -> filesystem.write_file
+filesystem_dangerous  -> filesystem.delete_path
+shell                 -> shell.exec
+skill                 -> skill.run
+mcp                   -> 所有 mcp_* 工具
+browser               -> 后续浏览器工具
+wechat                -> 微信发送/媒体工具
 ```
 
 平台默认策略：
@@ -1442,14 +1446,20 @@ wechat      -> 微信发送/媒体工具
 
 按低风险顺序推进：
 
-1. 把内置工具注册从 `AgentRuntime` 拆到 `xbot.agent.tools.builtin`。
-2. 保持 `ToolRegistry` 和 `ToolExecutor` 接口稳定，先不改变外部 API。
-3. 给 `ToolDefinition` 增加 `toolset`、`source`、`cacheable`、`timeout_seconds` 等 metadata。
-4. 把缓存策略从 `AgentRuntime._tool_cache_key` 下沉到工具 metadata 或专门的 cache policy。
-5. 把 `skill.run` 的具体 skill action 从 `AgentRuntime` 迁出到 skill tool provider。
-6. 给 MCP 工具增加 include/exclude、server status API、重连和热重载。
-7. 引入 toolset 解析，按平台和会话 scope 控制可见工具。
-8. 最后收敛 Agent prompt 构建，只从规范化 tool registry 读取工具定义。
+1. [x] 把内置工具注册从 `AgentRuntime` 拆到 `xbot.agent.tools.builtin`。
+2. [x] 保持 `ToolRegistry` 和 `ToolExecutor` 接口稳定，先不改变外部 API。
+3. [x] 给 `ToolDefinition` 增加 `toolset`、`source`、`cacheable`、`timeout_seconds` 等 metadata。
+4. [x] 把缓存策略从 `AgentRuntime._tool_cache_key` 下沉到工具 metadata 或专门的 cache policy。
+5. [x] 把 `skill.run` 的具体 skill action 从 `AgentRuntime` 迁出到 skill tool provider。
+6. [x] 给 MCP 工具增加 include/exclude、server status API、reload 和错误状态记录。
+7. [x] 引入 toolset 解析，按平台和会话 scope 控制可见工具。
+8. [x] 收敛 Agent prompt 构建，只从规范化 tool registry 读取可见工具定义。
+
+剩余增强：
+
+- [ ] MCP 自动重连退避和健康检查。
+- [ ] Toolset 按具体用户、群管理员和 adapter 配置继续细化。
+- [ ] Plugin 工具 provider 和浏览器/数据库/Git 工具集接入同一套 metadata。
 
 ## 18. Skill 体系
 

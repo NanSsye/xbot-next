@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from fnmatch import fnmatch
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -21,6 +22,7 @@ class MCPClientManager:
         self.config = config
         self.registry = registry
         self._servers: dict[str, MCPServerConnection] = {}
+        self._server_errors: dict[str, str] = {}
 
     async def start(self) -> None:
         if not self.config.enabled:
@@ -40,28 +42,62 @@ class MCPClientManager:
                 connection = MCPServerConnection(name, server_config)
                 await connection.connect()
                 self._servers[name] = connection
+                self._server_errors.pop(name, None)
                 self._register_tools(connection)
             except Exception as exc:
-                logger.warning("MCP server 连接失败: name={} error={}", name, self._redact(str(exc)))
+                error = self._redact(str(exc))
+                self._server_errors[name] = error
+                logger.warning("MCP server 连接失败: name={} error={}", name, error)
 
     async def stop(self) -> None:
         for connection in list(self._servers.values()):
             await connection.close()
         self._servers.clear()
 
+    async def reload(self) -> None:
+        for name in list(self.config.servers.keys()):
+            self.registry.unregister_source(f"mcp:{name}")
+        await self.stop()
+        await self.start()
+
     def status(self) -> dict:
         return {
             "enabled": self.config.enabled,
-            "servers": {
-                name: {"tool_count": len(connection.tools)}
-                for name, connection in self._servers.items()
-            },
+            "configured_servers": list(self.config.servers.keys()),
+            "servers": self._status_servers(),
         }
 
+    def _status_servers(self) -> dict[str, dict]:
+        servers = {
+            name: {
+                "enabled": config.enabled,
+                "status": "disabled" if not config.enabled else "not_connected",
+                "tool_count": 0,
+                "registered_tool_count": 0,
+                "last_error": self._server_errors.get(name),
+            }
+            for name, config in self.config.servers.items()
+        }
+        for name, connection in self._servers.items():
+            servers[name] = {
+                "enabled": connection.config.enabled,
+                "status": connection.status,
+                "tool_count": len(connection.tools),
+                "registered_tool_count": len(connection.registered_tool_names),
+                "last_error": connection.last_error,
+            }
+        return servers
+
     def _register_tools(self, connection: "MCPServerConnection") -> None:
+        server_config = getattr(connection, "config", None) or self.config.servers.get(
+            connection.name, AgentMCPServerConfig()
+        )
         for tool in connection.tools:
             tool_name = self._tool_name(connection.name, str(getattr(tool, "name", "")))
             original_name = str(getattr(tool, "name", ""))
+            if not self._tool_allowed(server_config, original_name, tool_name):
+                logger.info("MCP 工具被过滤: server={} tool={} as={}", connection.name, original_name, tool_name)
+                continue
             description = str(getattr(tool, "description", "") or f"MCP tool {original_name}")
             input_schema = getattr(tool, "inputSchema", None) or getattr(tool, "input_schema", None)
             if not isinstance(input_schema, dict):
@@ -77,9 +113,31 @@ class MCPClientManager:
                     risk_level="execute",
                     handler=handler,
                     input_schema=input_schema,
+                    toolset="mcp",
+                    source=f"mcp:{connection.name}",
+                    timeout_seconds=server_config.timeout,
+                    metadata={"mcp_server": connection.name, "mcp_tool": original_name},
                 )
             )
+            if hasattr(connection, "registered_tool_names"):
+                connection.registered_tool_names.append(tool_name)
             logger.info("MCP 工具已注册: server={} tool={} as={}", connection.name, original_name, tool_name)
+
+    def _tool_allowed(
+        self, config: AgentMCPServerConfig, original_name: str, registered_name: str
+    ) -> bool:
+        include = config.include_tools or []
+        exclude = config.exclude_tools or []
+        candidates = [original_name, registered_name]
+        if include and not any(
+            fnmatch(candidate, pattern) for pattern in include for candidate in candidates
+        ):
+            return False
+        if exclude and any(
+            fnmatch(candidate, pattern) for pattern in exclude for candidate in candidates
+        ):
+            return False
+        return True
 
     def _tool_name(self, server_name: str, tool_name: str) -> str:
         value = f"mcp_{server_name}_{tool_name}"
@@ -111,21 +169,35 @@ class MCPServerConnection:
         self.stack = AsyncExitStack()
         self.session: Any | None = None
         self.tools: list[Any] = []
+        self.registered_tool_names: list[str] = []
+        self.status = "new"
+        self.last_error: str | None = None
 
     async def connect(self) -> None:
         self._validate_config()
-        with anyio.fail_after(max(1, self.config.connect_timeout)):
-            if self.config.command:
-                await self._connect_stdio()
-            else:
-                await self._connect_http()
-            await self.session.initialize()
-            result = await self.session.list_tools()
-            self.tools = list(getattr(result, "tools", []) or [])
+        self.status = "connecting"
+        try:
+            with anyio.fail_after(max(1, self.config.connect_timeout)):
+                if self.config.command:
+                    await self._connect_stdio()
+                else:
+                    await self._connect_http()
+                await self.session.initialize()
+                result = await self.session.list_tools()
+                self.tools = list(getattr(result, "tools", []) or [])
+            self.status = "connected"
+            self.last_error = None
+        except Exception as exc:
+            self.status = "failed"
+            self.last_error = str(exc)
+            await self.close()
+            self.status = "failed"
+            raise
         logger.info("MCP server 已连接: name={} tools={}", self.name, len(self.tools))
 
     async def close(self) -> None:
         await self.stack.aclose()
+        self.status = "closed"
 
     async def call_tool(self, tool_name: str, payload: dict) -> dict:
         if self.session is None:
