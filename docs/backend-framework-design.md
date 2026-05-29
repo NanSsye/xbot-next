@@ -1336,6 +1336,101 @@ class Tool:
 - `network`: 会访问外部网络。
 - `dangerous`: 需要显式授权或管理员策略。
 
+### 17.1 Tool 体系规范化目标
+
+随着内置工具、Skill 工具、MCP 工具和后续浏览器/数据库/Git 工具增加，Tool 体系必须保持单一模型，不能继续把工具定义散落在 `AgentRuntime` 中。
+
+目标分层：
+
+```text
+xbot.agent.runtime
+  -> 只负责 Agent task、LLM loop、工具执行编排、审计事件
+
+xbot.agent.tool_registry
+  -> 统一工具注册中心，保存 ToolDefinition、schema、risk、metadata
+
+xbot.agent.tool_executor
+  -> 统一执行入口，处理 sync/async 隔离、timeout、policy、审计前后钩子
+
+xbot.agent.tools.builtin
+  -> 内置 filesystem、shell、skill 工具注册
+
+xbot.agent.mcp
+  -> MCP server 连接、工具发现、MCP 工具注册
+
+xbot.agent.tools.toolsets
+  -> 工具集、平台可见性、include/exclude、默认启用策略
+```
+
+所有工具必须满足：
+
+- 有唯一稳定名称。
+- 有 JSON schema。
+- 有风险等级。
+- 有明确 handler。
+- 通过 `ToolExecutor` 执行。
+- 不允许绕过 `PolicyEngine` 访问文件、shell、数据库或网络。
+- 不允许在 `AgentRuntime` 中直接堆业务工具实现。
+
+### 17.2 Tool 来源
+
+工具来源分为四类：
+
+1. 内置工具：框架自带，例如 filesystem、shell、skill。
+2. Plugin 工具：插件对外暴露的可复用能力。
+3. Skill 工具：Skill 入口或 Skill action，例如 `skill.run`。
+4. MCP 工具：从外部 MCP server 自动发现并注册。
+
+MCP 工具命名规则：
+
+```text
+mcp_{server_name}_{tool_name}
+```
+
+例如：
+
+```text
+mcp_time_get_current_time
+mcp_filesystem_read_file
+mcp_github_list_issues
+```
+
+### 17.3 Toolset 计划
+
+后续需要加入 Toolset 层，避免所有通道默认看到所有工具。
+
+建议内置 toolset：
+
+```text
+core        -> skill.list, skill.describe
+filesystem  -> filesystem.read_file, filesystem.write_file, filesystem.list_dir, filesystem.delete_path
+shell       -> shell.exec
+skill       -> skill.run
+mcp         -> 所有 mcp_* 工具
+browser     -> 后续浏览器工具
+wechat      -> 微信发送/媒体工具
+```
+
+平台默认策略：
+
+- API 调用：按任务配置或管理员配置决定。
+- 私聊 Agent：默认 `core + filesystem(read) + skill`，shell 需要显式允许。
+- 群聊 Agent：默认更保守，shell/write/delete 需要显式允许。
+- 定时任务：按任务 manifest 固定 toolset。
+
+### 17.4 规范化迁移步骤
+
+按低风险顺序推进：
+
+1. 把内置工具注册从 `AgentRuntime` 拆到 `xbot.agent.tools.builtin`。
+2. 保持 `ToolRegistry` 和 `ToolExecutor` 接口稳定，先不改变外部 API。
+3. 给 `ToolDefinition` 增加 `toolset`、`source`、`cacheable`、`timeout_seconds` 等 metadata。
+4. 把缓存策略从 `AgentRuntime._tool_cache_key` 下沉到工具 metadata 或专门的 cache policy。
+5. 把 `skill.run` 的具体 skill action 从 `AgentRuntime` 迁出到 skill tool provider。
+6. 给 MCP 工具增加 include/exclude、server status API、重连和热重载。
+7. 引入 toolset 解析，按平台和会话 scope 控制可见工具。
+8. 最后收敛 Agent prompt 构建，只从规范化 tool registry 读取工具定义。
+
 ## 18. Skill 体系
 
 Skill 是给智能体使用的能力包，偏“说明、流程、约束和工具编排”，不是长期运行的业务模块。

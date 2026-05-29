@@ -20,7 +20,8 @@ from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
 from xbot.agent.policy import PolicyEngine
 from xbot.agent.tool_executor import ToolExecutor
-from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
+from xbot.agent.tool_registry import ToolRegistry
+from xbot.agent.tools import register_builtin_tools
 from xbot.agent.workspace import Workspace
 from xbot.core.config import AgentConfig
 from xbot.core.exceptions import PolicyDeniedError, XBotError
@@ -69,7 +70,12 @@ class AgentRuntime:
         self._tool_result_cache = TTLCache(config.cache.tool_result_ttl_seconds)
         self._static_prompt_cache: tuple[tuple[int, int], str] | None = None
         self._skill_prompt_cache: tuple[int, str] | None = None
-        self._register_builtin_tools()
+        register_builtin_tools(
+            self.tools,
+            workspace=self.workspace,
+            skills=self.skills,
+            run_skill=self._run_skill,
+        )
 
     async def start(self) -> None:
         await self.mcp.start()
@@ -219,171 +225,6 @@ class AgentRuntime:
 
     def mcp_status(self) -> dict:
         return self.mcp.status()
-
-    def _register_builtin_tools(self) -> None:
-        async def read_file(payload: dict):
-            return await self.workspace.read_text(str(payload["path"]))
-
-        async def write_file(payload: dict):
-            await self.workspace.write_text(str(payload["path"]), str(payload.get("content", "")))
-            return {"written": payload["path"]}
-
-        async def list_dir(payload: dict):
-            return await self.workspace.list_dir(str(payload.get("path", ".")))
-
-        async def delete_path(payload: dict):
-            return await self.workspace.delete_path(
-                str(payload["path"]),
-                recursive=bool(payload.get("recursive", False)),
-            )
-
-        async def shell_exec(payload: dict):
-            return await self.workspace.run_shell(
-                str(payload["command"]),
-                cwd=payload.get("cwd"),
-                timeout_seconds=int(payload.get("timeout_seconds", 30)),
-                max_output_chars=int(payload.get("max_output_chars", 12000)),
-            )
-
-        async def skill_list(payload: dict):
-            if not self.skills:
-                return []
-            return self.skills.list_skills()
-
-        async def skill_describe(payload: dict):
-            name = str(payload["skill"])
-            if not self.skills:
-                raise XBotError("Skill manager is not available.")
-            instructions = self.skills.get_instructions(name)
-            if instructions is None:
-                raise XBotError(f"Skill not found or disabled: {name}")
-            path = self.skills.get_path(name)
-            return {
-                "name": name,
-                "path": str(path) if path else "",
-                "instructions": instructions,
-            }
-
-        async def skill_run(payload: dict):
-            return await self._run_skill(payload)
-
-        self.tools.register(
-            ToolDefinition(
-                name="filesystem.read_file",
-                description="Read a UTF-8 text file inside the allowed workspace.",
-                risk_level="read",
-                handler=read_file,
-                input_schema={
-                    "type": "object",
-                    "required": ["path"],
-                    "properties": {"path": {"type": "string"}},
-                },
-            )
-        )
-        self.tools.register(
-            ToolDefinition(
-                name="filesystem.write_file",
-                description="Write a UTF-8 text file inside the allowed workspace.",
-                risk_level="write",
-                handler=write_file,
-                input_schema={
-                    "type": "object",
-                    "required": ["path", "content"],
-                    "properties": {
-                        "path": {"type": "string"},
-                        "content": {"type": "string"},
-                    },
-                },
-            )
-        )
-        self.tools.register(
-            ToolDefinition(
-                name="filesystem.list_dir",
-                description="List files and directories inside the allowed workspace.",
-                risk_level="read",
-                handler=list_dir,
-                input_schema={
-                    "type": "object",
-                    "properties": {"path": {"type": "string", "default": "."}},
-                },
-            )
-        )
-        self.tools.register(
-            ToolDefinition(
-                name="filesystem.delete_path",
-                description="Delete a file or directory inside the allowed workspace.",
-                risk_level="dangerous",
-                handler=delete_path,
-                input_schema={
-                    "type": "object",
-                    "required": ["path"],
-                    "properties": {
-                        "path": {"type": "string"},
-                        "recursive": {"type": "boolean", "default": False},
-                    },
-                },
-            )
-        )
-        self.tools.register(
-            ToolDefinition(
-                name="shell.exec",
-                description="Execute a shell command from an allowed workspace directory.",
-                risk_level="execute",
-                handler=shell_exec,
-                input_schema={
-                    "type": "object",
-                    "required": ["command"],
-                    "properties": {
-                        "command": {"type": "string"},
-                        "cwd": {"type": "string"},
-                        "timeout_seconds": {"type": "integer", "default": 30},
-                        "max_output_chars": {"type": "integer", "default": 12000},
-                    },
-                },
-            )
-        )
-        self.tools.register(
-            ToolDefinition(
-                name="skill.list",
-                description="List enabled skills and their required tools.",
-                risk_level="read",
-                handler=skill_list,
-                input_schema={"type": "object", "properties": {}},
-            )
-        )
-        self.tools.register(
-            ToolDefinition(
-                name="skill.describe",
-                description="Return instructions and path for an enabled skill.",
-                risk_level="read",
-                handler=skill_describe,
-                input_schema={
-                    "type": "object",
-                    "required": ["skill"],
-                    "properties": {"skill": {"type": "string"}},
-                },
-            )
-        )
-        self.tools.register(
-            ToolDefinition(
-                name="skill.run",
-                description=(
-                    "Run a registered skill action. For wechat-869-media-sender, actions are "
-                    "send-image, send-video, send-voice, send-music, send-link, send-file, send-text."
-                ),
-                risk_level="execute",
-                handler=skill_run,
-                input_schema={
-                    "type": "object",
-                    "required": ["skill", "action", "args"],
-                    "properties": {
-                        "skill": {"type": "string"},
-                        "action": {"type": "string"},
-                        "args": {"type": "object"},
-                    },
-                },
-            )
-        )
 
     async def _run_skill(self, payload: dict) -> dict:
         if not self.skills:
