@@ -1,0 +1,3 @@
+class MessageService:
+    pass
+

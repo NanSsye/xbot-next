@@ -1,0 +1,3 @@
+class ConfigService:
+    pass
+

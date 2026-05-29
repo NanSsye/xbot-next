@@ -1,0 +1,11 @@
+name = "code_assistant"
+version = "0.1.0"
+description = "Guide the agent to inspect, edit, and verify code changes."
+enabled = true
+
+[tools]
+required = [
+  "filesystem.read_file",
+  "filesystem.write_file"
+]
+

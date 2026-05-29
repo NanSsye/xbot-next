@@ -1,0 +1,19 @@
+name = "agent_chat"
+version = "0.1.0"
+entry = "main:AgentChatPlugin"
+author = "xbot"
+description = "Fallback channel-to-agent bridge for private text and group mentions."
+enabled = true
+
+[routing]
+enabled = true
+priority = 10000
+fallback = true
+exclusive = false
+message_types = ["text"]
+platforms = ["wechat", "web"]
+
+[permissions]
+network = true
+filesystem = false
+admin = false

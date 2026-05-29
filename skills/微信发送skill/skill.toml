@@ -1,0 +1,11 @@
+name = "wechat-869-media-sender"
+version = "0.1.0"
+description = "通过 869 客户端向微信私聊或群聊发送图片、视频、语音、链接、文件和文本。"
+enabled = true
+
+[tools]
+required = [
+  "shell.exec",
+  "filesystem.read_file",
+  "filesystem.list_dir"
+]

@@ -1,0 +1,144 @@
+[xbot]
+name = "xbot"
+timezone = "Asia/Shanghai"
+debug = false
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[storage]
+type = "postgresql"
+url = "postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot"
+echo = false
+persist_runtime_events = true
+auto_bootstrap = true
+create_database = true
+create_role = true
+run_migrations_on_startup = true
+
+[queue]
+type = "memory"
+redis_url = "redis://192.168.6.41:6379/15"
+main_queue = "xbot:messages"
+reply_queue = "xbot:replies"
+event_queue = "xbot:events"
+agent_task_queue = "xbot:agent_tasks"
+dead_letter_queue = "xbot:dead_letters"
+
+[queue.retry]
+max_attempts = 3
+initial_delay_seconds = 2
+max_delay_seconds = 60
+backoff = "exponential"
+
+[conversation]
+enabled = true
+store = "postgresql"
+default_scope = "private"
+
+[conversation.context]
+recent_messages = 0
+max_chars = 16000
+auto_summarize = true
+summary_every_messages = 50
+
+[conversation.concurrency]
+per_conversation_serial = true
+max_active_conversations = 1000
+
+[runtime.concurrency]
+max_message_tasks = 100
+max_plugin_tasks = 50
+max_agent_tasks = 5
+max_tool_tasks = 20
+sync_worker_threads = 8
+
+[runtime.timeout]
+message_seconds = 60
+plugin_seconds = 30
+tool_seconds = 120
+agent_task_seconds = 1800
+http_seconds = 30
+
+[plugins]
+directory = "plugins"
+auto_load = true
+
+[skills]
+directory = "skills"
+auto_load = true
+
+[agent]
+enabled = true
+mode = "developer"
+workspace_root = "."
+allow_shell = false
+allow_file_write = true
+max_tool_iterations = 0
+
+[agent.workspace]
+allow_all_filesystem = false
+roots = ["."]
+deny = [
+  "C:/Windows",
+  "C:/Users/*/.ssh",
+  "C:/Users/*/AppData",
+  "/etc",
+  "/root",
+  "/home/*/.ssh"
+]
+allow_outside_workspace = false
+
+[agent.approval]
+dangerous_tools = true
+outside_workspace = true
+delete_files = true
+shell_exec = false
+database_write = true
+
+[agent.memory]
+enabled = true
+store = "postgresql"
+auto_compress = true
+max_working_events = 50
+max_tool_output_chars = 12000
+semantic_memory = true
+vector_search = false
+retention_days = 180
+
+[agent.memory.redaction]
+enabled = true
+patterns = ["password", "token", "secret", "api_key", "private_key"]
+
+[agent.llm]
+enabled = false
+provider = "openai_compatible"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4.1-mini"
+timeout_seconds = 60
+max_tokens = 2000
+temperature = 0.2
+
+[agent.cache]
+enabled = true
+tool_result_ttl_seconds = 30
+static_prompt = true
+tool_results = true
+skills = true
+
+[adapters.web]
+enabled = true
+
+[adapters.wechat869]
+enabled = false
+host = "192.168.6.19"
+port = 8848
+admin_key = ""
+token_key = ""
+ws_url = ""
+bot_wxid = ""
+bot_nickname = ""
+connect_timeout_seconds = 10
+reconnect_seconds = 5
+text_only = true

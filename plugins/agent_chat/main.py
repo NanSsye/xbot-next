@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+import anyio
+from loguru import logger
+
+from xbot.messaging.models import Message, Reply
+from xbot.plugins.base import PluginBase
+
+
+class AgentChatPlugin(PluginBase):
+    name = "agent_chat"
+    version = "0.1.0"
+
+    async def on_message(self, message: Message, ctx):
+        if not ctx.agent or not ctx.send_reply:
+            logger.warning("AgentChatPlugin 未配置 agent 或 send_reply，跳过消息: {}", message.id)
+            return False
+        if message.type != "text" or not message.content:
+            logger.info("AgentChatPlugin 跳过非文本或空消息: id={} type={}", message.id, message.type)
+            return False
+        if not self._should_handle(message):
+            logger.info(
+                "AgentChatPlugin 跳过未命中消息: id={} scope={} mentions_bot={}",
+                message.id,
+                message.raw.get("scope"),
+                message.raw.get("mentions_bot"),
+            )
+            return False
+
+        content = self._clean_content(message)
+        if not content:
+            logger.info("AgentChatPlugin 清理后内容为空，跳过消息: {}", message.id)
+            return False
+
+        logger.info(
+            "AgentChatPlugin 调用 Agent: id={} conversation={} sender={} content={}",
+            message.id,
+            message.conversation_id,
+            message.sender_id,
+            content,
+        )
+        try:
+            timeout_seconds = self._agent_timeout_seconds(ctx)
+            logger.info("AgentChatPlugin 准备上下文: id={} timeout={}s", message.id, timeout_seconds)
+            if timeout_seconds > 0:
+                with anyio.fail_after(timeout_seconds):
+                    result = await self._run_agent(message, ctx, content)
+            else:
+                result = await self._run_agent(message, ctx, content)
+        except TimeoutError:
+            logger.warning("AgentChatPlugin Agent 超时: id={} timeout={}s", message.id, timeout_seconds)
+            await self._send_error_reply(message, ctx, "Agent 处理超时，请稍后重试。")
+            return True
+        except Exception as exc:
+            logger.warning("AgentChatPlugin Agent 失败: id={} error={}", message.id, exc)
+            await self._send_error_reply(message, ctx, f"Agent 处理失败：{exc}")
+            return True
+        logger.info("AgentChatPlugin Agent 完成: id={} task_id={}", message.id, getattr(result, "task_id", ""))
+        output = (getattr(result, "output", "") or "").strip()
+        if not output:
+            output = "Agent 没有生成有效回复，请换一种说法再试。"
+        await ctx.send_reply(
+            Reply(
+                platform=message.platform,
+                adapter=message.adapter,
+                conversation_id=message.conversation_id,
+                type="text",
+                content=output,
+                quote_message_id=message.id,
+            )
+        )
+        return True
+
+    async def _run_agent(self, message: Message, ctx, content: str):
+        summaries, history = await self._conversation_context(message, ctx)
+        agent_input = self._build_agent_input(message, content, history, summaries)
+        logger.info(
+            "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={}",
+            message.id,
+            len(agent_input),
+            len(history),
+            len(summaries),
+        )
+        return await ctx.agent.run_task(
+            agent_input,
+            source=f"channel:{message.platform}:{message.adapter}:{message.conversation_id}",
+        )
+
+    def _agent_timeout_seconds(self, ctx) -> int:
+        settings = getattr(ctx, "settings", None)
+        runtime_timeout = getattr(
+            getattr(getattr(settings, "runtime", None), "timeout", None),
+            "agent_task_seconds",
+            180,
+        )
+        return int(runtime_timeout)
+
+    async def _send_error_reply(self, message: Message, ctx, content: str) -> None:
+        if not ctx.send_reply:
+            return
+        await ctx.send_reply(
+            Reply(
+                platform=message.platform,
+                adapter=message.adapter,
+                conversation_id=message.conversation_id,
+                type="text",
+                content=content,
+                quote_message_id=message.id,
+            )
+        )
+
+    def _should_handle(self, message: Message) -> bool:
+        scope = message.raw.get("scope")
+        if scope == "private":
+            return True
+        if scope == "group":
+            return bool(message.raw.get("mentions_bot"))
+        if message.platform == "web":
+            return True
+        return False
+
+    def _clean_content(self, message: Message) -> str:
+        content = message.content or ""
+        for candidate in (
+            message.raw.get("bot_nickname"),
+            message.raw.get("bot_wxid"),
+        ):
+            if candidate:
+                content = content.replace(f"@{candidate}", "").replace(str(candidate), "")
+        return content.strip()
+
+    async def _conversation_context(self, message: Message, ctx) -> tuple[str, str]:
+        if not getattr(ctx, "conversations", None):
+            return "", ""
+        scope = message.raw.get("scope") or "private"
+        conversation_id = message.conversation_id
+        normalized_id = (
+            conversation_id
+            if ":" in conversation_id
+            else f"{message.platform}:{message.adapter}:{scope}:{conversation_id}"
+        )
+        try:
+            context = await ctx.conversations.get_context(normalized_id, limit=0)
+        except Exception as exc:
+            logger.warning("AgentChatPlugin 读取会话上下文失败: id={} error={}", message.id, exc)
+            return "", ""
+        if not context:
+            return "", ""
+        summary_lines = []
+        for summary in context.summaries:
+            summary_lines.append(
+                f"- range={summary.from_message_id}->{summary.to_message_id} created_at={summary.created_at.isoformat()} summary={summary.summary}"
+            )
+        message_lines = []
+        for item in context.messages:
+            identity = self._message_identity_fields(item)
+            sender = "current_sender" if item.sender_id == message.sender_id else item.sender_id
+            message_lines.append(
+                f"- id={item.id} sender={sender} sender_wxid={identity['sender_wxid']} "
+                f"sender_name={identity['sender_name'] or ''} scope={identity['scope']} "
+                f"conversation_wxid={identity['conversation_wxid']} "
+                f"group_wxid={identity['group_wxid']} private_wxid={identity['private_wxid']} "
+                f"group_member_wxid={identity['group_member_wxid']} type={item.type} "
+                f"content={item.content or ''}"
+            )
+        return "\n".join(summary_lines), "\n".join(message_lines)
+
+    def _message_identity_fields(self, message: Message) -> dict[str, str]:
+        scope = str(message.raw.get("scope") or "unknown")
+        conversation_id = message.conversation_id
+        sender_id = message.sender_id
+        return {
+            "scope": scope,
+            "sender_wxid": str(message.raw.get("sender_wxid") or sender_id),
+            "sender_name": str(message.raw.get("sender_name") or message.sender_name or ""),
+            "conversation_wxid": str(message.raw.get("conversation_wxid") or conversation_id),
+            "private_wxid": str(
+                message.raw.get("private_wxid") or (sender_id if scope == "private" else "")
+            ),
+            "group_wxid": str(
+                message.raw.get("group_wxid") or (conversation_id if scope == "group" else "")
+            ),
+            "group_member_wxid": str(
+                message.raw.get("group_member_wxid") or (sender_id if scope == "group" else "")
+            ),
+        }
+
+    def _build_agent_input(
+        self,
+        message: Message,
+        content: str,
+        history: str = "",
+        summaries: str = "",
+    ) -> str:
+        scope = message.raw.get("scope") or "unknown"
+        conversation_id = message.conversation_id
+        sender_id = message.sender_id
+        identity = self._message_identity_fields(message)
+        reply_target = conversation_id
+        private_wxid = identity["private_wxid"]
+        group_wxid = identity["group_wxid"]
+        group_member_wxid = identity["group_member_wxid"]
+        return (
+            "Channel message received.\n"
+            f"platform: {message.platform}\n"
+            f"adapter: {message.adapter}\n"
+            f"scope: {scope}\n"
+            f"conversation_id: {conversation_id}\n"
+            f"sender_id: {sender_id}\n"
+            f"sender_wxid: {identity['sender_wxid']}\n"
+            f"sender_name: {identity['sender_name']}\n"
+            f"conversation_wxid: {identity['conversation_wxid']}\n"
+            f"reply_target_wxid: {reply_target}\n"
+            f"private_wxid: {private_wxid}\n"
+            f"group_wxid: {group_wxid}\n"
+            f"group_member_wxid: {group_member_wxid}\n"
+            f"message_id: {message.id}\n"
+            f"mentions_bot: {bool(message.raw.get('mentions_bot'))}\n"
+            f"conversation_summaries:\n{summaries or '- none'}\n"
+            f"recent_conversation_messages:\n{history or '- none'}\n"
+            f"content: {content}\n"
+            "When using WeChat sending skills/tools, use reply_target_wxid as --to.\n"
+            "For private chat, reply_target_wxid equals private_wxid.\n"
+            "For group chat, reply_target_wxid equals group_wxid, and group_member_wxid is the sender in the group.\n"
+            "Do not ask the user for wxid/chatroom id when these fields are already present.\n"
+            "If the content asks about real project files, directories, plugins, skills, config, or runtime state, use tools before answering.\n"
+            "Reply to the user in Chinese unless the user clearly asks for another language."
+        )
