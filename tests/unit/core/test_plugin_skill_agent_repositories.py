@@ -5,7 +5,7 @@ import pytest
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.llm import LLMResponse
 from xbot.agent.tool_registry import ToolDefinition
-from xbot.core.config import AgentConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
+from xbot.core.config import AgentConfig, AgentToolsetConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
 from xbot.plugins.base import PluginBase
 from xbot.plugins.manager import PluginManager
 from xbot.skills.manager import SkillManager
@@ -255,12 +255,21 @@ def test_agent_toolset_visibility_filters_prompt_tools():
 
 
 def test_agent_admin_prompt_includes_extended_tool_providers():
-    runtime = AgentRuntime(AgentConfig(mode="admin", admin_mode_allowed=True), plugins=None, skills=None)
+    runtime = AgentRuntime(
+        AgentConfig(
+            mode="admin",
+            admin_mode_allowed=True,
+            toolsets=AgentToolsetConfig(admin=["core"]),
+        ),
+        plugins=None,
+        skills=None,
+    )
     prompt = runtime._agent_system_prompt(source="api")
 
     assert "browser.screenshot_url" in prompt
     assert "git.status" in prompt
     assert "github.repo_info" in prompt
+    assert "skill.run" in prompt
 
 
 @pytest.mark.anyio

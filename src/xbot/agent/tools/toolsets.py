@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 
 
-def toolsets_for_source(config, source: str) -> set[str]:
+def toolsets_for_source(config, source: str) -> set[str] | None:
     mode = getattr(config, "mode", "developer")
     if mode == "admin":
-        return set(config.toolsets.admin)
+        return None
     if source.startswith("channel:"):
         context = source_context(source)
         if context.get("scope") == "group":
