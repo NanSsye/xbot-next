@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import os
 import platform
+import sys
 import socket
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,23 +26,34 @@ try:  # pragma: no cover - exercised when optional terminal UI deps are installe
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import WordCompleter
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.patch_stdout import patch_stdout
 except Exception:  # pragma: no cover - fallback path for minimal installs
     PromptSession = None
     WordCompleter = None
     FileHistory = None
+    patch_stdout = None
 
 try:  # pragma: no cover - exercised when rich is installed
     from rich import box
-    from rich.console import Console
+    from rich.align import Align
+    from rich.columns import Columns
+    from rich.console import Console, Group
+    from rich.live import Live
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.table import Table
+    from rich.text import Text
 except Exception:  # pragma: no cover
     box = None
+    Align = None
+    Columns = None
     Console = None
+    Group = None
+    Live = None
     Markdown = None
     Panel = None
     Table = None
+    Text = None
 
 
 SLASH_COMMANDS = (
@@ -69,6 +83,97 @@ class TerminalChatOptions:
     fancy_input: bool = False
 
 
+@dataclass(slots=True)
+class ToolProgressRecord:
+    name: str
+    status: str
+    started_at: float | None = None
+    finished_at: float | None = None
+    error: str = ""
+    cache_hit: bool = False
+    input_preview: str = ""
+    output_preview: str = ""
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.started_at is None or self.finished_at is None:
+            return None
+        return max(0.0, self.finished_at - self.started_at)
+
+
+@dataclass(slots=True)
+class TerminalDisplayState:
+    started_at: float
+    task_id: str = ""
+    thinking: bool = False
+    llm_iterations: int = 0
+    llm_started_at: float | None = None
+    llm_elapsed_seconds: float = 0.0
+    usage_total_tokens: int = 0
+    input_chars: int = 0
+    output_chars: int = 0
+    tools: list[ToolProgressRecord] | None = None
+
+    def __post_init__(self) -> None:
+        if self.tools is None:
+            self.tools = []
+
+
+class ToolProgressRenderer:
+    def __init__(self) -> None:
+        self._running: dict[str, list[ToolProgressRecord]] = {}
+
+    def consume(self, event: AgentRuntimeEvent, state: TerminalDisplayState) -> None:
+        content = event.content if isinstance(event.content, dict) else {}
+        tool = str(content.get("tool") or "")
+        if not tool:
+            return
+        now = time.monotonic()
+        if event.type == "tool.started":
+            record = ToolProgressRecord(
+                name=tool,
+                status="running",
+                started_at=now,
+                input_preview=self._preview(content.get("input")),
+            )
+            self._running.setdefault(tool, []).append(record)
+            return
+        record = self._pop_running(tool)
+        if record is None:
+            record = ToolProgressRecord(name=tool, status="running", started_at=None)
+        record.finished_at = now
+        if event.type == "tool.completed":
+            record.status = "ok"
+            record.output_preview = self._preview(content.get("output"))
+        elif event.type == "tool.failed":
+            record.status = "error"
+            record.error = str(content.get("error") or "")
+        elif event.type == "tool.denied":
+            record.status = "denied"
+            record.error = str(content.get("error") or "")
+        elif event.type == "tool.cache_hit":
+            record.status = "cache"
+            record.cache_hit = True
+        else:
+            return
+        state.tools.append(record)
+
+    def _preview(self, value: object) -> str:
+        if value is None:
+            return ""
+        text = value if isinstance(value, str) else str(value)
+        return text.replace("\n", " ")[:220]
+
+    def _pop_running(self, tool: str) -> ToolProgressRecord | None:
+        records = self._running.get(tool)
+        if not records:
+            return None
+        record = records.pop(0)
+        if not records:
+            self._running.pop(tool, None)
+        return record
+
+
 class TerminalRenderer:
     def __init__(self, *, verbose: bool = False, debug: bool = False) -> None:
         self.verbose = verbose
@@ -77,62 +182,257 @@ class TerminalRenderer:
         self._thinking_shown = False
         self._tool_header_shown = False
         self._tool_lines: list[str] = []
+        self._display_state = TerminalDisplayState(started_at=time.monotonic())
+        self._tool_progress = ToolProgressRenderer()
+        self._stream_buffer = ""
+        self._stream_live = None
+        self._plain_stream_started = False
+        self._stream_block_open = False
+        self._stream_line_open = False
 
     def begin_turn(self) -> None:
+        self._stop_stream()
         self._thinking_shown = False
         self._tool_header_shown = False
         self._tool_lines = []
+        self._display_state = TerminalDisplayState(started_at=time.monotonic())
+        self._tool_progress = ToolProgressRenderer()
+        self._stream_buffer = ""
+        self._plain_stream_started = False
+        self._stream_block_open = False
+        self._stream_line_open = False
 
-    def welcome(self, options: TerminalChatOptions) -> None:
-        if self.console and Panel:
-            body = (
-                f"[dim]session[/dim] {options.session_id}\n"
-                f"[dim]cwd[/dim]     {options.cwd}\n"
-                "[dim]/help commands  /exit quit  --verbose details[/dim]"
-            )
+    def welcome(
+        self,
+        options: TerminalChatOptions,
+        *,
+        overview_rows: list[tuple[str, str]] | None = None,
+        home_sections: dict[str, list[str]] | None = None,
+    ) -> None:
+        if self.console and Panel and Table and Group and Text:
             self.console.print(
                 Panel(
-                    body,
-                    title="[bold cyan]xbot[/bold cyan]",
+                    self._welcome_body(options, overview_rows or [], home_sections or {}),
+                    title="[bold cyan]xbot terminal[/bold cyan]",
+                    subtitle="[dim]/help commands  /exit quit  --verbose details[/dim]",
                     border_style="cyan",
                     box=box.ROUNDED if box else None,
                     padding=(0, 1),
                 )
             )
+            self.console.print("\n[bold]Welcome to xbot terminal.[/bold] Type your message or /help.")
+            self.console.print("[dim]Tip: xbot chat --fancy-input enables multiline input and history.[/dim]")
             return
         typer.echo("xbot terminal chat")
         typer.echo(f"session: {options.session_id}")
         typer.echo(f"cwd: {options.cwd}")
         typer.echo("type /help for commands, /exit to quit")
 
+    def _welcome_body(
+        self,
+        options: TerminalChatOptions,
+        overview_rows: list[tuple[str, str]],
+        home_sections: dict[str, list[str]],
+    ):
+        logo = Text.from_markup(self._xbot_logo_markup())
+        left = Table.grid(padding=(0, 1))
+        left.add_column(justify="left")
+        left.add_row(logo)
+        left.add_row("")
+        left.add_row("[green][READY][/green] local agent console")
+        model = dict(overview_rows).get("model", "unknown")
+        left.add_row(f"[cyan]{model}[/cyan]")
+        left.add_row(f"[dim]Session:[/dim] {options.session_id[:8]}")
+        left.add_row(f"[dim]Cwd:[/dim]     {self._fit_text(str(options.cwd), 26)}")
+        counts = dict(overview_rows)
+        left.add_row(
+            f"[dim]{counts.get('tools_count', '0')} tools {self._sep()} "
+            f"{counts.get('skills_count', '0')} skills[/dim]"
+        )
+
+        right = Table.grid(padding=(0, 2))
+        right.add_column(ratio=1)
+        right.add_row("[bold]Available Tools[/bold]")
+        for line in home_sections.get("tools", [])[:9]:
+            right.add_row(line)
+        if len(home_sections.get("tools", [])) > 9:
+            right.add_row(f"[dim](and {len(home_sections['tools']) - 9} more toolsets...)[/dim]")
+        right.add_row("")
+        right.add_row("[bold]Available Skills[/bold]")
+        for line in home_sections.get("skills", [])[:13]:
+            right.add_row(line)
+        if len(home_sections.get("skills", [])) > 13:
+            right.add_row(f"[dim](and {len(home_sections['skills']) - 13} more skills...)[/dim]")
+        right.add_row("")
+        right.add_row(
+            f"[dim]{counts.get('tools_count', '0')} tools {self._sep()} "
+            f"{counts.get('skills_count', '0')} skills {self._sep()} /help for commands[/dim]"
+        )
+
+        layout = Table.grid(expand=True)
+        layout.add_column(width=38)
+        layout.add_column(ratio=4)
+        layout.add_row(left, right)
+        return layout
+
+    def _sep(self) -> str:
+        return "·" if self._unicode_output() else "|"
+
+    def _fit_text(self, value: str, width: int) -> str:
+        if len(value) <= width:
+            return value
+        return "..." + value[-max(0, width - 3):]
+
+    def _xbot_logo_markup(self) -> str:
+        if self._unicode_output():
+            return (
+                "[bold cyan]          _           _[/bold cyan]\n"
+                "[bold cyan]__  _____| |__   ___ | |_[/bold cyan]\n"
+                "[bold cyan]\\ \\/ / _ \\ '_ \\ / _ \\| __|[/bold cyan]\n"
+                "[bold cyan] >  <  __/ |_) | (_) | |_[/bold cyan]\n"
+                "[bold cyan]/_/\\_\\___|_.__/ \\___/ \\__|[/bold cyan]\n"
+                "[dim]    async agent backend[/dim]"
+            )
+        return (
+            "[bold cyan]          _           _[/bold cyan]\n"
+            "[bold cyan]__  _____| |__   ___ | |_[/bold cyan]\n"
+            "[bold cyan]\\ \\/ / _ \\ '_ \\ / _ \\| __|[/bold cyan]\n"
+            "[bold cyan] >  <  __/ |_) | (_) | |_[/bold cyan]\n"
+            "[bold cyan]/_/\\_\\___|_.__/ \\___/ \\__|[/bold cyan]\n"
+            "[dim]    async agent backend[/dim]"
+        )
+
+    def overview(self, rows: list[tuple[str, str]]) -> None:
+        if self.console and Table:
+            table = Table(show_header=False, box=None, padding=(0, 2))
+            table.add_column("key", style="cyan")
+            table.add_column("value")
+            for key, value in rows:
+                table.add_row(key, value)
+            self.console.print(table)
+            return
+        self.table(rows)
+
     def assistant(self, text: str) -> None:
         content = text.strip() if text else "(empty)"
+        streamed = self._stream_buffer.strip()
+        if streamed:
+            self._stop_stream()
+            if self._same_assistant_output(streamed, content):
+                if not self.console:
+                    typer.echo()
+                return
+        if self.console:
+            self._assistant_block(content)
+            return
+        self._plain_assistant_block(content)
+
+    def user(self, text: str) -> None:
+        content = text.strip() if text else "(empty)"
+        if self.console:
+            self.turn_separator(short=True)
+            bullet = "●" if self._unicode_output() else ">"
+            self.console.print(f"\n[bold blue]{bullet}[/bold blue] {content}")
+            return
+        self.turn_separator(short=True)
+        typer.echo(f"\n> {content}")
+
+    def turn_separator(self, *, short: bool = False) -> None:
+        width = 40 if short else self._block_width()
+        if self.console:
+            char = "─" if self._unicode_output() else "-"
+            self.console.print(f"[dim]{char * width}[/dim]")
+            return
+        typer.echo("-" * width)
+
+    def _assistant_block(self, content: str) -> None:
+        self._open_assistant_block()
+        self._print_assistant_content(content)
+        self._close_assistant_block()
+
+    def _plain_assistant_block(self, content: str) -> None:
+        width = self._block_width()
+        typer.echo()
+        typer.echo(self._block_top("xbot", width))
+        for line in content.splitlines() or [""]:
+            typer.echo(f"    {line}")
+        typer.echo(self._block_bottom(width))
+
+    def _open_assistant_block(self) -> None:
+        if not self.console:
+            self._plain_stream_started = True
+            typer.echo()
+            typer.echo(self._block_top("xbot", self._block_width()))
+            return
+        self.console.print()
+        self.console.print(f"[green]{self._block_top('xbot', self._block_width())}[/green]")
+
+    def _close_assistant_block(self) -> None:
+        if not self.console:
+            typer.echo(self._block_bottom(self._block_width()))
+            return
+        self.console.print(f"[green]{self._block_bottom(self._block_width())}[/green]")
+
+    def _print_assistant_content(self, content: str) -> None:
+        lines = content.splitlines() or [""]
+        if not self.console:
+            for line in lines:
+                typer.echo(f"    {line}")
+            return
+        for line in lines:
+            self.console.print(f"    {line}", markup=False, highlight=False)
+
+    def _block_width(self) -> int:
+        width = self.console.width if self.console else 80
+        return max(36, min(width, 100))
+
+    def _block_top(self, label: str, width: int) -> str:
+        label_text = f" {label} "
+        if self._unicode_output():
+            fill = max(width - len(label_text) - 3, 0)
+            return f"╭─{label_text}{'─' * fill}╮"
+        fill = max(width - len(label_text) - 3, 0)
+        return f"+-{label_text}{'-' * fill}+"
+
+    def _block_bottom(self, width: int) -> str:
+        if self._unicode_output():
+            return f"╰{'─' * (width - 2)}╯"
+        return f"+{'-' * (width - 2)}+"
+
+    def _unicode_output(self) -> bool:
+        encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+        return "utf" in encoding
+
+    def system(self, text: str) -> None:
+        if self.console and len(text) <= 80 and "\n" not in text:
+            self.console.print(f"[cyan]system[/cyan] [dim]{text}[/dim]")
+            return
         if self.console and Panel:
-            renderable = Markdown(content) if Markdown else content
-            self.console.print()
             self.console.print(
                 Panel(
-                    renderable,
-                    title="[bold green]assistant[/bold green]",
-                    border_style="green",
-                    box=box.ROUNDED if box else None,
+                    text,
+                    title="[bold cyan]system[/bold cyan]",
+                    border_style="cyan",
+                    box=box.SIMPLE if box else None,
                     padding=(0, 1),
                 )
             )
             return
-        typer.echo(f"\nassistant> {text.strip() if text else '(empty)'}")
-
-    def system(self, text: str) -> None:
-        if self.console:
-            self.console.print(f"[cyan]system>[/cyan] {text}")
-            return
-        typer.echo(f"system> {text}")
+        typer.echo(f"\n[system] {text}")
 
     def error(self, text: str) -> None:
-        if self.console:
-            self.console.print(f"[red]error>[/red] {text}")
+        if self.console and Panel:
+            self.console.print(
+                Panel(
+                    text,
+                    title="[bold red]error[/bold red]",
+                    border_style="red",
+                    box=box.SIMPLE if box else None,
+                    padding=(0, 1),
+                )
+            )
             return
-        typer.secho(f"error> {text}", fg=typer.colors.RED)
+        typer.secho(f"\n[error] {text}", fg=typer.colors.RED)
 
     def table(self, rows: list[tuple[str, str]]) -> None:
         if self.console and Table:
@@ -289,6 +589,10 @@ class TerminalRenderer:
         return await func()
 
     def event(self, event: AgentRuntimeEvent) -> None:
+        if event.type == "llm.delta":
+            self._stream_delta(event)
+            return
+        self._capture_event(event)
         if not self._should_show_event(event):
             return
         text = self._format_event(event)
@@ -299,13 +603,212 @@ class TerminalRenderer:
             return
         typer.echo(text)
 
+    def finish_turn(self) -> None:
+        if self._stream_buffer:
+            self._stop_stream()
+        if not self.console or not Panel:
+            return
+        body = self._activity_body()
+        if not body:
+            return
+        self.console.print(
+            Panel(
+                body,
+                title="[bold cyan]activity[/bold cyan]",
+                border_style="cyan",
+                box=box.ROUNDED if box else None,
+                padding=(0, 1),
+            )
+        )
+
+    def status_bar(
+        self,
+        *,
+        model: str,
+        context_window: int,
+        elapsed_seconds: float,
+        output_text: str = "",
+    ) -> None:
+        used = self._context_used_tokens(output_text)
+        percent = 0 if context_window <= 0 else min(100, round((used / context_window) * 100))
+        bar = self._usage_bar(percent)
+        line = (
+            f"{model} {self._sep()} {self._format_token_count(used)}/"
+            f"{self._format_token_count(context_window)} {self._sep()} {bar} {percent}% "
+            f"{self._sep()} {self._format_duration(elapsed_seconds)} "
+            f"{self._sep()} {self._timer_label()} {self._format_duration(self._display_state.llm_elapsed_seconds)}"
+        )
+        self.turn_separator()
+        if self.console:
+            self.console.print(f"[cyan]{line}[/cyan]")
+            self.turn_separator()
+            return
+        typer.echo(line)
+        self.turn_separator()
+
+    def _capture_event(self, event: AgentRuntimeEvent) -> None:
+        content = event.content if isinstance(event.content, dict) else {}
+        if event.task_id:
+            self._display_state.task_id = event.task_id
+        if event.type == "llm.started":
+            self._display_state.thinking = True
+            self._display_state.llm_iterations += 1
+            self._display_state.llm_started_at = time.monotonic()
+        if event.type == "llm.completed":
+            started = self._display_state.llm_started_at
+            if started is not None:
+                self._display_state.llm_elapsed_seconds += max(0.0, time.monotonic() - started)
+            usage = content.get("usage") if isinstance(content, dict) else None
+            if isinstance(usage, dict):
+                total = usage.get("total_tokens") or usage.get("total")
+                if isinstance(total, int):
+                    self._display_state.usage_total_tokens = max(
+                        self._display_state.usage_total_tokens,
+                        total,
+                    )
+        if event.type == "task.received" and isinstance(event.content, str):
+            self._display_state.input_chars = max(
+                self._display_state.input_chars,
+                len(event.content),
+            )
+        if event.type == "task.completed" and isinstance(event.content, str):
+            self._display_state.output_chars = max(
+                self._display_state.output_chars,
+                len(event.content),
+            )
+        if event.type.startswith("tool."):
+            self._tool_progress.consume(event, self._display_state)
+
+    def _stream_delta(self, event: AgentRuntimeEvent) -> None:
+        content = event.content if isinstance(event.content, dict) else {}
+        text = str(content.get("text") or "")
+        if not text:
+            return
+        self._stream_buffer += text
+        self._emit_stream_text(text)
+
+    def _stop_stream(self) -> None:
+        if self._stream_live is not None:
+            self._stream_live.stop()
+            self._stream_live = None
+        if self._stream_block_open:
+            if self._stream_line_open:
+                if self.console:
+                    self.console.print()
+                else:
+                    typer.echo()
+                self._stream_line_open = False
+            self._close_assistant_block()
+            self._stream_block_open = False
+
+    def _emit_stream_text(self, text: str) -> None:
+        if not self._stream_block_open:
+            self._open_assistant_block()
+            self._stream_block_open = True
+        parts = text.split("\n")
+        for index, part in enumerate(parts):
+            if index > 0:
+                if self.console:
+                    self.console.print()
+                else:
+                    typer.echo()
+                self._stream_line_open = False
+            if not part:
+                continue
+            prefix = "    " if not self._stream_line_open else ""
+            if self.console:
+                self.console.print(prefix + part, end="", markup=False, highlight=False)
+            else:
+                typer.echo(prefix + part, nl=False)
+            self._stream_line_open = True
+
+    def _same_assistant_output(self, streamed: str, final: str) -> bool:
+        streamed_text = streamed.strip()
+        final_text = final.strip()
+        if streamed_text == final_text:
+            return True
+        if not streamed_text or not final_text:
+            return False
+        return (
+            final_text in streamed_text
+            or streamed_text in final_text
+            or streamed_text.endswith(final_text)
+            or final_text.endswith(streamed_text)
+        )
+
+    def _activity_body(self) -> str:
+        state = self._display_state
+        elapsed = time.monotonic() - state.started_at
+        lines: list[str] = []
+        task = state.task_id[:8] if state.task_id else ""
+        header = f"[dim]{datetime.now().strftime('%H:%M:%S')}[/dim]"
+        if task:
+            header += f"  [dim]task[/dim] {task}"
+        header += f"  [dim]elapsed[/dim] {elapsed:.1f}s"
+        lines.append(header)
+        if state.thinking:
+            iterations = max(1, state.llm_iterations)
+            lines.append(f"[cyan]thinking[/cyan] {iterations} llm call{'s' if iterations != 1 else ''}")
+        for record in state.tools:
+            lines.append(self._format_tool_record(record))
+        return "\n".join(lines)
+
+    def _context_used_tokens(self, output_text: str) -> int:
+        if self._display_state.usage_total_tokens > 0:
+            return self._display_state.usage_total_tokens
+        chars = self._display_state.input_chars + self._display_state.output_chars + len(output_text or "")
+        return max(1, int(chars / 4))
+
+    def _usage_bar(self, percent: int, *, width: int = 10) -> str:
+        filled = max(0, min(width, round((percent / 100) * width)))
+        if self._unicode_output():
+            return "[" + ("█" * filled) + ("░" * (width - filled)) + "]"
+        return "[" + ("#" * filled) + ("." * (width - filled)) + "]"
+
+    def _format_token_count(self, value: int) -> str:
+        if value >= 1_000_000:
+            number = value / 1_000_000
+            return f"{number:.1f}M".replace(".0M", "M")
+        if value >= 1000:
+            number = value / 1000
+            return f"{number:.1f}K".replace(".0K", "K")
+        return str(value)
+
+    def _format_duration(self, seconds: float) -> str:
+        seconds = max(0.0, seconds)
+        if seconds >= 60:
+            minutes = int(seconds // 60)
+            remainder = int(seconds % 60)
+            return f"{minutes}m{remainder:02d}s" if remainder else f"{minutes}m"
+        return f"{seconds:.0f}s" if seconds >= 10 else f"{seconds:.1f}s"
+
+    def _timer_label(self) -> str:
+        return "⏲" if self._unicode_output() else "llm"
+
+    def _format_tool_record(self, record: ToolProgressRecord) -> str:
+        status_styles = {
+            "ok": ("OK", "green"),
+            "error": ("ERR", "red"),
+            "denied": ("DENY", "red"),
+            "cache": ("CACHE", "cyan"),
+        }
+        label, style = status_styles.get(record.status, (record.status.upper(), "dim"))
+        duration = ""
+        if record.duration_seconds is not None:
+            duration = f" [dim]{record.duration_seconds:.2f}s[/dim]"
+        detail = f" [dim]{record.error[:180]}[/dim]" if record.error else ""
+        line = f"[{style}]{label:<5}[/{style}] {record.name}{duration}{detail}"
+        if self.verbose and record.input_preview:
+            line += f"\n      [dim]input  {record.input_preview}[/dim]"
+        if self.debug and record.output_preview:
+            line += f"\n      [dim]output {record.output_preview}[/dim]"
+        return line
+
     def _should_show_event(self, event: AgentRuntimeEvent) -> bool:
         if self.verbose and (event.type.startswith("llm.") or event.type.startswith("task.")):
             return True
-        if event.type == "llm.started":
-            return True
         if event.type in {"tool.completed", "tool.failed", "tool.denied", "tool.cache_hit"}:
-            return True
+            return self.verbose
         if self.verbose and event.type == "tool.started":
             return True
         return self.debug
@@ -375,6 +878,7 @@ class TerminalChatSession:
         self._events: list[AgentRuntimeEvent] = []
         self._background_events: list[BackgroundTaskRecord] = []
         self._history_limit = 200
+        self._turns = 0
 
     async def start(self) -> None:
         if self.options.start_runtime:
@@ -401,7 +905,11 @@ class TerminalChatSession:
         await self.ctx.storage.close()
 
     async def run(self) -> None:
-        self.renderer.welcome(self.options)
+        self.renderer.welcome(
+            self.options,
+            overview_rows=self._overview_rows(),
+            home_sections=self._home_sections(),
+        )
         while True:
             try:
                 raw = await self._read_input()
@@ -416,7 +924,10 @@ class TerminalChatSession:
                 if not should_continue:
                     return
                 continue
-            await self.run_agent_turn(text)
+            try:
+                await self.run_agent_turn(text)
+            except KeyboardInterrupt:
+                self.renderer.system("current task cancelled")
 
     async def run_agent_turn(self, text: str) -> None:
         begin_turn = getattr(self.renderer, "begin_turn", None)
@@ -439,15 +950,34 @@ class TerminalChatSession:
                     event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
                 except TimeoutError:
                     continue
-                self._remember_event(event)
+                if event.type != "llm.delta":
+                    self._remember_event(event)
                 self.renderer.event(event)
             result = await task
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            task.cancel()
+            with suppress(Exception, asyncio.CancelledError):
+                await task
+            self.renderer.system("current task cancelled")
+            return
         finally:
             unsubscribe()
         if self.options.verbose:
             elapsed = time.monotonic() - started
             self.renderer.system(f"task_id={result.task_id} elapsed={elapsed:.2f}s")
+        self._turns += 1
         self.renderer.assistant(result.output)
+        status_bar = getattr(self.renderer, "status_bar", None)
+        if status_bar:
+            status_bar(
+                model=self._model_label(),
+                context_window=self._context_window_tokens(),
+                elapsed_seconds=time.monotonic() - started,
+                output_text=result.output,
+            )
+        finish_turn = getattr(self.renderer, "finish_turn", None)
+        if finish_turn and self.options.verbose:
+            finish_turn()
 
     async def handle_command(self, command_line: str) -> bool:
         command, _, arg = command_line.partition(" ")
@@ -552,8 +1082,22 @@ class TerminalChatSession:
 
     async def _read_input(self) -> str:
         if self._prompt_session is None:
-            return await anyio.to_thread.run_sync(lambda: typer.prompt("\nxbot", prompt_suffix="> "))
-        return await anyio.to_thread.run_sync(lambda: self._prompt_session.prompt("\nxbot> "))
+            return await anyio.to_thread.run_sync(
+                lambda: typer.prompt(f"\n{self._prompt_label()}", prompt_suffix=" ")
+            )
+        return await anyio.to_thread.run_sync(self._prompt_input)
+
+    def _prompt_input(self) -> str:
+        if self._prompt_session is None:
+            return typer.prompt(f"\n{self._prompt_label()}", prompt_suffix=" ")
+        if patch_stdout is None:
+            return self._prompt_session.prompt(f"\n{self._prompt_label()} ")
+        with patch_stdout(raw=True):
+            return self._prompt_session.prompt(f"\n{self._prompt_label()} ")
+
+    def _prompt_label(self) -> str:
+        encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+        return "❯" if "utf" in encoding else "xbot>"
 
     def _create_prompt_session(self):
         if not self.options.fancy_input or PromptSession is None:
@@ -561,7 +1105,12 @@ class TerminalChatSession:
         history_path = self.options.cwd / ".xbot_terminal_history"
         completer = WordCompleter(SLASH_COMMANDS, ignore_case=True) if WordCompleter else None
         history = FileHistory(str(history_path)) if FileHistory else None
-        return PromptSession(completer=completer, history=history)
+        return PromptSession(
+            completer=completer,
+            history=history,
+            multiline=True,
+            bottom_toolbar=self._bottom_toolbar,
+        )
 
     def build_agent_input(self, content: str) -> str:
         return build_terminal_agent_input(
@@ -569,6 +1118,76 @@ class TerminalChatSession:
             session_id=self.options.session_id,
             cwd=self.options.cwd,
         )
+
+    def _overview_rows(self) -> list[tuple[str, str]]:
+        tools = self.ctx.agent.visible_tools(source=self.source)
+        plugins = self.ctx.plugins.list_plugins()
+        skills = self.ctx.skills.list_skills()
+        enabled_plugins = [item for item in plugins if item.get("enabled")]
+        enabled_skills = [item for item in skills if item.get("enabled")]
+        model = self.ctx.agent.llm_status()
+        return [
+            ("model", f"{model.get('provider', 'unknown')}:{model.get('model', 'unknown')}"),
+            ("tools", self._count_with_preview(tools, "name")),
+            ("tools_count", str(len(tools))),
+            ("plugins", self._count_with_preview(enabled_plugins, "name")),
+            ("skills", self._count_with_preview(enabled_skills, "name")),
+            ("skills_count", str(len(enabled_skills))),
+        ]
+
+    def _home_sections(self) -> dict[str, list[str]]:
+        tools = self.ctx.agent.visible_tools(source=self.source)
+        toolsets: dict[str, list[str]] = {}
+        for item in tools:
+            toolsets.setdefault(str(item.get("toolset") or "core"), []).append(str(item.get("name")))
+        tool_lines = []
+        for name in sorted(toolsets):
+            tool_lines.append(f"[cyan]{name}[/cyan]: {self._comma_preview(toolsets[name], limit=3)}")
+
+        plugins = [item for item in self.ctx.plugins.list_plugins() if item.get("enabled")]
+        skills = [item for item in self.ctx.skills.list_skills() if item.get("enabled")]
+        skill_lines = [f"[cyan]plugins[/cyan]: {self._comma_preview([str(item.get('name')) for item in plugins], limit=4)}"]
+        skill_lines.extend(str(item.get("name")) for item in skills[:12])
+        return {"tools": tool_lines, "skills": skill_lines}
+
+    def _comma_preview(self, names: list[str], *, limit: int) -> str:
+        cleaned = [name for name in names if name]
+        preview = ", ".join(cleaned[:limit])
+        if len(cleaned) > limit:
+            return f"{preview}, ..."
+        return preview or "-"
+
+    def _bottom_toolbar(self) -> str:
+        model = self.ctx.agent.llm_status() if getattr(self.ctx, "agent", None) else {}
+        model_name = model.get("model", "unknown")
+        return (
+            f"session {self.options.session_id[:8]} | cwd {self.options.cwd} | "
+            f"model {model_name} | turns {self._turns} | Enter newline, Esc+Enter submit"
+        )
+
+    def _model_label(self) -> str:
+        status = self.ctx.agent.llm_status() if getattr(self.ctx, "agent", None) else {}
+        return str(status.get("model") or status.get("provider") or "unknown")
+
+    def _context_window_tokens(self) -> int:
+        status = self.ctx.agent.llm_status() if getattr(self.ctx, "agent", None) else {}
+        configured = status.get("context_window_tokens")
+        if isinstance(configured, int) and configured > 0:
+            return configured
+        model = str(status.get("model") or "").lower()
+        if "minimax-m2" in model or "mimo" in model:
+            return 1_000_000
+        if "gpt-4.1" in model or "gpt-4o" in model:
+            return 128_000
+        if "claude" in model:
+            return 200_000
+        return 128_000
+
+    def _count_with_preview(self, items: list[dict], key: str) -> str:
+        names = [str(item.get(key) or "") for item in items if item.get(key)]
+        preview = ", ".join(names[:5])
+        suffix = "" if len(names) <= 5 else f", +{len(names) - 5}"
+        return f"{len(names)}" + (f"  {preview}{suffix}" if preview else "")
 
 
 def build_terminal_agent_input(content: str, *, session_id: str, cwd: Path) -> str:
@@ -612,7 +1231,7 @@ async def run_terminal_chat(
         start_runtime=start_runtime,
     )
     session = TerminalChatSession(ctx, options)
-    await session.start()
+    await session.renderer.run_with_status("starting xbot terminal...", session.start)
     try:
         await session.run()
     finally:

@@ -5,7 +5,7 @@ import pytest
 
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.background import BackgroundTaskRecord
-from xbot.agent.llm import LLMResponse
+from xbot.agent.llm import LLMMessage, LLMResponse
 from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import AgentConfig, AgentToolsetConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
 from xbot.messaging.models import Message
@@ -83,6 +83,154 @@ class FakeLLMProvider:
 
     def status(self):
         return {"enabled": True, "provider": "fake", "model": "fake-model"}
+
+
+class FakeStreamingLLMProvider(FakeLLMProvider):
+    def __init__(self, chunks):
+        super().__init__(responses=["".join(chunks)])
+        self.chunks = list(chunks)
+
+    async def stream(self, messages):
+        self.messages.append(messages)
+        for chunk in self.chunks:
+            yield chunk
+
+
+class FakeFailingStreamingLLMProvider(FakeLLMProvider):
+    async def stream(self, messages):
+        self.messages.append(("stream", messages))
+        raise RuntimeError("stream unsupported")
+        yield ""
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_streams_terminal_plain_text_without_persisting_deltas():
+    repo = FakeAgentRepository()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    llm = FakeStreamingLLMProvider(["你好，", "我可以帮你。"])
+    runtime = AgentRuntime(
+        AgentConfig(),
+        plugins=None,
+        skills=None,
+        repository_provider=provider,
+        llm_provider=llm,
+    )
+    events = []
+    runtime.subscribe_events(lambda event: events.append(event))
+
+    response = await runtime._complete_llm(
+        [LLMMessage(role="user", content="你好")],
+        task_id="task-1",
+        iteration=0,
+        source="terminal:local:s1",
+    )
+
+    assert response.content == "你好，我可以帮你。"
+    assert [event.type for event in events] == ["llm.delta"]
+    assert events[0].content["text"] == "你好，我可以帮你。"
+    assert repo.events == []
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_deduplicates_overlapping_stream_chunks():
+    llm = FakeStreamingLLMProvider(["你好，我可以", "我可以帮你。", "帮你。"])
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None, llm_provider=llm)
+    events = []
+    runtime.subscribe_events(lambda event: events.append(event))
+
+    response = await runtime._complete_llm(
+        [LLMMessage(role="user", content="你好")],
+        task_id="task-1",
+        iteration=0,
+        source="terminal:local:s1",
+    )
+
+    assert response.content == "你好，我可以帮你。"
+    assert "".join(event.content["text"] for event in events) == "你好，我可以帮你。"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_skips_stream_chunk_already_in_current_text():
+    llm = FakeStreamingLLMProvider(["您好！请问您想要问什么呢？", "想要问什么呢？"])
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None, llm_provider=llm)
+
+    response = await runtime._complete_llm(
+        [LLMMessage(role="user", content="你还")],
+        task_id="task-1",
+        iteration=0,
+        source="terminal:local:s1",
+    )
+
+    assert response.content == "您好！请问您想要问什么呢？"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_deduplicates_cumulative_stream_chunks():
+    llm = FakeStreamingLLMProvider(["你好，", "你好，我可以", "你好，我可以帮你。"])
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None, llm_provider=llm)
+
+    response = await runtime._complete_llm(
+        [LLMMessage(role="user", content="你好")],
+        task_id="task-1",
+        iteration=0,
+        source="terminal:local:s1",
+    )
+
+    assert response.content == "你好，我可以帮你。"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_deduplicates_restarted_stream_suffix():
+    first = "你好！有什么我可以帮你的吗？无论是代码问题、项目调试、文件操作，还是其他开发相关的事情，随时告诉我。"
+    duplicate_tail = "有什么我可以帮你的吗？无论是代码问题、项目调试、文件操作，还是其他开发相关的事情，随时告诉我。"
+    llm = FakeStreamingLLMProvider([first, duplicate_tail])
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None, llm_provider=llm)
+
+    response = await runtime._complete_llm(
+        [LLMMessage(role="user", content="hi")],
+        task_id="task-1",
+        iteration=0,
+        source="terminal:local:s1",
+    )
+
+    assert response.content == first
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_falls_back_when_terminal_stream_fails_before_chunks():
+    llm = FakeFailingStreamingLLMProvider(responses=["fallback ok"])
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None, llm_provider=llm)
+
+    response = await runtime._complete_llm(
+        [LLMMessage(role="user", content="你好")],
+        task_id="task-1",
+        iteration=0,
+        source="terminal:local:s1",
+    )
+
+    assert response.content == "fallback ok"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_does_not_stream_tool_call_json_to_terminal():
+    llm = FakeStreamingLLMProvider(['{"tool_calls":', '[{"tool":"filesystem.list_dir"}]}'])
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None, llm_provider=llm)
+    events = []
+    runtime.subscribe_events(lambda event: events.append(event))
+
+    response = await runtime._complete_llm(
+        [LLMMessage(role="user", content="列目录")],
+        task_id="task-1",
+        iteration=0,
+        source="terminal:local:s1",
+    )
+
+    assert response.content.startswith('{"tool_calls"')
+    assert events == []
 
 
 @pytest.mark.anyio

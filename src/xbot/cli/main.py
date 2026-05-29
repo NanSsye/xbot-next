@@ -8,6 +8,7 @@ from pathlib import Path
 
 import anyio
 
+from xbot.cli.bridge import run_terminal_bridge
 from xbot.cli.chat import run_terminal_chat
 from xbot.cli.tui import run_terminal_tui
 from xbot.core.config import load_settings
@@ -62,6 +63,17 @@ def chat(
     tui: bool = typer.Option(False, "--tui", help="Use fullscreen Textual terminal UI."),
 ) -> None:
     anyio.run(_run_chat_command, config, session, cwd, verbose, debug, fancy_input, start_runtime, tui)
+
+
+@app.command("chat-bridge")
+def chat_bridge(
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to xbot config file."),
+    session: str | None = typer.Option(None, "--session", "-s", help="Bridge session id."),
+    cwd: str | None = typer.Option(None, "--cwd", help="Working directory to include in terminal context."),
+) -> None:
+    """Run JSONL stdin/stdout bridge for an external terminal UI process."""
+
+    anyio.run(_run_bridge_command, config, session, cwd)
 
 
 @app.command("db-init")
@@ -129,6 +141,14 @@ async def _run_chat_command(
         fancy_input=fancy_input,
         start_runtime=start_runtime,
     )
+
+
+async def _run_bridge_command(
+    config: str | None,
+    session: str | None,
+    cwd: str | None,
+) -> None:
+    await run_terminal_bridge(config_file=config, session_id=session, cwd=cwd)
 
 
 if __name__ == "__main__":

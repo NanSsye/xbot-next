@@ -6,7 +6,15 @@ from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.runtime import AgentResult, AgentRuntimeEvent
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.tools.toolsets import toolsets_for_source
-from xbot.cli.chat import TerminalChatOptions, TerminalChatSession, build_terminal_agent_input
+from xbot.cli.chat import (
+    TerminalChatOptions,
+    TerminalChatSession,
+    TerminalDisplayState,
+    TerminalRenderer,
+    ToolProgressRenderer,
+    build_terminal_agent_input,
+)
+from xbot.cli.bridge import TerminalBridgeOptions, TerminalBridgeSession
 from xbot.cli.tui import TerminalTuiRenderer
 from xbot.core.config import AgentConfig, AgentToolsetConfig
 from xbot.core.logging import configure_terminal_logging, logger
@@ -59,6 +67,39 @@ def test_terminal_chat_uses_plain_input_by_default(tmp_path):
     )
 
     assert session._prompt_session is None
+
+
+def test_terminal_renderer_welcome_body_contains_home_sections(tmp_path):
+    renderer = TerminalRenderer()
+    if renderer.console is None:
+        pytest.skip("rich is not installed")
+
+    body = renderer._welcome_body(
+        TerminalChatOptions(session_id="s1", cwd=Path(tmp_path)),
+        [("model", "fake:m1"), ("tools_count", "2"), ("skills_count", "1")],
+        {"tools": ["core: filesystem.list_dir"], "skills": ["code_assistant"]},
+    )
+
+    assert body is not None
+
+
+def test_terminal_chat_fancy_input_builds_toolbar(tmp_path):
+    class FakeAgent:
+        def llm_status(self):
+            return {"model": "m1"}
+
+    class FakeContext:
+        pass
+
+    ctx = FakeContext()
+    ctx.agent = FakeAgent()
+    session = TerminalChatSession(
+        ctx=ctx,
+        options=TerminalChatOptions(session_id="session-1234", cwd=Path(tmp_path), fancy_input=True),
+    )
+
+    assert "session session-" in session._bottom_toolbar()
+    assert "model m1" in session._bottom_toolbar()
 
 
 def test_terminal_logging_writes_to_file(tmp_path):
@@ -175,6 +216,67 @@ async def test_terminal_chat_session_streams_agent_events(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_terminal_chat_session_does_not_store_llm_delta_events(tmp_path):
+    class FakeAgent:
+        def __init__(self):
+            self.subscriber = None
+
+        def subscribe_events(self, subscriber):
+            self.subscriber = subscriber
+
+            def unsubscribe():
+                self.subscriber = None
+
+            return unsubscribe
+
+        async def run_task(self, input_text: str, source: str):
+            await self.subscriber(
+                AgentRuntimeEvent(
+                    task_id="task-1",
+                    type="llm.delta",
+                    content={"text": "你好"},
+                )
+            )
+            await self.subscriber(
+                AgentRuntimeEvent(
+                    task_id="task-1",
+                    type="llm.completed",
+                    content={"iteration": 0},
+                )
+            )
+            return AgentResult(task_id="task-1", source=source, status="completed", output="你好")
+
+    class FakeRenderer:
+        def __init__(self):
+            self.events = []
+            self.outputs = []
+
+        def event(self, event):
+            self.events.append(event.type)
+
+        def assistant(self, text):
+            self.outputs.append(text)
+
+    class FakeContext:
+        pass
+
+    ctx = FakeContext()
+    ctx.agent = FakeAgent()
+    session = TerminalChatSession(
+        ctx,
+        TerminalChatOptions(session_id="s1", cwd=Path(tmp_path)),
+    )
+    renderer = FakeRenderer()
+    session.renderer = renderer
+
+    await session.run_agent_turn("你好")
+
+    assert renderer.events == ["llm.delta", "llm.completed"]
+    assert [event.type for event in session._events] == ["llm.completed"]
+    assert renderer.outputs == ["你好"]
+
+
+@pytest.mark.anyio
 async def test_terminal_chat_session_keeps_background_history(tmp_path):
     class FakeBackground:
         def subscribe(self, subscriber):
@@ -284,27 +386,220 @@ def test_terminal_renderer_formats_background_task_completion():
 
 
 def test_terminal_renderer_compacts_default_events():
-    from xbot.cli.chat import TerminalRenderer
-
     renderer = TerminalRenderer()
     renderer.console = None
 
-    assert renderer._format_event(
-        AgentRuntimeEvent(task_id="t1", type="llm.started", content={"iteration": 0})
-    ) == "[cyan]thinking...[/cyan]"
-    assert renderer._format_event(
-        AgentRuntimeEvent(task_id="t1", type="llm.started", content={"iteration": 1})
-    ) == ""
+    event = AgentRuntimeEvent(task_id="t1", type="llm.started", content={"iteration": 0})
+    renderer.event(event)
+    assert renderer._display_state.thinking is True
     assert renderer._should_show_event(
         AgentRuntimeEvent(task_id="t1", type="tool.started", content={"tool": "filesystem.list_dir"})
     ) is False
-    assert "OK" in renderer._format_event(
+    assert renderer._should_show_event(
         AgentRuntimeEvent(
             task_id="t1",
             type="tool.completed",
             content={"tool": "filesystem.list_dir"},
         )
+    ) is False
+
+
+def test_tool_progress_renderer_records_completed_tool():
+    progress = ToolProgressRenderer()
+    state = TerminalDisplayState(started_at=0.0)
+
+    progress.consume(
+        AgentRuntimeEvent(task_id="t1", type="tool.started", content={"tool": "filesystem.list_dir"}),
+        state,
     )
+    progress.consume(
+        AgentRuntimeEvent(task_id="t1", type="tool.completed", content={"tool": "filesystem.list_dir"}),
+        state,
+    )
+
+    assert len(state.tools) == 1
+    assert state.tools[0].name == "filesystem.list_dir"
+    assert state.tools[0].status == "ok"
+    assert state.tools[0].duration_seconds is not None
+
+
+def test_tool_progress_renderer_keeps_input_output_previews():
+    progress = ToolProgressRenderer()
+    state = TerminalDisplayState(started_at=0.0)
+
+    progress.consume(
+        AgentRuntimeEvent(
+            task_id="t1",
+            type="tool.started",
+            content={"tool": "shell.exec", "input": {"command": "dir"}},
+        ),
+        state,
+    )
+    progress.consume(
+        AgentRuntimeEvent(
+            task_id="t1",
+            type="tool.completed",
+            content={"tool": "shell.exec", "output": {"output": "ok"}},
+        ),
+        state,
+    )
+
+    assert "command" in state.tools[0].input_preview
+    assert "ok" in state.tools[0].output_preview
+
+
+def test_terminal_renderer_activity_body_contains_tool_summary():
+    renderer = TerminalRenderer()
+    renderer.begin_turn()
+    renderer.event(AgentRuntimeEvent(task_id="task-1", type="llm.started", content={}))
+    renderer.event(
+        AgentRuntimeEvent(task_id="task-1", type="tool.started", content={"tool": "filesystem.list_dir"})
+    )
+    renderer.event(
+        AgentRuntimeEvent(
+            task_id="task-1",
+            type="tool.completed",
+            content={"tool": "filesystem.list_dir"},
+        )
+    )
+
+    body = renderer._activity_body()
+
+    assert "thinking" in body
+    assert "filesystem.list_dir" in body
+    assert "OK" in body
+
+
+def test_terminal_renderer_status_bar_uses_token_usage(capsys):
+    renderer = TerminalRenderer()
+    renderer.console = None
+    renderer._display_state.usage_total_tokens = 17_900
+    renderer._display_state.llm_elapsed_seconds = 3
+
+    renderer.status_bar(
+        model="mimo-v2.5-pro",
+        context_window=1_000_000,
+        elapsed_seconds=180,
+        output_text="ignored when usage is present",
+    )
+
+    captured = capsys.readouterr().out
+    assert "mimo-v2.5-pro" in captured
+    assert "17.9K/1M" in captured
+    assert "2%" in captured
+    assert "3m" in captured
+
+
+def test_terminal_renderer_stream_delta_skips_duplicate_final(capsys):
+    renderer = TerminalRenderer()
+    renderer.console = None
+
+    renderer.event(
+        AgentRuntimeEvent(
+            task_id="task-1",
+            type="llm.delta",
+            content={"text": "你好"},
+        )
+    )
+    renderer.assistant("你好")
+
+    captured = capsys.readouterr().out
+    assert captured.count("你好") == 1
+
+
+def test_terminal_renderer_formats_plain_user_and_assistant(capsys):
+    renderer = TerminalRenderer()
+    renderer.console = None
+
+    renderer.user("你好")
+    renderer.assistant("可以")
+
+    captured = capsys.readouterr().out
+    assert "> 你好" in captured
+    assert "xbot" in captured
+    assert "你好" in captured
+    assert "可以" in captured
+
+
+def test_terminal_renderer_stream_delta_skips_contained_final(capsys):
+    renderer = TerminalRenderer()
+    renderer.console = None
+    renderer._stream_buffer = "重复前缀\n最终回复"
+
+    renderer.assistant("最终回复")
+
+    captured = capsys.readouterr().out
+    assert "assistant>" not in captured
+
+
+def test_terminal_renderer_stream_delta_skips_final_inside_stream(capsys):
+    renderer = TerminalRenderer()
+    renderer.console = None
+    renderer._stream_buffer = "最终回复\n重复内容"
+
+    renderer.assistant("最终回复")
+
+    captured = capsys.readouterr().out
+    assert "assistant>" not in captured
+
+
+def test_terminal_chat_session_builds_overview_rows(tmp_path):
+    class FakeAgent:
+        def llm_status(self):
+            return {"provider": "fake", "model": "m1"}
+
+        def visible_tools(self, *, source):
+            return [
+                {"name": "filesystem.list_dir", "toolset": "filesystem"},
+                {"name": "shell.exec", "toolset": "shell"},
+            ]
+
+    class FakePlugins:
+        def list_plugins(self):
+            return [{"name": "agent_chat", "enabled": True}, {"name": "disabled", "enabled": False}]
+
+    class FakeSkills:
+        def list_skills(self):
+            return [{"name": "code_assistant", "enabled": True}]
+
+    class FakeContext:
+        pass
+
+    ctx = FakeContext()
+    ctx.agent = FakeAgent()
+    ctx.plugins = FakePlugins()
+    ctx.skills = FakeSkills()
+    session = TerminalChatSession(
+        ctx,
+        TerminalChatOptions(session_id="s1", cwd=Path(tmp_path)),
+    )
+
+    rows = dict(session._overview_rows())
+
+    assert rows["model"] == "fake:m1"
+    assert rows["tools"].startswith("2")
+    assert rows["plugins"].startswith("1")
+    assert rows["skills"].startswith("1")
+    sections = session._home_sections()
+    assert "filesystem" in sections["tools"][0]
+    assert "code_assistant" in sections["skills"]
+
+
+@pytest.mark.anyio
+async def test_terminal_bridge_emit_writes_json(capsys, tmp_path):
+    class FakeContext:
+        pass
+
+    session = TerminalBridgeSession(
+        FakeContext(),
+        TerminalBridgeOptions(session_id="bridge-1", cwd=Path(tmp_path)),
+    )
+
+    await session.emit("ready", {"session_id": "bridge-1"})
+
+    captured = capsys.readouterr().out
+    assert '"type": "ready"' in captured
+    assert '"session_id": "bridge-1"' in captured
 
 
 def test_terminal_tui_renderer_writes_event_and_background_output():

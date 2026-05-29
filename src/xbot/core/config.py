@@ -143,6 +143,7 @@ class AgentLLMConfig(BaseModel):
     base_url: str = "https://api.openai.com/v1"
     api_key: str | None = None
     model: str = "gpt-4.1-mini"
+    context_window_tokens: int | None = None
     timeout_seconds: int = 60
     max_tokens: int = 2000
     temperature: float = 0.2
@@ -326,6 +327,10 @@ def _env_list(value: str) -> list[str]:
     return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
 
 
+def _env_int(value: str) -> int:
+    return int(value.replace("_", "").strip())
+
+
 def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings:
     path = Path(config_file or os.getenv("XBOT_CONFIG_FILE", "configs/xbot.toml"))
     data: dict[str, Any] = {}
@@ -352,6 +357,8 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("agent", {}).setdefault("llm", {})["base_url"] = llm_base_url
     if llm_model := env.get("XBOT_LLM_MODEL"):
         data.setdefault("agent", {}).setdefault("llm", {})["model"] = llm_model
+    if llm_context_window := env.get("XBOT_LLM_CONTEXT_WINDOW_TOKENS"):
+        data.setdefault("agent", {}).setdefault("llm", {})["context_window_tokens"] = _env_int(llm_context_window)
     if llm_enabled := env.get("XBOT_LLM_ENABLED"):
         data.setdefault("agent", {}).setdefault("llm", {})["enabled"] = _env_bool(llm_enabled)
     if agent_mode := env.get("XBOT_AGENT_MODE"):

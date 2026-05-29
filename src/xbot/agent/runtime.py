@@ -14,7 +14,7 @@ from xbot.agent.background import BackgroundTaskManager
 from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.cache import TTLCache
 from xbot.agent.compression import MemoryCompressor
-from xbot.agent.llm import LLMMessage, create_llm_provider
+from xbot.agent.llm import LLMMessage, LLMResponse, create_llm_provider
 from xbot.agent.memory import MemoryStore
 from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
@@ -452,10 +452,17 @@ class AgentRuntime:
             return False
         return tool.risk_level in {"read"}
 
-    async def _add_event(self, task_id: str, event_type: str, content: object) -> None:
+    async def _add_event(
+        self,
+        task_id: str,
+        event_type: str,
+        content: object,
+        *,
+        persist: bool = True,
+    ) -> None:
         event = AgentRuntimeEvent(task_id=task_id, type=event_type, content=content)
         await self._publish_event(event)
-        if not self.repository_provider:
+        if not persist or not self.repository_provider:
             return
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
@@ -506,7 +513,12 @@ class AgentRuntime:
                     self.llm_status().get("model"),
                 )
                 with anyio.fail_after(max(1, int(self.config.llm.timeout_seconds) + 5)):
-                    response = await self.llm.complete(messages)
+                    response = await self._complete_llm(
+                        messages,
+                        task_id=task_id,
+                        iteration=iteration,
+                        source=source,
+                    )
             except XBotError as exc:
                 await self._add_event(task_id, "llm.unavailable", {"error": str(exc)})
                 logger.warning("Agent LLM 不可用: task_id={} error={}", task_id, exc)
@@ -622,6 +634,123 @@ class AgentRuntime:
             return "这个请求需要读取当前项目状态，但我没有成功调用工具，请稍后重试。"
         cleaned = self.planner.clean_final_output(last_content)
         return cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
+
+    async def _complete_llm(
+        self,
+        messages: list[LLMMessage],
+        *,
+        task_id: str,
+        iteration: int,
+        source: str,
+    ) -> LLMResponse:
+        stream = getattr(self.llm, "stream", None)
+        if not source.startswith("terminal:") or stream is None:
+            return await self.llm.complete(messages)
+
+        collected = ""
+        visible_started = False
+        visible_disabled = False
+        visible_buffer = ""
+        try:
+            async for raw_chunk in stream(messages):
+                chunk = self._append_stream_chunk(collected, raw_chunk)
+                if not chunk:
+                    continue
+                collected += chunk
+                if visible_disabled:
+                    continue
+                visible_buffer += chunk
+                decision = self._terminal_stream_decision(visible_buffer)
+                if decision == "block":
+                    visible_disabled = True
+                    continue
+                if decision == "wait":
+                    continue
+                if not visible_started:
+                    visible_started = True
+                    await self._add_event(
+                        task_id,
+                        "llm.delta",
+                        {"text": visible_buffer, "iteration": iteration},
+                        persist=False,
+                    )
+                    visible_buffer = ""
+                    continue
+                await self._add_event(
+                    task_id,
+                    "llm.delta",
+                    {"text": chunk, "iteration": iteration},
+                    persist=False,
+                )
+        except Exception:
+            if not collected:
+                return await self.llm.complete(messages)
+            raise
+
+        if visible_started and visible_buffer:
+            await self._add_event(
+                task_id,
+                "llm.delta",
+                {"text": visible_buffer, "iteration": iteration},
+                persist=False,
+            )
+        collected = self._dedupe_repeated_suffix(collected)
+        status = self.llm_status()
+        return LLMResponse(
+            content=collected,
+            model=str(status.get("model") or ""),
+            provider=str(status.get("provider") or "unknown"),
+        )
+
+    def _append_stream_chunk(self, current: str, chunk: str) -> str:
+        if not chunk:
+            return ""
+        if chunk in current:
+            return ""
+        if chunk.startswith(current):
+            return chunk[len(current) :]
+        if current and current in chunk:
+            return chunk.split(current, 1)[1]
+        if current.endswith(chunk):
+            return ""
+        max_overlap = min(len(current), len(chunk), 2000)
+        for size in range(max_overlap, 0, -1):
+            if current.endswith(chunk[:size]):
+                return chunk[size:]
+        return chunk
+
+    def _dedupe_repeated_suffix(self, text: str) -> str:
+        stripped = text.strip()
+        if not stripped:
+            return text
+        max_unit = len(stripped) // 2
+        for size in range(max_unit, 12, -1):
+            first = stripped[-(size * 2) : -size]
+            second = stripped[-size:]
+            if first == second:
+                return stripped[:-size]
+        for size in range(min(len(stripped) // 2, 2000), 12, -1):
+            prefix = stripped[:size]
+            idx = stripped.find(prefix, 1)
+            if idx > 0 and idx + size < len(stripped):
+                before = stripped[:idx].rstrip()
+                after = stripped[idx:].rstrip()
+                if len(after) >= size and after.startswith(prefix):
+                    return before
+        return text
+
+    def _terminal_stream_decision(self, text: str) -> str:
+        stripped = text.lstrip()
+        if not stripped:
+            return "wait"
+        lowered = stripped[:240].lower()
+        if stripped[0] in {"{", "[", "`"}:
+            return "block"
+        if '"tool_calls"' in lowered or '"final"' in lowered or "tool_calls" in lowered:
+            return "block"
+        if len(stripped) < 24 and not re.search(r"[。！？.!?\n]", stripped):
+            return "wait"
+        return "show"
 
     def _must_continue_for_missing_tool(self, input_text: str, output: str, used_tool: bool) -> bool:
         if used_tool:

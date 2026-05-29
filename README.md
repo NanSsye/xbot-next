@@ -66,6 +66,7 @@ XBOT_ADMIN_DATABASE_URL=postgresql://postgres:change-me@192.168.6.19:5433/postgr
 XBOT_LLM_ENABLED=true
 XBOT_LLM_BASE_URL=https://api.openai.com/v1
 XBOT_LLM_MODEL=gpt-4.1-mini
+XBOT_LLM_CONTEXT_WINDOW_TOKENS=128000
 XBOT_LLM_API_KEY=change-me
 ```
 
@@ -406,13 +407,17 @@ python -m xbot.cli.main chat --session dev-1 --cwd D:\项目\项目\xbot\xbot-ne
 python -m xbot.cli.main chat --verbose
 python -m xbot.cli.main chat --fancy-input
 python -m xbot.cli.main chat --tui
+python -m xbot.cli.main chat-bridge
 ```
 
-终端模式默认使用 Windows 原生输入，中文输入法兼容性最好；需要命令补全和本地输入历史时，可以加 `--fancy-input` 启用 `prompt_toolkit`。
-Agent 执行过程中默认使用紧凑事件流：只显示一次 `thinking...`，工具完成/失败时显示简短结果；`--verbose` 会额外显示 LLM、task 和工具开始事件。终端保持打开时，后台任务完成、失败或取消也会主动打印提示。
+终端模式默认使用 Windows 原生输入，中文输入法兼容性最好；需要命令补全、本地输入历史、多行输入和底部状态栏时，可以加 `--fancy-input` 启用 `prompt_toolkit`。`--fancy-input` 使用 `patch_stdout` 保护输入区，避免后台输出覆盖正在输入的内容。
+启动时会先显示启动 spinner，随后展示接近 Hermes CLI 的首页：左侧品牌 ASCII、ready 状态、模型和会话信息，右侧按 toolset/skill 展示可用能力，底部显示欢迎语和输入提示。
+Agent 执行过程中默认使用 Hermes 风格的轻量 CLI 对话：用户输入显示为 prompt 行，自然语言回复会在 `xbot` 标题块里流式显示，工具调用 JSON 会被隐藏；本轮结束后显示模型、上下文占用、百分比进度条、本轮耗时和 LLM 耗时。上下文已用量优先读取 OpenAI-compatible usage，窗口总量优先读取 `XBOT_LLM_CONTEXT_WINDOW_TOKENS` / `agent.llm.context_window_tokens`，未配置时按常见模型兜底估算。`--verbose` 会额外显示工具输入摘要和 activity 明细，`--debug` 会额外显示工具输出摘要。终端保持打开时，后台任务完成、失败或取消也会主动打印提示。
+执行中按 `Ctrl+C` 会尝试取消当前终端任务，并保留终端会话。
 当前终端会话会保留最近的 Agent 事件和后台任务事件，方便事后用命令回看，不需要翻滚动日志。
 终端对话模式会把框架运行日志写入 `logs/xbot-terminal.log`，避免 INFO 日志刷屏污染对话区；`--debug` 会重新把调试日志输出到控制台。
 `--tui` 会进入 Textual 全屏终端界面，左侧显示对话，右侧显示工具事件和后台任务事件，底部输入框继续复用同一套 slash command。
+`chat-bridge` 是 JSONL stdin/stdout 协议入口，用于后续独立 TUI/Web/PTY 前端进程接入同一套 AgentRuntime。
 安装为可编辑包后，`xbot` 不带子命令会进入普通终端对话模式，中文输入兼容性更好；`xbot chat --fancy-input` 用于启用补全/历史；`xbot chat --tui` 用于进入全屏 TUI；`xbot run` 仍用于启动后端服务。
 
 内置命令：

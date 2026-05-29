@@ -153,7 +153,15 @@
 - [x] `filesystem.read_file` 已增加目录路径保护，目录读取会提示改用 `filesystem.list_dir`，避免 Windows 上目录读取显示为权限错误。
 - [x] 终端 Agent 对话模式第一阶段完成：新增 `python -m xbot.cli.main chat`，复用同一套 `AgentRuntime`、toolset、后台任务和 slash command。
 - [x] 终端 Agent 对话模式五阶段第一版完成：终端会话内保留最近 Agent 事件和后台任务事件，新增 `/events [n]` 与 `/logs [n]` 用于回看工具执行链路和后台任务结果。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `102 passed`。
+- [x] 终端 Agent 对话模式六阶段第一版完成：新增 `chat --tui` Textual 全屏终端 UI，左侧对话、右侧事件、底部输入框，复用现有 slash command、AgentRuntime、工具事件和后台任务事件；考虑 Windows 中文输入法兼容性，`xbot` 无参数默认进入原生输入的普通终端对话模式，`--fancy-input` 才启用 prompt_toolkit 补全/历史。
+- [x] 终端 Hermes 对齐三阶段第一版完成：activity 面板、自然语言流式输出、stream chunk 去重、启动模型/工具/插件/skill 概览、工具输入/输出摘要分层和当前任务 `Ctrl+C` 取消已落地。
+- [x] 终端 Hermes 对齐四阶段第一版完成：`--fancy-input` 已接入 prompt_toolkit 多行输入、历史/补全、`patch_stdout` 输出保护和底部状态栏；默认仍保留 Windows 中文输入更稳的原生输入。
+- [x] 终端 Hermes 对齐五阶段第一版完成：新增 `xbot chat-bridge` JSONL stdin/stdout 协议入口，外部 TUI/Web/PTY 前端可作为独立进程接入同一套 AgentRuntime 事件和 final 输出。
+- [x] 终端首页视觉增强第二版完成：普通 `xbot` 启动页改为接近 Hermes CLI 的双栏 banner，左侧品牌 ASCII、ready 状态、模型/会话信息，右侧按 toolset/skill 展示可用能力，并保留 Windows 编码安全 fallback。
+- [x] 终端对话视觉增强第二版完成：参考 Hermes classic CLI，把用户输入改为 prompt 行，assistant 改为轻量 `xbot` 标题块流式输出，短系统提示保留一行状态，避免对话区堆叠大面板。
+- [x] 终端交互修复：取消用户输入二次显示，补充 stream restart/suffix 去重，避免 OpenAI-compatible 流式接口重复输出回答后半段。
+- [x] 终端 Hermes 状态栏增强：每轮回复后显示模型名、上下文占用、百分比进度条、本轮耗时和 LLM 耗时；上下文已用量优先读取接口 usage，窗口总量支持 `agent.llm.context_window_tokens` / `XBOT_LLM_CONTEXT_WINDOW_TOKENS`，未配置时按模型名兜底。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `122 passed`。
 
 进行中：
 
@@ -162,7 +170,7 @@
 - [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息和回复链路；下一步验证长连接重连、群聊高频消息、异常消息格式和生产日志可观测性。
 - [ ] Agent 工具 provider 四阶段：浏览器会话生命周期接入 runtime stop、数据库更多方言边界验证、GitHub 写操作审批细化、插件工具权限持久化开关和前端 UI。
 - [ ] Agent 工具体验对齐 Codex 五阶段：真正前端后台任务页面、后台任务失败原因聚合、按工具/平台配置自动后台策略。
-- [x] 终端 Agent 对话模式六阶段第一版完成：新增 `chat --tui` Textual 全屏终端 UI，左侧对话、右侧事件、底部输入框，复用现有 slash command、AgentRuntime、工具事件和后台任务事件；考虑 Windows 中文输入法兼容性，`xbot` 无参数默认进入原生输入的普通终端对话模式，`--fancy-input` 才启用 prompt_toolkit 补全/历史。
+- [ ] 终端 Hermes 对齐六阶段：基于 `chat-bridge` 实现真正独立 UI 进程的 TUI/Web/PTY 前端，并继续规避 Windows 中文 IME 兼容问题。
 
 尚未开始：
 
@@ -1839,7 +1847,44 @@ src/xbot/cli/chat.py
 9. [x] 第二阶段升级为 rich/prompt_toolkit TUI-lite：彩色面板、表格、spinner、命令补全和历史记录；Windows 下默认关闭 prompt_toolkit 输入以保证中文 IME，可用 `--fancy-input` 手动启用。
 10. [x] 第三阶段补终端内事件回看：`/events [n]` 查看最近 Agent 事件，`/logs [n]` 同时查看 Agent 事件和后台任务事件。
 11. [x] 第六阶段做全屏 Textual UI 第一版：`chat --tui` 提供左侧会话、右侧工具事件、底部输入框；`xbot` 无参数默认进入中文输入兼容性更好的原生输入普通终端对话。
-12. [ ] 下一阶段增强 Textual UI：任务列表面板、工具列表面板、快捷键切换视图、后台任务重放确认弹窗。
+12. [x] Hermes 对齐第一阶段：新增 `TerminalDisplayState` 和 `ToolProgressRenderer`，把零散事件打印改成 activity 面板、工具历史、耗时和最终回答面板。
+13. [x] Hermes 对齐第二阶段第一版：OpenAI-compatible LLM provider 增加 `stream()`，Runtime 仅在 `terminal:` source 发布不落库的 `llm.delta`，终端 response box 支持自然语言流式输出，并屏蔽 tool-call JSON。
+14. [x] Hermes 对齐第三阶段第一版：启动页显示模型、工具、插件、skill 概览；activity 面板支持 `--verbose` 工具输入摘要和 `--debug` 工具输出摘要；终端任务执行中按 `Ctrl+C` 会尝试取消当前任务并保留会话。
+15. [x] Hermes 对齐第四阶段第一版：`--fancy-input` 使用 prompt_toolkit 多行输入、历史/补全、`patch_stdout` 输出保护和底部状态栏；Windows 默认仍保留原生输入。
+16. [x] Hermes 对齐第五阶段第一版：新增 `xbot chat-bridge` JSONL stdin/stdout 协议入口，作为独立 TUI/Web/PTY 前端进程接入 AgentRuntime 的基础。
+17. [x] Hermes 状态栏增强：普通 CLI 每轮回复后显示模型、上下文已用/窗口、百分比进度条、本轮耗时和 LLM 耗时；`--verbose` 才显示 activity 明细面板，减少默认对话区噪音。
+18. [ ] Hermes 对齐第六阶段：基于 `chat-bridge` 实现真正独立 UI 进程的 TUI/Web/PTY 前端。
+
+#### 17.6.9 Hermes 参考后的终端显示架构
+
+Hermes 的终端体验不是简单 `print + input`，而是分层 UI：
+
+- 输入层：经典 CLI 使用 `prompt_toolkit.TextArea`，支持多行、历史、补全和动态高度；Windows 中文输入法场景下需要保留原生输入 fallback。
+- 输出层：Rich/ANSI 输出统一经过安全打印通道，用户、assistant、system、activity 分层展示，避免后台日志、工具输出和输入区互相覆盖。
+- 状态层：模型、耗时、上下文、后台任务、当前工具以启动页能力卡片、状态栏或 activity 面板呈现，不作为普通日志刷屏。
+- 上下文状态：已用量优先使用 OpenAI-compatible 响应中的 `usage.total_tokens`，没有 usage 时按输入/输出字符数粗估；窗口总量不是所有接口都会返回，因此优先读取 `agent.llm.context_window_tokens` / `XBOT_LLM_CONTEXT_WINDOW_TOKENS`，未配置时按模型名兜底。
+- 工具层：工具开始只更新当前状态；工具完成后才写入简短历史。`--verbose` 展示工具输入摘要，`--debug` 展示工具输出摘要，完整 payload/result 仍通过 `/events` 查看。
+- 流式层：LLM provider 需要原生 delta 回调。终端接收 `llm.delta` 后写入 response box，同时过滤 reasoning 标签和中间 tool-call JSON；当前第一版只对 `terminal:` source 开启，且 `llm.delta` 不写入事件表，避免数据库被 token 级事件刷屏。
+- 进程分离层：`chat-bridge` 用 JSONL stdin/stdout 暴露 `ready`、`agent_event`、`background_task`、`final` 等事件，后续独立 TUI/Web/PTY 只负责 UI，AgentRuntime 继续由后端进程负责。
+
+xbot 的落地策略：
+
+```text
+AgentRuntime events
+  -> TerminalDisplayState
+  -> ToolProgressRenderer
+  -> Activity panel / response panel
+
+LLMProvider.stream
+  -> AgentRuntime llm.delta events
+  -> TerminalRenderer streaming response box
+
+External UI process
+  -> xbot chat-bridge JSONL
+  -> AgentRuntime events / final output
+```
+
+第一步已完成非流式显示优化：每轮输出一个 activity 面板，聚合 thinking、工具调用、耗时和错误摘要；保留 `/events`、`/logs` 作为完整事件回看。第二步已完成终端自然语言流式第一版：LLM delta 先经过安全判断，疑似 JSON/tool-call 的内容不展示，最终仍由 planner 解析后输出干净回复，并兼容累计/重叠 stream chunk 去重。第三步已完成启动概览、工具摘要分层和当前任务取消。第四步已完成 `--fancy-input` 的多行输入、状态栏和输出保护。第五步已完成 JSONL bridge，后续真正独立 UI 进程应基于该协议实现。
 
 ## 18. Skill 体系
 
@@ -2685,6 +2730,7 @@ enabled = false
 provider = "openai_compatible"
 base_url = "https://api.openai.com/v1"
 model = "gpt-4.1-mini"
+context_window_tokens = 128000
 timeout_seconds = 60
 max_tokens = 2000
 temperature = 0.2

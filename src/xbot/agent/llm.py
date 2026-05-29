@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 import httpx
@@ -72,12 +74,45 @@ class OpenAICompatibleLLMProvider:
             raw_id=data.get("id"),
         )
 
+    async def stream(self, messages: list[LLMMessage]) -> AsyncIterator[str]:
+        url = self.config.base_url.rstrip("/") + "/chat/completions"
+        payload = {
+            "model": self.config.model,
+            "messages": [message.model_dump() for message in messages],
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+            "stream": True,
+        }
+        headers = {"Authorization": f"Bearer {self.config.api_key}"}
+        async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_text = line.removeprefix("data:").strip()
+                    if data_text == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_text)
+                    except ValueError:
+                        continue
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    content = delta.get("content")
+                    if content:
+                        yield content
+
     def status(self) -> dict:
         return {
             "enabled": True,
             "provider": "openai_compatible",
             "base_url": self.config.base_url,
             "model": self.config.model,
+            "context_window_tokens": self.config.context_window_tokens,
         }
 
 
