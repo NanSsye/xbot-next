@@ -58,7 +58,7 @@
 
 ## 4. 当前实现进度
 
-更新时间：2026-05-28
+更新时间：2026-05-29
 
 已完成：
 
@@ -125,16 +125,36 @@
 - [x] Wechat869 真实通道第一版完成：复用已登录 869 服务，不做登录流程，支持私聊文本、群聊文本、群聊 @ 识别和文本回复。
 - [x] 插件路由第一版完成：插件可声明触发词、前缀、优先级、fallback 和独占处理。
 - [x] Agent 聊天桥接第一版完成：通道消息先走插件，插件未处理时再由 `agent_chat` fallback 插件转入 Agent。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `38 passed`。
+- [x] Agent 会话上下文已带入平台、scope、conversation_id、sender_id、raw metadata、最近消息和时间信息，供模型判断私聊/群聊、发送者和回复目标。
+- [x] Agent 工具调用输出已收敛：默认不向用户展示 `tool_calls` 等内部规划 JSON，只展示最终回答。
+- [x] Agent 工具自动调用循环已支持多轮工具调用，按任务完成状态继续推进，并写入 `agent_events` 审计。
+- [x] Agent 长上下文策略第一版完成：会话历史按 conversation 归档，支持上下文读取和压缩摘要入口。
+- [x] Agent 工具结果缓存第一版完成：对可复用的只读工具结果做短 TTL 缓存，降低重复 LLM/tool 循环成本。
+- [x] Agent 权限模型已支持 safe/developer/admin 三档，并通过环境变量显式开启高权限模式。
+- [x] Agent 当前时间注入已完成，避免模型缺少日期、时区和当前时间上下文。
+- [x] Wechat869 Adapter 已接入本项目内部实现：支持 WS 收消息、私聊/群聊识别、@ 识别、文本清洗、队列发布和文本回复。
+- [x] Wechat869 媒体发送 Skill 第一版已接入：Agent 可通过 `skill.run` 调用 869 发送文本、图片、视频、语音、音乐、链接和文件。
+- [x] MCP 原生支持第一版完成：支持配置 stdio / Streamable HTTP MCP server，启动时发现工具并注册为 `mcp_{server}_{tool}`。
+- [x] MCP 配置已接入 `.env` / `configs/xbot.toml`，缺少 `mcp` 可选依赖时会降级跳过并记录 warning。
+- [x] Agent 工具体系规范化第一步完成：内置 `filesystem`、`shell`、`skill` 工具注册已从 `AgentRuntime` 拆到 `xbot.agent.tools.builtin`。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `59 passed`。
 
 进行中：
 
-- [ ] 真实环境长连接收消息验证。
+- [ ] Tool 体系继续规范化：为 `ToolDefinition` 增加 `toolset`、`source`、`cacheable`、`timeout_seconds` 等 metadata。
+- [ ] 把工具缓存策略从 `AgentRuntime` 下沉到 tool metadata 或独立 cache policy。
+- [ ] 把 `skill.run` 的具体 skill action 执行从 `AgentRuntime` 迁出到独立 skill tool provider。
+- [ ] MCP 增强：include/exclude、server status API、重连、热重载和更完整的错误恢复。
+- [ ] Toolset 可见性控制：按平台、私聊/群聊、管理员策略决定工具可见范围。
+- [ ] 真实环境长连接和群聊高频消息稳定性验证。
 
 尚未开始：
 
 - [ ] 前端管理界面。
 - [ ] 旧插件兼容层。
+- [ ] 浏览器自动化工具集。
+- [ ] 数据库查询工具集。
+- [ ] Git/GitHub 工具集。
 
 ## 5. 总体架构
 
