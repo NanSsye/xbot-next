@@ -1208,12 +1208,15 @@ class TerminalChatSession:
         history_path = self.options.cwd / ".xbot_terminal_history"
         completer = WordCompleter(SLASH_COMMANDS, ignore_case=True) if WordCompleter else None
         history = FileHistory(str(history_path)) if FileHistory else None
-        return PromptSession(
-            completer=completer,
-            history=history,
-            multiline=True,
-            bottom_toolbar=self._bottom_toolbar,
-        )
+        try:
+            return PromptSession(
+                completer=completer,
+                history=history,
+                multiline=True,
+                bottom_toolbar=self._bottom_toolbar,
+            )
+        except Exception:
+            return None
 
     def build_agent_input(self, content: str) -> str:
         return build_terminal_agent_input(

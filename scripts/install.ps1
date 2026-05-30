@@ -11,6 +11,17 @@ function Require-Command($Name) {
     }
 }
 
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+    )
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code $LASTEXITCODE`: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 function Get-PythonCommand {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         return @("py", "-3.11")
@@ -26,32 +37,30 @@ $Python = Get-PythonCommand
 $PythonExe = $Python[0]
 $PythonBaseArgs = @($Python | Select-Object -Skip 1)
 
-& $PythonExe @PythonBaseArgs -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
-if ($LASTEXITCODE -ne 0) {
-    throw "Python 3.11+ is required."
-}
+Invoke-Native $PythonExe @PythonBaseArgs -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
 
 New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent), $BinDir | Out-Null
 
 if (Test-Path (Join-Path $InstallDir ".git")) {
     Write-Host "Updating xbot-next in $InstallDir"
-    git -C $InstallDir fetch --depth 1 origin $Branch
-    git -C $InstallDir checkout $Branch
-    git -C $InstallDir pull --ff-only origin $Branch
+    Invoke-Native git -C $InstallDir fetch --depth 1 origin $Branch
+    Invoke-Native git -C $InstallDir checkout $Branch
+    Invoke-Native git -C $InstallDir pull --ff-only origin $Branch
 } else {
     Write-Host "Installing xbot-next to $InstallDir"
     if (Test-Path $InstallDir) {
         Remove-Item -LiteralPath $InstallDir -Recurse -Force
     }
-    git clone --depth 1 --branch $Branch $RepoUrl $InstallDir
+    Invoke-Native git clone --depth 1 --branch $Branch $RepoUrl $InstallDir
 }
 
 Set-Location $InstallDir
 
-& $PythonExe @PythonBaseArgs -m venv .venv
+Invoke-Native $PythonExe @PythonBaseArgs -m venv .venv
 $VenvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
-& $VenvPython -m pip install -U pip
-& $VenvPython -m pip install -e .
+Invoke-Native $VenvPython -m pip install -U pip
+Invoke-Native $VenvPython -m pip install wheel
+Invoke-Native $VenvPython -m pip install --no-build-isolation -e .
 
 if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
     Copy-Item -LiteralPath ".env.example" -Destination ".env"
@@ -59,7 +68,7 @@ if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
 }
 
 try {
-    & $VenvPython -m playwright install chromium
+    Invoke-Native $VenvPython -m playwright install chromium
 } catch {
     Write-Warning "Playwright chromium install failed: $($_.Exception.Message)"
 }
@@ -75,7 +84,7 @@ Set-Content -LiteralPath $CmdPath -Value $CmdContent -Encoding ASCII
 if ($env:XBOT_SKIP_SETUP -ne "1") {
     Write-Host ""
     Write-Host "Starting xbot setup..."
-    & (Join-Path $InstallDir ".venv\Scripts\xbot.exe") setup
+    Invoke-Native (Join-Path $InstallDir ".venv\Scripts\xbot.exe") setup
 }
 
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
