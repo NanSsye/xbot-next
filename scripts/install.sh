@@ -42,6 +42,23 @@ run_git() {
   git "$@"
 }
 
+install_build_tools() {
+  if python -m pip install -U setuptools wheel; then
+    return 0
+  fi
+
+  echo "Current pip index failed to install setuptools/wheel, retrying with PyPI." >&2
+  if python -m pip install -U --index-url https://pypi.org/simple setuptools wheel; then
+    return 0
+  fi
+
+  echo >&2
+  echo "Failed to install build tools. Check your proxy or pip index, then retry:" >&2
+  echo "  python -m pip install -U --index-url https://pypi.org/simple setuptools wheel" >&2
+  echo >&2
+  return 1
+}
+
 update_install_repo() {
   echo "Updating xbot-next in $INSTALL_DIR"
   run_git_network -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
@@ -96,7 +113,7 @@ cd "$INSTALL_DIR"
 "$PYTHON_BIN" -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -U setuptools wheel || echo "Optional setuptools/wheel upgrade failed, continuing." >&2
+install_build_tools
 python -m pip install --no-build-isolation -e .
 
 if [ ! -f .env ] && [ -f .env.example ]; then
