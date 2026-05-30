@@ -96,7 +96,7 @@ cd "$INSTALL_DIR"
 "$PYTHON_BIN" -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
-python -m pip install wheel
+python -m pip install -U setuptools wheel || echo "Optional setuptools/wheel upgrade failed, continuing." >&2
 python -m pip install --no-build-isolation -e .
 
 if [ ! -f .env ] && [ -f .env.example ]; then

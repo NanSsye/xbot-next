@@ -29,6 +29,17 @@ function Invoke-Native {
     }
 }
 
+function Invoke-OptionalNative {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+    )
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Optional command failed, continuing: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 function Get-PythonCommand {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         return @("py", "-3.11")
@@ -108,7 +119,7 @@ Set-Location $InstallDir
 Invoke-Native $PythonExe @PythonBaseArgs -m venv .venv
 $VenvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
 Invoke-Native $VenvPython -m pip install -U pip
-Invoke-Native $VenvPython -m pip install wheel
+Invoke-OptionalNative $VenvPython -m pip install -U setuptools wheel
 Invoke-Native $VenvPython -m pip install --no-build-isolation -e .
 
 if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
