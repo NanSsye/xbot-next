@@ -173,6 +173,7 @@
 - [x] Wiki Knowledge Base 第一阶段完成：新增 `WikiStore`、`wiki.manage`、`/api/v1/agent/wiki`、默认 `data/agent/wiki/xbot/` Markdown 种子；默认不依赖第三方软件，使用 Markdown 页面、目录索引、文件检索和 LLM 维护页面，RAG/向量库仅作为后续派生缓存。
 - [x] Wiki Knowledge Base 第二阶段完成：新增页面合并建议、交叉链接维护、冲突检测、专题 digest、派生 search/RAG index 重建；生成报告写入 `merge-suggestions.md` / `conflicts.md`，派生索引写入 `derived/search-index.json` 且可随时重建。
 - [x] 子代理后台任务第一版完成：新增 `task.agent_start`，支持主 Agent 把完整任务委托给后台子 Agent，先向用户回复任务已开始，子 Agent 完成后通过 background notify 自动回发结果；微信通道也支持子代理完成通知。
+- [x] 子代理主代理编排升级完成：`task.agent_start` 默认进入 `parent_agent` 完成模式，子代理完成后先把结果交回主 Agent 综合上下文整理，再由主 Agent 按原通道回复用户；失败时才兜底使用后台通知直发结果。
 - [x] 微信消息消费并发修复完成：`MessageConsumer` 开始使用 `runtime.concurrency.max_message_tasks` 并发处理消息，同时按 `conversation.concurrency.per_conversation_serial` 默认保持同会话串行，避免一个长任务堵住所有微信消息；生产 `xbot run` 也会写入 `logs/xbot.log` 方便排查。
 - [x] Wechat869 媒体接收第一版完成：新增图片/文件/引用消息附件解析，支持 `SendCdnDownload` 下载引用图片和可 CDN 下载的文件，直接 base64 媒体会保存到 `data/wechat869/media`；Agent 输入会携带 `message_attachments` 与 `quoted_message`，二进制不进数据库，只传本地路径和元数据。
 - [x] 微信 iLink 第二通道第一版完成：新增独立 `wechat_ilink` adapter 和配置段，可单独开启/关闭，也可与 `wechat869` 同时启用；复用旧框架 iLink 长轮询协议收消息，按 `context_token + from_user_id` 文本回发，并把 text/image/file/video/voice item 标准化为统一 `Message`。
@@ -180,7 +181,8 @@
 - [x] 数据库更新自动迁移确认完成：`xbot run` / FastAPI lifespan / CLI Agent 启动前会执行 `ensure_storage_ready()`，默认 `run_migrations_on_startup=true` 自动 `alembic upgrade head`；新增 `XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP` 环境变量用于显式控制，正常软件更新不需要用户手动迁移数据库。
 - [x] 微信统一发送工具第一版完成：新增 `wechat.send_text`、`wechat.send_image`、`wechat.send_file`，Agent 在微信通道内不需要选择协议细节，runtime 会根据 `source=channel:wechat:<adapter>:...` 自动路由；`wechat869` 图片/文件复用现有 869 media skill，`wechat_ilink` 图片/文件通过 iLink upload CDN + media item 协议回发到当前会话。
 - [x] iLink 媒体收发第一版完成：图片/文件发送支持 `/ilink/bot/getuploadurl`、AES-128-ECB 加密上传 CDN、`image_item/file_item` 发送；接收采用“引用触发”策略，用户单独发送 iLink 图片/文件时只记录/暂存不触发 Agent，用户引用媒体提问时下载到 `data/wechat_ilink/media` 并把本地路径放入 `quoted_message`。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，最近结果为 `192 passed`。
+- [x] LLM 请求重试机制完成：`AgentRuntime` 在统一 `_complete_llm_with_retries()` 层处理瞬时失败，支持 `agent.llm.max_attempts` / `XBOT_LLM_MAX_ATTEMPTS` 和 `retry_backoff_seconds`；仅重试超时、网络错误、429/5xx，配置错误和 provider 不可用不重试，并记录 `llm.retry` 事件。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，最近结果为 `194 passed`。
 
 进行中：
 

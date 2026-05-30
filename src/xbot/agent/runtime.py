@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from uuid import uuid4
 
 import anyio
+import httpx
 from pydantic import BaseModel, Field
 
 from xbot.agent.background import BackgroundTaskManager
@@ -114,6 +115,7 @@ class AgentRuntime:
         self._session_histories: dict[str, list[LLMMessage]] = {}
         self._session_summaries: dict[str, str] = {}
         self._suppress_channel_reply_task_ids: set[str] = set()
+        self.background.subscribe(self._on_background_task_completed)
         register_builtin_tools(
             self.tools,
             workspace=self.workspace,
@@ -699,6 +701,65 @@ class AgentRuntime:
         result = await self.run_task(input_text, source=source or "background")
         return result.model_dump(mode="json")
 
+    async def _on_background_task_completed(self, record: BackgroundTaskRecord) -> None:
+        if record.kind != "agent" or record.status not in {"completed", "failed"}:
+            return
+        metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        if metadata.get("notify_mode") != "parent_agent":
+            return
+        notify = metadata.get("notify") if isinstance(metadata.get("notify"), dict) else None
+        if not notify or not self.background.send_reply:
+            return
+        source = self._source_from_notification_target(notify)
+        if not source:
+            return
+        parent_input = self._child_agent_completion_input(record)
+        try:
+            result = await self.run_task(parent_input, source=source)
+            if result.suppress_channel_reply:
+                return
+            content = (result.output or "").strip()
+        except Exception as exc:
+            logger.warning("Parent agent child-result synthesis failed: task_id={} error={}", record.id, exc)
+            content = self.background._notification_content(record)
+        if not content:
+            content = self.background._notification_content(record)
+        if not content:
+            return
+        await self.background.send_reply(
+            Reply(
+                platform=str(notify["platform"]),
+                adapter=str(notify["adapter"]),
+                conversation_id=str(notify["conversation_id"]),
+                type="text",
+                content=content,
+                quote_message_id=notify.get("quote_message_id"),
+            )
+        )
+
+    def _source_from_notification_target(self, notify: dict) -> str:
+        platform = str(notify.get("platform") or "")
+        adapter = str(notify.get("adapter") or "")
+        conversation_id = str(notify.get("conversation_id") or "")
+        if not platform or not adapter or not conversation_id:
+            return ""
+        return f"channel:{platform}:{adapter}:{conversation_id}"
+
+    def _child_agent_completion_input(self, record: BackgroundTaskRecord) -> str:
+        metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        child_output = self.background._notification_content(record)
+        if record.status == "failed":
+            child_output = f"子代理执行失败：{record.error or child_output}"
+        return (
+            "Child agent task completed.\n"
+            "You are the parent agent. Review the child agent result, merge it with the user context, "
+            "and produce the final user-facing reply in Chinese. Do not mention internal task IDs unless the user asks.\n"
+            f"child_task_id: {record.id}\n"
+            f"child_status: {record.status}\n"
+            f"original_user_request: {metadata.get('input') or ''}\n"
+            f"child_result:\n{child_output or '- empty'}\n"
+        )
+
     def _maybe_start_memory_review(
         self,
         *,
@@ -977,13 +1038,12 @@ class AgentRuntime:
                     self.llm_status().get("provider"),
                     self.llm_status().get("model"),
                 )
-                with anyio.fail_after(max(1, int(self.config.llm.timeout_seconds) + 5)):
-                    response = await self._complete_llm(
-                        messages,
-                        task_id=task_id,
-                        iteration=iteration,
-                        source=source,
-                    )
+                response = await self._complete_llm_with_retries(
+                    messages,
+                    task_id=task_id,
+                    iteration=iteration,
+                    source=source,
+                )
             except XBotError as exc:
                 await self._add_event(task_id, "llm.unavailable", {"error": str(exc)})
                 logger.warning("Agent LLM 不可用: task_id={} error={}", task_id, exc)
@@ -1342,6 +1402,65 @@ class AgentRuntime:
             model=str(status.get("model") or ""),
             provider=str(status.get("provider") or "unknown"),
         )
+
+    async def _complete_llm_with_retries(
+        self,
+        messages: list[LLMMessage],
+        *,
+        task_id: str,
+        iteration: int,
+        source: str,
+    ) -> LLMResponse:
+        max_attempts = max(1, int(self.config.llm.max_attempts or 1))
+        base_delay = max(0.0, float(self.config.llm.retry_backoff_seconds or 0.0))
+        for attempt in range(1, max_attempts + 1):
+            try:
+                with anyio.fail_after(max(1, int(self.config.llm.timeout_seconds) + 5)):
+                    return await self._complete_llm(
+                        messages,
+                        task_id=task_id,
+                        iteration=iteration,
+                        source=source,
+                    )
+            except XBotError:
+                raise
+            except Exception as exc:
+                if attempt >= max_attempts or not self._is_retryable_llm_error(exc):
+                    raise
+                delay = base_delay * (2 ** (attempt - 1))
+                await self._add_event(
+                    task_id,
+                    "llm.retry",
+                    {
+                        "iteration": iteration,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "delay_seconds": delay,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                logger.warning(
+                    "Agent LLM 调用失败，准备重试: task_id={} iteration={} attempt={}/{} delay={}s error={}",
+                    task_id,
+                    iteration,
+                    attempt,
+                    max_attempts,
+                    delay,
+                    exc,
+                )
+                if delay > 0:
+                    await anyio.sleep(delay)
+        raise RuntimeError("LLM retry loop exited unexpectedly.")
+
+    def _is_retryable_llm_error(self, exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+        return False
 
     def _append_stream_chunk(self, current: str, chunk: str) -> str:
         if not chunk:

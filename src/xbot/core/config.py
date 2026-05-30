@@ -170,6 +170,8 @@ class AgentLLMConfig(BaseModel):
     model: str = "gpt-4.1-mini"
     context_window_tokens: int | None = None
     timeout_seconds: int = 60
+    max_attempts: int = 3
+    retry_backoff_seconds: float = 1.0
     max_tokens: int = 2000
     temperature: float = 0.2
 
@@ -418,6 +420,14 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("agent", {}).setdefault("llm", {})["model"] = llm_model
     if llm_context_window := env.get("XBOT_LLM_CONTEXT_WINDOW_TOKENS"):
         data.setdefault("agent", {}).setdefault("llm", {})["context_window_tokens"] = _env_int(llm_context_window)
+    if llm_timeout := env.get("XBOT_LLM_TIMEOUT_SECONDS"):
+        data.setdefault("agent", {}).setdefault("llm", {})["timeout_seconds"] = _env_int(llm_timeout)
+    if llm_max_attempts := env.get("XBOT_LLM_MAX_ATTEMPTS"):
+        data.setdefault("agent", {}).setdefault("llm", {})["max_attempts"] = _env_int(llm_max_attempts)
+    if llm_retry_backoff := env.get("XBOT_LLM_RETRY_BACKOFF_SECONDS"):
+        data.setdefault("agent", {}).setdefault("llm", {})["retry_backoff_seconds"] = float(
+            llm_retry_backoff
+        )
     if llm_enabled := env.get("XBOT_LLM_ENABLED"):
         data.setdefault("agent", {}).setdefault("llm", {})["enabled"] = _env_bool(llm_enabled)
     if agent_mode := env.get("XBOT_AGENT_MODE"):

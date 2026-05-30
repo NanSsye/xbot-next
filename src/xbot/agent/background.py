@@ -213,6 +213,8 @@ class BackgroundTaskManager:
                 )
 
     async def _notify_if_needed(self, record: BackgroundTaskRecord) -> None:
+        if record.metadata.get("notify_mode") == "parent_agent":
+            return
         notify = record.metadata.get("notify") if isinstance(record.metadata, dict) else None
         if not notify or not self.send_reply:
             return

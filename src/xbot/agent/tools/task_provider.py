@@ -170,6 +170,7 @@ class TaskToolProvider:
                 "source": source,
                 "ack": str(payload.get("ack") or payload.get("message") or "").strip(),
                 "notify": payload.get("notify") if isinstance(payload.get("notify"), dict) else None,
+                "notify_mode": str(payload.get("notify_mode") or "parent_agent"),
                 "replayable": bool(payload.get("replayable", True)),
             },
         )

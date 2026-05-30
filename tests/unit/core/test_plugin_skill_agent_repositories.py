@@ -10,7 +10,14 @@ from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.llm import LLMMessage, LLMResponse
 from xbot.agent.tools.skill_provider import SkillToolProvider
 from xbot.agent.tool_registry import ToolDefinition
-from xbot.core.config import AgentConfig, AgentToolsetConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
+from xbot.core.config import (
+    AgentConfig,
+    AgentLLMConfig,
+    AgentToolsetConfig,
+    AgentWorkspaceConfig,
+    PluginConfig,
+    SkillConfig,
+)
 from xbot.messaging.models import Message, Reply
 from xbot.plugins.base import PluginBase
 from xbot.plugins.manager import PluginManager
@@ -106,6 +113,25 @@ class FakeFailingStreamingLLMProvider(FakeLLMProvider):
         yield ""
 
 
+class FakeFlakyLLMProvider(FakeLLMProvider):
+    def __init__(self, outcomes):
+        super().__init__(responses=[])
+        self.outcomes = list(outcomes)
+
+    async def complete(self, messages):
+        self.messages.append(messages)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return LLMResponse(
+            content=outcome,
+            model="fake-model",
+            provider="fake",
+            usage={"total_tokens": 3},
+            raw_id="fake-response",
+        )
+
+
 @pytest.mark.anyio
 async def test_agent_runtime_streams_terminal_plain_text_without_persisting_deltas():
     repo = FakeAgentRepository()
@@ -136,6 +162,44 @@ async def test_agent_runtime_streams_terminal_plain_text_without_persisting_delt
     assert [event.type for event in events] == ["llm.delta"]
     assert events[0].content["text"] == "你好，我可以帮你。"
     assert repo.events == []
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_retries_transient_llm_failure():
+    llm = FakeFlakyLLMProvider([TimeoutError("first timeout"), "retry ok"])
+    runtime = AgentRuntime(
+        AgentConfig(llm=AgentLLMConfig(max_attempts=2, retry_backoff_seconds=0)),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+    events = []
+    runtime.subscribe_events(lambda event: events.append(event))
+
+    output = await runtime._run_llm("task-1", "你好")
+
+    assert output == "retry ok"
+    assert len(llm.messages) == 2
+    assert [event.type for event in events].count("llm.retry") == 1
+    retry_event = next(event for event in events if event.type == "llm.retry")
+    assert retry_event.content["attempt"] == 1
+    assert retry_event.content["max_attempts"] == 2
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_returns_timeout_after_retry_attempts_exhausted():
+    llm = FakeFlakyLLMProvider([TimeoutError("one"), TimeoutError("two")])
+    runtime = AgentRuntime(
+        AgentConfig(llm=AgentLLMConfig(max_attempts=2, retry_backoff_seconds=0)),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    output = await runtime._run_llm("task-1", "你好")
+
+    assert output == "LLM provider call timed out, please try again later."
+    assert len(llm.messages) == 2
 
 
 @pytest.mark.anyio
@@ -1662,6 +1726,7 @@ async def test_task_agent_start_runs_child_agent_and_notifies_wechat(tmp_path):
         responses=[
             '{"tool_calls":[{"tool":"task.agent_start","payload":{"input":"写一段说明","ack":"我先安排子代理去写，完成后把结果发你。"}}]}',
             '{"final":"子代理完成：说明已写好。"}',
+            '{"final":"我整理好了：说明已写好。"}',
         ]
     )
 
@@ -1690,11 +1755,13 @@ async def test_task_agent_start_runs_child_agent_and_notifies_wechat(tmp_path):
     assert "任务ID" not in result.output
     assert tasks[0].kind == "agent"
     assert tasks[0].metadata["ack"] == "我先安排子代理去写，完成后把结果发你。"
+    assert tasks[0].metadata["notify_mode"] == "parent_agent"
     assert tasks[0].metadata["notify"]["conversation_id"] == "room@chatroom"
     assert tasks[0].metadata["notify"]["quote_message_id"] == "wx-msg-1"
     assert replies[0].conversation_id == "room@chatroom"
     assert replies[0].quote_message_id == "wx-msg-1"
-    assert replies[0].content == "子代理完成：说明已写好。"
+    assert replies[0].content == "我整理好了：说明已写好。"
+    assert "Child agent task completed" in llm.messages[-1][-1].content
 
 
 @pytest.mark.anyio
