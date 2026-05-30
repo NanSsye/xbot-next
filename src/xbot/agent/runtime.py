@@ -1109,7 +1109,7 @@ class AgentRuntime:
                 self._should_return_after_background(source)
                 or self._has_child_agent_started(tool_results)
             ):
-                output = self._background_started_message(tool_results)
+                output = self._background_started_message(tool_results, plan_final=plan.final)
                 if history_key:
                     self._append_session_turn(history_key, input_text, output)
                 return output
@@ -1462,6 +1462,10 @@ class AgentRuntime:
             enriched = dict(payload)
             if "input" not in enriched:
                 enriched["input"] = self._actual_user_request_text(input_text)
+            if "ack" not in enriched and "message" not in enriched:
+                final_text = str(enriched.get("final") or "").strip()
+                if final_text:
+                    enriched["ack"] = final_text
             if not isinstance(enriched.get("notify"), dict):
                 notify = self._notification_target(source, input_text, include_wechat=True)
                 if notify:
@@ -1529,7 +1533,10 @@ class AgentRuntime:
             and str(payload.get("action") or "") == "send-text"
         )
 
-    def _background_started_message(self, tool_results: list[dict]) -> str:
+    def _background_started_message(self, tool_results: list[dict], *, plan_final: str = "") -> str:
+        cleaned_final = self.planner.clean_final_output(plan_final or "").strip()
+        if cleaned_final:
+            return cleaned_final
         task_ids = []
         has_child_agent = False
         for result in tool_results:
@@ -1538,8 +1545,15 @@ class AgentRuntime:
             if result.get("tool") == "task.agent_start":
                 has_child_agent = True
             output = result.get("output")
+            if isinstance(output, dict):
+                metadata = output.get("metadata") if isinstance(output.get("metadata"), dict) else {}
+                ack = str(metadata.get("ack") or metadata.get("message") or "").strip()
+                if ack:
+                    return ack
             if isinstance(output, dict) and output.get("id"):
                 task_ids.append(str(output["id"]))
+        if has_child_agent:
+            return "我先安排子代理继续处理，完成后会把结果发回来。"
         prefix = "子代理任务" if has_child_agent else "后台任务"
         if task_ids:
             return f"{prefix}已开始，完成后会自动回发结果。任务ID：{', '.join(task_ids)}"
@@ -1623,7 +1637,7 @@ class AgentRuntime:
             "- If the user asks about installed commands, browser availability, ports, proxies, or runtime environment, call environment.snapshot or environment.which first.\n"
             "- Tools marked with metadata.background_candidate are good candidates for task.start when the request may take time or the user does not need an immediate result.\n"
             "- For long-running screenshots, browser interactions, downloads, GitHub Actions logs, or skill execution, prefer task.start so the request can run in the background.\n"
-            "- For longer multi-step work where the user can receive an immediate acknowledgement and a later result, prefer task.agent_start to delegate a full child Agent task in the background.\n"
+            "- For longer multi-step work where the user can receive an immediate acknowledgement and a later result, prefer task.agent_start to delegate a full child Agent task in the background. When using task.agent_start, include an ack/message in your own voice for the user; do not rely on a system-generated task-id notice.\n"
             "- If a tool result contains fallback guidance or suggested_tool, use that guidance before retrying.\n"
             "- Use memory.add proactively for durable user preferences, corrections, stable environment facts, and project conventions. Keep entries compact. Do not save temporary task progress.\n"
             "- If the user changes your name, identity, persona, or 'soul', save it to memory target=memory, not target=user. target=user is only for facts about the user.\n"

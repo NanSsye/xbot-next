@@ -1660,7 +1660,7 @@ async def test_task_agent_start_runs_child_agent_and_notifies_wechat(tmp_path):
     replies = []
     llm = FakeLLMProvider(
         responses=[
-            '{"tool_calls":[{"tool":"task.agent_start","payload":{"input":"写一段说明"}}]}',
+            '{"tool_calls":[{"tool":"task.agent_start","payload":{"input":"写一段说明","ack":"我先安排子代理去写，完成后把结果发你。"}}]}',
             '{"final":"子代理完成：说明已写好。"}',
         ]
     )
@@ -1686,8 +1686,10 @@ async def test_task_agent_start_runs_child_agent_and_notifies_wechat(tmp_path):
         await anyio.sleep(0.02)
 
     tasks = runtime.background.list()
-    assert result.output.startswith("子代理任务已开始")
+    assert result.output == "我先安排子代理去写，完成后把结果发你。"
+    assert "任务ID" not in result.output
     assert tasks[0].kind == "agent"
+    assert tasks[0].metadata["ack"] == "我先安排子代理去写，完成后把结果发你。"
     assert tasks[0].metadata["notify"]["conversation_id"] == "room@chatroom"
     assert tasks[0].metadata["notify"]["quote_message_id"] == "wx-msg-1"
     assert replies[0].conversation_id == "room@chatroom"

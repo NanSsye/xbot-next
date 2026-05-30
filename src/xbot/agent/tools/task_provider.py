@@ -88,6 +88,8 @@ class TaskToolProvider:
                         "input": {"type": "string"},
                         "source": {"type": "string", "default": "background"},
                         "description": {"type": "string"},
+                        "ack": {"type": "string"},
+                        "message": {"type": "string"},
                         "notify": {"type": "object"},
                         "replayable": {"type": "boolean", "default": True},
                     },
@@ -166,6 +168,7 @@ class TaskToolProvider:
             metadata={
                 "input": input_text,
                 "source": source,
+                "ack": str(payload.get("ack") or payload.get("message") or "").strip(),
                 "notify": payload.get("notify") if isinstance(payload.get("notify"), dict) else None,
                 "replayable": bool(payload.get("replayable", True)),
             },
