@@ -63,12 +63,13 @@ Linux/macOS/WSL：
 XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
 ```
 
-安装器会把项目安装到用户目录，创建 `.venv`、复制 `.env.example` 为 `.env`，生成全局 `xbot` 命令，并在首次安装完成后自动进入 `xbot setup` 配置向导：
+安装器只用于首次安装。它会把项目安装到用户目录，创建 `.venv`、复制 `.env.example` 为 `.env`，生成全局 `xbot` / `xbot-upgrade` 命令，并在首次安装完成后自动进入 `xbot setup` 配置向导：
 
 ```bat
 xbot setup  # 配置模型、数据库、队列和微信通道
 xbot        # 进入终端 TUI
 xbot run    # 启动后端服务和通道
+xbot-upgrade  # 升级已有安装
 ```
 
 `xbot setup` 支持两种运行模式：
@@ -94,19 +95,35 @@ Windows PowerShell：
 $env:XBOT_SKIP_SETUP="1"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
 ```
 
-升级使用同一个安装命令，脚本会更新已有安装目录并保留 `.env`：
+### 单独升级
+
+升级不要再使用安装命令。升级脚本只更新代码和依赖，不初始化配置，不覆盖 `.env`，不删除 `data/`、`logs/`、本地数据库、上传文件和运行期生成的 skill。
+
+已安装过的用户直接运行：
+
+```bat
+xbot-upgrade
+```
+
+或者：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.sh | bash
 ```
 
 Windows PowerShell：
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
+iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.ps1)
 ```
 
-安装目录如果出现本地改动或本地提交与远端分叉，升级器会先创建 `xbot-local-backup-时间戳` 备份分支，再把安装目录代码对齐到远端版本；`.env` 和未跟踪的运行数据不会被删除。
+代理环境：
+
+```powershell
+$env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.ps1)
+```
+
+安装目录如果出现本地改动或本地提交与远端分叉，升级器会先创建 `xbot-local-backup-时间戳` 备份分支，并把未提交改动放入 git stash，再把安装目录代码对齐到远端版本；不会执行 `git clean`，所以 `.env` 和未跟踪的运行数据不会被删除。
 
 可选环境变量：
 

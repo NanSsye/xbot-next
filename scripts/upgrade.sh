@@ -26,20 +26,14 @@ need_cmd() {
   fi
 }
 
-need_cmd git
-
 run_git_network() {
   if ! git "$@"; then
     echo >&2
     echo "GitHub connection failed. If your network needs a proxy, retry with:" >&2
-    echo '  XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash' >&2
+    echo '  XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.sh | bash' >&2
     echo >&2
     return 1
   fi
-}
-
-run_git() {
-  git "$@"
 }
 
 install_build_tools() {
@@ -60,7 +54,8 @@ install_build_tools() {
 }
 
 update_install_repo() {
-  echo "Updating xbot-next in $INSTALL_DIR"
+  echo "Upgrading xbot-next in $INSTALL_DIR"
+  echo "Protected user data: .env, data/, logs/, local database files, untracked uploads and generated skills."
   run_git_network -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
 
   local remote_ref="origin/$BRANCH"
@@ -71,17 +66,25 @@ update_install_repo() {
 
   if [ "$local_head" != "$remote_head" ] || [ -n "$status" ]; then
     backup_branch="xbot-local-backup-$(date +%Y%m%d%H%M%S)"
-    run_git -C "$INSTALL_DIR" branch "$backup_branch" HEAD
+    git -C "$INSTALL_DIR" branch "$backup_branch" HEAD
     echo "Install repo has local changes or diverged commits." >&2
     echo "Backed up current HEAD to branch $backup_branch, then upgrading to $remote_ref." >&2
     if [ -n "$status" ]; then
-      run_git -C "$INSTALL_DIR" stash push -m "xbot install backup before upgrade" || true
+      git -C "$INSTALL_DIR" stash push -m "xbot upgrade backup before reset" || true
     fi
-    run_git -C "$INSTALL_DIR" reset --hard
+    git -C "$INSTALL_DIR" reset --hard
   fi
 
-  run_git -C "$INSTALL_DIR" checkout -B "$BRANCH" "$remote_ref"
+  git -C "$INSTALL_DIR" checkout -B "$BRANCH" "$remote_ref"
 }
+
+need_cmd git
+
+if [ ! -d "$INSTALL_DIR/.git" ]; then
+  echo "xbot is not installed as a git checkout at $INSTALL_DIR." >&2
+  echo "Run install.sh for first install; upgrade will not overwrite this directory." >&2
+  exit 1
+fi
 
 if command -v python3.11 >/dev/null 2>&1; then
   PYTHON_BIN="$(command -v python3.11)"
@@ -98,32 +101,21 @@ if sys.version_info < (3, 11):
     raise SystemExit("Python 3.11+ is required.")
 PY
 
-mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
-
-if [ -e "$INSTALL_DIR" ]; then
-  echo "Install directory already exists: $INSTALL_DIR" >&2
-  echo "Use upgrade.sh or xbot-upgrade for upgrades. install.sh will not overwrite existing user data." >&2
-  exit 1
-fi
-
-echo "Installing xbot-next to $INSTALL_DIR"
-run_git_network clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
-
+update_install_repo
 cd "$INSTALL_DIR"
+
+if [ ! -f .env ]; then
+  echo ".env not found. Upgrade will not create or overwrite user config; run xbot setup if you need to initialize config." >&2
+fi
 
 "$PYTHON_BIN" -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
 install_build_tools
 python -m pip install --no-build-isolation -e .
-
-if [ ! -f .env ] && [ -f .env.example ]; then
-  cp .env.example .env
-  echo "Created $INSTALL_DIR/.env from .env.example"
-fi
-
 python -m playwright install chromium || true
 
+mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/xbot" <<EOF
 #!/usr/bin/env bash
 set -e
@@ -139,48 +131,9 @@ exec "$INSTALL_DIR/scripts/upgrade.sh" "\$@"
 EOF
 chmod +x "$BIN_DIR/xbot-upgrade"
 
-if [ "${XBOT_SKIP_SETUP:-0}" != "1" ]; then
-  echo
-  echo "Starting xbot setup..."
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    "$INSTALL_DIR/.venv/bin/xbot" setup < /dev/tty
-  else
-    "$INSTALL_DIR/.venv/bin/xbot" setup --yes
-  fi
-fi
-
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *)
-    SHELL_RC=""
-    if [ -n "${ZSH_VERSION:-}" ]; then
-      SHELL_RC="$HOME/.zshrc"
-    elif [ -n "${BASH_VERSION:-}" ]; then
-      SHELL_RC="$HOME/.bashrc"
-    elif [ -f "$HOME/.profile" ]; then
-      SHELL_RC="$HOME/.profile"
-    fi
-    if [ -n "$SHELL_RC" ] && [ -w "$(dirname "$SHELL_RC")" ]; then
-      touch "$SHELL_RC"
-      if ! grep -F "$BIN_DIR" "$SHELL_RC" >/dev/null 2>&1; then
-        printf '\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$SHELL_RC"
-        echo "Added $BIN_DIR to PATH in $SHELL_RC"
-      fi
-    fi
-    export PATH="$BIN_DIR:$PATH"
-    ;;
-esac
-
 echo
-echo "xbot installed."
+echo "xbot upgraded."
 echo "Install dir: $INSTALL_DIR"
+echo "Protected: .env and user data were not overwritten or deleted."
 echo "Command: $BIN_DIR/xbot"
-echo "Upgrade: xbot-upgrade"
-echo "Upgrade script: curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.sh | bash"
-echo 'Upgrade with proxy: XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.sh | bash'
-echo
-echo "Next steps:"
-echo "  1. Edit $INSTALL_DIR/.env if needed"
-echo "  2. Open a new terminal if xbot is not on PATH yet"
-echo "  3. Run: xbot        # enter TUI"
-echo "  4. Run: xbot run    # start backend service"
+echo "Upgrade command: $BIN_DIR/xbot-upgrade"

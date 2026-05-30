@@ -29,17 +29,6 @@ function Invoke-Native {
     }
 }
 
-function Invoke-OptionalNative {
-    param(
-        [Parameter(Mandatory = $true)][string]$FilePath,
-        [string[]]$Arguments = @()
-    )
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Optional command failed, continuing: $FilePath $($Arguments -join ' ')"
-    }
-}
-
 function Install-BuildTools {
     param(
         [Parameter(Mandatory = $true)][string]$PythonPath
@@ -92,14 +81,15 @@ function Invoke-GitNetwork {
         Write-Host ""
         Write-Warning "GitHub 连接失败。国内网络通常需要代理。"
         Write-Host "PowerShell 示例："
-        Write-Host '  $env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)'
+        Write-Host '  $env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.ps1)'
         Write-Host ""
         throw
     }
 }
 
 function Update-InstallRepo {
-    Write-Host "Updating xbot-next in $InstallDir"
+    Write-Host "Upgrading xbot-next in $InstallDir"
+    Write-Host "Protected user data: .env, data/, logs/, local database files, untracked uploads and generated skills."
     Invoke-GitNetwork -Arguments @("-C", $InstallDir, "fetch", "--depth", "1", "origin", $Branch)
 
     $RemoteRef = "origin/$Branch"
@@ -112,7 +102,7 @@ function Update-InstallRepo {
         Invoke-Git -Arguments @("-C", $InstallDir, "branch", $BackupBranch, "HEAD")
         Write-Warning "安装目录存在本地改动或分叉提交，已备份到分支 $BackupBranch，然后按远端 $RemoteRef 升级。"
         if ($Status) {
-            Invoke-Git -Arguments @("-C", $InstallDir, "stash", "push", "-m", "xbot install backup before upgrade")
+            Invoke-Git -Arguments @("-C", $InstallDir, "stash", "push", "-m", "xbot upgrade backup before reset")
         }
         Invoke-Git -Arguments @("-C", $InstallDir, "reset", "--hard")
     }
@@ -121,23 +111,23 @@ function Update-InstallRepo {
 }
 
 Require-Command git
+
+if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
+    throw "xbot is not installed as a git checkout at $InstallDir. Run install.ps1 for first install; upgrade will not overwrite this directory."
+}
+
 $Python = Get-PythonCommand
 $PythonExe = $Python[0]
 $PythonBaseArgs = @($Python | Select-Object -Skip 1)
-
 $VersionArgs = @($PythonBaseArgs) + @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)")
 Invoke-Native -FilePath $PythonExe -Arguments $VersionArgs
 
-New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent), $BinDir | Out-Null
-
-if (Test-Path $InstallDir) {
-    throw "Install directory already exists: $InstallDir. Use upgrade.ps1 or xbot-upgrade for upgrades. install.ps1 will not overwrite existing user data."
-}
-
-Write-Host "Installing xbot-next to $InstallDir"
-Invoke-GitNetwork -Arguments @("clone", "--depth", "1", "--branch", $Branch, $RepoUrl, $InstallDir)
-
+Update-InstallRepo
 Set-Location $InstallDir
+
+if (-not (Test-Path ".env")) {
+    Write-Warning ".env not found. Upgrade will not create or overwrite user config; run xbot setup if you need to initialize config."
+}
 
 $VenvArgs = @($PythonBaseArgs) + @("-m", "venv", ".venv")
 Invoke-Native -FilePath $PythonExe -Arguments $VenvArgs
@@ -146,17 +136,13 @@ Invoke-Native -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-U", "
 Install-BuildTools -PythonPath $VenvPython
 Invoke-Native -FilePath $VenvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "-e", ".")
 
-if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
-    Copy-Item -LiteralPath ".env.example" -Destination ".env"
-    Write-Host "Created $InstallDir\.env from .env.example"
-}
-
 try {
     Invoke-Native -FilePath $VenvPython -Arguments @("-m", "playwright", "install", "chromium")
 } catch {
     Write-Warning "Playwright chromium install failed: $($_.Exception.Message)"
 }
 
+New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $CmdPath = Join-Path $BinDir "xbot.cmd"
 $CmdContent = @"
 @echo off
@@ -172,34 +158,9 @@ powershell -ExecutionPolicy Bypass -File "$InstallDir\scripts\upgrade.ps1" %*
 "@
 Set-Content -LiteralPath $UpgradeCmdPath -Value $UpgradeCmdContent -Encoding ASCII
 
-if ($env:XBOT_SKIP_SETUP -ne "1") {
-    Write-Host ""
-    Write-Host "Starting xbot setup..."
-    Invoke-Native -FilePath (Join-Path $InstallDir ".venv\Scripts\xbot.exe") -Arguments @("setup")
-}
-
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-$PathParts = @()
-if ($UserPath) {
-    $PathParts = $UserPath -split ";"
-}
-if ($PathParts -notcontains $BinDir) {
-    $NextPath = if ($UserPath) { "$UserPath;$BinDir" } else { $BinDir }
-    [Environment]::SetEnvironmentVariable("Path", $NextPath, "User")
-    $env:Path = "$env:Path;$BinDir"
-    Write-Host "Added $BinDir to user PATH"
-}
-
 Write-Host ""
-Write-Host "xbot installed."
+Write-Host "xbot upgraded."
 Write-Host "Install dir: $InstallDir"
+Write-Host "Protected: .env and user data were not overwritten or deleted."
 Write-Host "Command: $CmdPath"
-Write-Host "Upgrade: xbot-upgrade"
-Write-Host "Upgrade script: iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.ps1)"
-Write-Host 'Upgrade with proxy: $env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.ps1)'
-Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  1. Edit $InstallDir\.env if needed"
-Write-Host "  2. Open a new terminal if xbot is not on PATH yet"
-Write-Host "  3. Run: xbot        # enter TUI"
-Write-Host "  4. Run: xbot run    # start backend service"
+Write-Host "Upgrade command: $UpgradeCmdPath"

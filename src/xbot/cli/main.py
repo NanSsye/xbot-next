@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import platform
+import subprocess
+
 import uvicorn
 import typer
 from alembic import command
@@ -60,6 +64,28 @@ def setup(
     yes: bool = typer.Option(False, "--yes", "-y", help="Use defaults without prompting."),
 ) -> None:
     run_setup(profile=profile, wechat=wechat, env_path=env_path, yes=yes)
+
+
+@app.command("upgrade")
+def upgrade() -> None:
+    """Upgrade an installed xbot checkout without overwriting user data."""
+
+    root = Path(__file__).resolve().parents[3]
+    if platform.system().lower().startswith("windows"):
+        script = root / "scripts" / "upgrade.ps1"
+        cmd = [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+        ]
+    else:
+        script = root / "scripts" / "upgrade.sh"
+        cmd = ["bash", str(script)]
+    if not script.exists():
+        raise typer.BadParameter(f"upgrade script not found: {script}")
+    raise typer.Exit(subprocess.call(cmd, env=os.environ.copy()))
 
 
 @app.command()
