@@ -54,7 +54,7 @@ function Invoke-Git {
     param(
         [string[]]$Arguments = @()
     )
-    Invoke-Native "git" $Arguments
+    Invoke-Native -FilePath "git" -Arguments $Arguments
 }
 
 function Invoke-GitNetwork {
@@ -62,7 +62,7 @@ function Invoke-GitNetwork {
         [string[]]$Arguments = @()
     )
     try {
-        Invoke-Native "git" $Arguments
+        Invoke-Native -FilePath "git" -Arguments $Arguments
     } catch {
         Write-Host ""
         Write-Warning "GitHub 连接失败。国内网络通常需要代理。"
@@ -75,7 +75,7 @@ function Invoke-GitNetwork {
 
 function Update-InstallRepo {
     Write-Host "Updating xbot-next in $InstallDir"
-    Invoke-GitNetwork @("-C", $InstallDir, "fetch", "--depth", "1", "origin", $Branch)
+    Invoke-GitNetwork -Arguments @("-C", $InstallDir, "fetch", "--depth", "1", "origin", $Branch)
 
     $RemoteRef = "origin/$Branch"
     $LocalHead = (& git -C $InstallDir rev-parse HEAD).Trim()
@@ -84,15 +84,15 @@ function Update-InstallRepo {
 
     if (($LocalHead -ne $RemoteHead) -or $Status) {
         $BackupBranch = "xbot-local-backup-$(Get-Date -Format 'yyyyMMddHHmmss')"
-        Invoke-Git @("-C", $InstallDir, "branch", $BackupBranch, "HEAD")
+        Invoke-Git -Arguments @("-C", $InstallDir, "branch", $BackupBranch, "HEAD")
         Write-Warning "安装目录存在本地改动或分叉提交，已备份到分支 $BackupBranch，然后按远端 $RemoteRef 升级。"
         if ($Status) {
-            Invoke-Git @("-C", $InstallDir, "stash", "push", "-m", "xbot install backup before upgrade")
+            Invoke-Git -Arguments @("-C", $InstallDir, "stash", "push", "-m", "xbot install backup before upgrade")
         }
-        Invoke-Git @("-C", $InstallDir, "reset", "--hard")
+        Invoke-Git -Arguments @("-C", $InstallDir, "reset", "--hard")
     }
 
-    Invoke-Git @("-C", $InstallDir, "checkout", "-B", $Branch, $RemoteRef)
+    Invoke-Git -Arguments @("-C", $InstallDir, "checkout", "-B", $Branch, $RemoteRef)
 }
 
 Require-Command git
@@ -101,7 +101,7 @@ $PythonExe = $Python[0]
 $PythonBaseArgs = @($Python | Select-Object -Skip 1)
 
 $VersionArgs = @($PythonBaseArgs) + @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)")
-Invoke-Native $PythonExe $VersionArgs
+Invoke-Native -FilePath $PythonExe -Arguments $VersionArgs
 
 New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent), $BinDir | Out-Null
 
@@ -112,17 +112,17 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
     if (Test-Path $InstallDir) {
         Remove-Item -LiteralPath $InstallDir -Recurse -Force
     }
-    Invoke-GitNetwork @("clone", "--depth", "1", "--branch", $Branch, $RepoUrl, $InstallDir)
+    Invoke-GitNetwork -Arguments @("clone", "--depth", "1", "--branch", $Branch, $RepoUrl, $InstallDir)
 }
 
 Set-Location $InstallDir
 
 $VenvArgs = @($PythonBaseArgs) + @("-m", "venv", ".venv")
-Invoke-Native $PythonExe $VenvArgs
+Invoke-Native -FilePath $PythonExe -Arguments $VenvArgs
 $VenvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
-Invoke-Native $VenvPython @("-m", "pip", "install", "-U", "pip")
-Invoke-OptionalNative $VenvPython @("-m", "pip", "install", "-U", "setuptools", "wheel")
-Invoke-Native $VenvPython @("-m", "pip", "install", "--no-build-isolation", "-e", ".")
+Invoke-Native -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-U", "pip")
+Invoke-OptionalNative -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-U", "setuptools", "wheel")
+Invoke-Native -FilePath $VenvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "-e", ".")
 
 if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
     Copy-Item -LiteralPath ".env.example" -Destination ".env"
@@ -130,7 +130,7 @@ if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
 }
 
 try {
-    Invoke-Native $VenvPython @("-m", "playwright", "install", "chromium")
+    Invoke-Native -FilePath $VenvPython -Arguments @("-m", "playwright", "install", "chromium")
 } catch {
     Write-Warning "Playwright chromium install failed: $($_.Exception.Message)"
 }
@@ -146,7 +146,7 @@ Set-Content -LiteralPath $CmdPath -Value $CmdContent -Encoding ASCII
 if ($env:XBOT_SKIP_SETUP -ne "1") {
     Write-Host ""
     Write-Host "Starting xbot setup..."
-    Invoke-Native (Join-Path $InstallDir ".venv\Scripts\xbot.exe") @("setup")
+    Invoke-Native -FilePath (Join-Path $InstallDir ".venv\Scripts\xbot.exe") -Arguments @("setup")
 }
 
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
