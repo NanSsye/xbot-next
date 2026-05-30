@@ -1403,26 +1403,10 @@ def test_agent_static_prompt_cache_keeps_dynamic_time_separate():
     assert "Current runtime time" not in runtime._static_prompt_cache[1]
 
 
-def test_agent_current_state_detection_uses_channel_content_only():
-    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None)
-    channel_input = (
-        "Channel message received.\n"
-        "conversation_summaries:\n- none\n"
-        "recent_conversation_messages:\n- none\n"
-        "content: 打开浏览器截图发群里\n"
-        "If the content asks about real project files, directories, plugins, skills, config, or runtime state, use tools before answering."
-    )
-
-    assert runtime._request_requires_current_state_tool(channel_input) is False
-
-
 @pytest.mark.anyio
-async def test_agent_runtime_stops_after_repeated_missing_tool_calls(tmp_path):
+async def test_agent_runtime_does_not_force_tool_call_failure_for_plain_final(tmp_path):
     llm = FakeLLMProvider(
         responses=[
-            '{"final":"正在查看 skill 目录..."}',
-            '{"final":"正在查看 skill 目录..."}',
-            '{"final":"正在查看 skill 目录..."}',
             '{"final":"正在查看 skill 目录..."}',
         ]
     )
@@ -1434,8 +1418,8 @@ async def test_agent_runtime_stops_after_repeated_missing_tool_calls(tmp_path):
 
     result = await runtime.run_task("列出skill目录所有skill名称", source="test")
 
-    assert "连续没有发起工具调用" in result.output
-    assert len(llm.messages) == 4
+    assert result.output == "正在查看 skill 目录..."
+    assert len(llm.messages) == 1
 
 
 @pytest.mark.anyio
@@ -1630,7 +1614,7 @@ async def test_agent_runtime_reprompts_after_empty_final_and_then_uses_tool(tmp_
 
 
 @pytest.mark.anyio
-async def test_agent_runtime_reprompts_after_premature_final_and_then_uses_tool(tmp_path):
+async def test_agent_runtime_accepts_plain_final_without_forcing_tool_call(tmp_path):
     target_dir = tmp_path / "skills"
     target_dir.mkdir()
     (target_dir / "code_assistant").mkdir()
@@ -1649,8 +1633,8 @@ async def test_agent_runtime_reprompts_after_premature_final_and_then_uses_tool(
 
     result = await runtime.run_task("列出skill目录所有skill名称", source="test")
 
-    assert result.output == "当前 skill 有 code_assistant"
-    assert len(llm.messages) == 3
+    assert result.output == "正在查看 skill 目录..."
+    assert len(llm.messages) == 1
 
 
 @pytest.mark.anyio

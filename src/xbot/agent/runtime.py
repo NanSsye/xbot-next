@@ -1021,7 +1021,6 @@ class AgentRuntime:
             messages.extend(self._session_history(history_key))
         messages.append(LLMMessage(role="user", content=input_text))
         last_content = ""
-        used_tool = False
         iteration = 0
         missing_tool_reprompts = 0
         while True:
@@ -1092,7 +1091,6 @@ class AgentRuntime:
                     or
                     self.planner.is_empty_final_response(response.content)
                     or not cleaned.strip()
-                    or self._must_continue_for_missing_tool(input_text, cleaned, used_tool)
                 ):
                     if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
                         output = "这个请求需要继续调用工具，但已达到配置的工具循环上限。"
@@ -1106,7 +1104,7 @@ class AgentRuntime:
                             task_id,
                             missing_tool_reprompts,
                         )
-                        output = "这个请求需要调用工具读取当前状态，但模型连续没有发起工具调用，请换一种更明确的说法再试。"
+                        output = "模型连续返回空内容或不完整的工具调用，请换一种更明确的说法再试。"
                         if history_key:
                             self._append_session_turn(history_key, input_text, output)
                         return output
@@ -1149,7 +1147,6 @@ class AgentRuntime:
                     task_id=task_id,
                     source="agent",
                 )
-                used_tool = True
                 if tool_name in {"task.start", "task.agent_start"} and result.status == "completed":
                     background_started = True
                 if (
@@ -1185,11 +1182,6 @@ class AgentRuntime:
                 )
             )
             iteration += 1
-        if self._request_requires_current_state_tool(input_text) and not used_tool:
-            output = "这个请求需要读取当前项目状态，但我没有成功调用工具，请稍后重试。"
-            if history_key:
-                self._append_session_turn(history_key, input_text, output)
-            return output
         cleaned = self.planner.clean_final_output(last_content)
         output = cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
         if history_key:
@@ -1511,43 +1503,6 @@ class AgentRuntime:
         if len(stripped) < 24 and not re.search(r"[。！？.!?\n]", stripped):
             return "wait"
         return "show"
-
-    def _must_continue_for_missing_tool(self, input_text: str, output: str, used_tool: bool) -> bool:
-        if used_tool:
-            return False
-        if not self._request_requires_current_state_tool(input_text):
-            return False
-        if not output.strip():
-            return True
-        transitional_patterns = (
-            r"正在.*(查看|读取|检查|列出|获取|查询)",
-            r"我(先|将|会|来).*(查看|读取|检查|列出|获取|查询)",
-            r"(稍等|请稍等|马上|现在).*(查看|读取|检查|列出|获取|查询)",
-        )
-        if any(re.search(pattern, output) for pattern in transitional_patterns):
-            return True
-        return True
-
-    def _request_requires_current_state_tool(self, input_text: str) -> bool:
-        text = self._actual_user_request_text(input_text).lower()
-        current_state_terms = (
-            "目录",
-            "文件",
-            "插件",
-            "plugin",
-            "plugins",
-            "skill",
-            "skills",
-            "配置",
-            "日志",
-            "运行状态",
-            "当前项目",
-            "列出",
-            "读取",
-            "查看",
-            "检查",
-        )
-        return any(term in text for term in current_state_terms)
 
     def _actual_user_request_text(self, input_text: str) -> str:
         match = re.search(r"(?m)^content:\s*(.*)$", input_text)

@@ -182,7 +182,8 @@
 - [x] 微信统一发送工具第一版完成：新增 `wechat.send_text`、`wechat.send_image`、`wechat.send_file`，Agent 在微信通道内不需要选择协议细节，runtime 会根据 `source=channel:wechat:<adapter>:...` 自动路由；`wechat869` 图片/文件复用现有 869 media skill，`wechat_ilink` 图片/文件通过 iLink upload CDN + media item 协议回发到当前会话。
 - [x] iLink 媒体收发第一版完成：图片/文件发送支持 `/ilink/bot/getuploadurl`、AES-128-ECB 加密上传 CDN、`image_item/file_item` 发送；接收采用“引用触发”策略，用户单独发送 iLink 图片/文件时只记录/暂存不触发 Agent，用户引用媒体提问时下载到 `data/wechat_ilink/media` 并把本地路径放入 `quoted_message`。
 - [x] LLM 请求重试机制完成：`AgentRuntime` 在统一 `_complete_llm_with_retries()` 层处理瞬时失败，支持 `agent.llm.max_attempts` / `XBOT_LLM_MAX_ATTEMPTS` 和 `retry_backoff_seconds`；仅重试超时、网络错误、429/5xx，配置错误和 provider 不可用不重试，并记录 `llm.retry` 事件。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，最近结果为 `194 passed`。
+- [x] Agent 工具调用容错优化完成：移除“模型连续没有发起工具调用”的硬中断判断，不再因为请求文本命中目录/文件/插件/日志等关键词就强制失败；模型返回普通 final 时按正常回复处理，只对空内容或不完整工具 JSON 继续追问。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，最近结果为 `193 passed`。
 
 进行中：
 
