@@ -11,7 +11,7 @@ from xbot.agent.llm import LLMMessage, LLMResponse
 from xbot.agent.tools.skill_provider import SkillToolProvider
 from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import AgentConfig, AgentToolsetConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
-from xbot.messaging.models import Message
+from xbot.messaging.models import Message, Reply
 from xbot.plugins.base import PluginBase
 from xbot.plugins.manager import PluginManager
 from xbot.skills.manager import SkillManager
@@ -1656,6 +1656,46 @@ async def test_task_start_runs_tool_in_background(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_task_agent_start_runs_child_agent_and_notifies_wechat(tmp_path):
+    replies = []
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"task.agent_start","payload":{"input":"写一段说明"}}]}',
+            '{"final":"子代理完成：说明已写好。"}',
+        ]
+    )
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    runtime.attach_reply_sender(send_reply)
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: wx-msg-1\ncontent: 写一段说明",
+        source="channel:wechat:wechat869:room@chatroom",
+    )
+
+    for _ in range(50):
+        if replies:
+            break
+        await anyio.sleep(0.02)
+
+    tasks = runtime.background.list()
+    assert result.output.startswith("子代理任务已开始")
+    assert tasks[0].kind == "agent"
+    assert tasks[0].metadata["notify"]["conversation_id"] == "room@chatroom"
+    assert tasks[0].metadata["notify"]["quote_message_id"] == "wx-msg-1"
+    assert replies[0].conversation_id == "room@chatroom"
+    assert replies[0].quote_message_id == "wx-msg-1"
+    assert replies[0].content == "子代理完成：说明已写好。"
+
+
+@pytest.mark.anyio
 async def test_background_task_persists_and_sends_completion_reply(tmp_path):
     repo = FakeAgentRepository()
     replies = []
@@ -1847,6 +1887,183 @@ async def test_channel_send_text_skill_does_not_start_background(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_wechat_send_text_routes_to_current_channel(tmp_path):
+    replies = []
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"wechat.send_text","payload":{"text":"主动发送"}}]}',
+            '{"final":"已发送。"}',
+        ]
+    )
+    runtime = AgentRuntime(
+        AgentConfig(
+            workspace_root=str(tmp_path),
+            workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        ),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    async def fake_send_reply(reply):
+        replies.append(reply)
+
+    runtime.attach_reply_sender(fake_send_reply)
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: msg-1\ncontent: 发送文字",
+        source="channel:wechat:wechat_ilink:ilink:u1",
+    )
+
+    assert result.output == "已发送。"
+    assert result.suppress_channel_reply is True
+    assert replies == [
+        Reply(
+            platform="wechat",
+            adapter="wechat_ilink",
+            conversation_id="ilink:u1",
+            type="text",
+            content="主动发送",
+            quote_message_id="msg-1",
+        )
+    ]
+    assert len(llm.messages) == 1
+
+
+@pytest.mark.anyio
+async def test_wechat_send_image_routes_869_to_media_skill(tmp_path):
+    calls = []
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"wechat.send_image","payload":{"path":"out.png"}}]}',
+            '{"final":"已发送图片。"}',
+        ]
+    )
+    runtime = AgentRuntime(
+        AgentConfig(
+            workspace_root=str(tmp_path),
+            workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        ),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    async def fake_run_skill(payload):
+        calls.append(payload)
+        return {"output": "ok"}
+
+    runtime.skill_tools.run_skill = fake_run_skill
+
+    result = await runtime.run_task(
+        "Channel message received.\nreply_target_wxid: room@chatroom\ncontent: 发图片",
+        source="channel:wechat:wechat869:wechat:wechat869:group:room@chatroom",
+    )
+
+    assert result.output == "已发送图片。"
+    assert result.suppress_channel_reply is False
+    assert calls[0]["skill"] == "wechat-869-media-sender"
+    assert calls[0]["action"] == "send-image"
+    assert calls[0]["args"]["to"] == "room@chatroom"
+    assert calls[0]["args"]["path"] == "out.png"
+    assert len(llm.messages) == 2
+
+
+@pytest.mark.anyio
+async def test_wechat_send_file_routes_ilink_to_current_channel(tmp_path):
+    replies = []
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"wechat.send_file","payload":{"path":"a.zip"}}]}',
+            '{"final":"已发送文件。"}',
+        ]
+    )
+    runtime = AgentRuntime(
+        AgentConfig(
+            workspace_root=str(tmp_path),
+            workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        ),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    async def fake_send_reply(reply):
+        replies.append(reply)
+
+    runtime.attach_reply_sender(fake_send_reply)
+
+    result = await runtime.run_task(
+        "Channel message received.\ncontent: 发文件",
+        source="channel:wechat:wechat_ilink:ilink:u1",
+    )
+
+    assert result.output == "已发送文件。"
+    assert result.suppress_channel_reply is False
+    assert replies == [
+        Reply(
+            platform="wechat",
+            adapter="wechat_ilink",
+            conversation_id="ilink:u1",
+            type="file",
+            content="a.zip",
+            quote_message_id=None,
+        )
+    ]
+    assert len(llm.messages) == 2
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_maps_bare_tool_aliases(tmp_path):
+    target = tmp_path / "hello.txt"
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"write_file","payload":{"path":"hello.txt","content":"ok"}}]}',
+            '{"final":"写好了。"}',
+        ]
+    )
+    runtime = AgentRuntime(
+        AgentConfig(
+            workspace_root=str(tmp_path),
+            workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+            allow_shell=True,
+        ),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    result = await runtime.run_task("写一个测试文件", source="api")
+
+    assert result.output == "写好了。"
+    assert target.read_text(encoding="utf-8") == "ok"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_returns_failed_tool_result_for_unknown_tool(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"missing_tool","payload":{}}]}',
+            '{"final":"工具不存在，无法执行。"}',
+        ]
+    )
+    runtime = AgentRuntime(
+        AgentConfig(
+            workspace_root=str(tmp_path),
+            workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        ),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    result = await runtime.run_task("调用不存在工具", source="api")
+
+    assert result.output == "工具不存在，无法执行。"
+    assert "Tool not found: missing_tool" in llm.messages[-1][-1].content
+
+
+@pytest.mark.anyio
 async def test_skill_run_accepts_flat_wechat_text_args(tmp_path):
     commands = []
 
@@ -1962,6 +2179,40 @@ def test_planner_strips_generic_tool_blocks_from_final_output():
 
     assert output == "读取完成。"
     assert "function_call" not in output
+
+
+def test_planner_parses_bracket_tool_call_hashrocket_shape():
+    planner = AgentPlanner()
+
+    plan = planner.parse_llm_response(
+        '[TOOL_CALL]\n'
+        '{tool => "skill.describe", payload => {"skill": "xbot-self-evolution"}}\n'
+        '[/TOOL_CALL]\n'
+        '[TOOL_CALL]\n'
+        r'{tool => "filesystem.list_dir", payload => {"path": "C:\\Users\\Administrator\\Desktop\\xbot-next\\skills\\.agent"}}'
+        '\n[/TOOL_CALL]'
+    )
+
+    assert len(plan.tool_calls) == 2
+    assert plan.tool_calls[0].tool == "skill.describe"
+    assert plan.tool_calls[0].payload == {"skill": "xbot-self-evolution"}
+    assert plan.tool_calls[1].tool == "filesystem.list_dir"
+    assert plan.tool_calls[1].payload["path"].endswith(r"skills\.agent")
+
+
+def test_planner_strips_bracket_tool_call_blocks_from_final_output():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        '[TOOL_CALL]\n'
+        '{tool => "skill.describe", payload => {"skill": "xbot-self-evolution"}}\n'
+        '[/TOOL_CALL]\n'
+        "我已经查看自我进化 skill。"
+    )
+
+    assert output == "我已经查看自我进化 skill。"
+    assert "TOOL_CALL" not in output
+    assert "skill.describe" not in output
 
 
 @pytest.mark.anyio

@@ -19,12 +19,14 @@ class ToolCallParser:
         calls.extend(self._extract_json_tool_calls(text))
         calls.extend(self._extract_xml_tool_calls(text))
         calls.extend(self._extract_text_tool_calls(text))
+        calls.extend(self._extract_bracket_tool_calls(text))
         return self._dedupe(calls)
 
     def contains_intent(self, content: str) -> bool:
         return bool(
             re.search(r'"(?:tool_calls|tools|tool|name|function|arguments|payload)"\s*:', content)
             or re.search(r"<(?:[\w.-]+:)?tool_call\b|<invoke\b|<function_call\b", content)
+            or re.search(r"\[(?:TOOL_CALL|tool_call)\]", content)
             or re.search(r"(?im)^\s*(?:tool|function)\s*:\s*[\w.-]+", content)
         )
 
@@ -38,6 +40,7 @@ class ToolCallParser:
         )
         text = re.sub(r"<function_call\b[^>]*>.*?</function_call>\s*", "", text, flags=re.DOTALL)
         text = re.sub(r"<invoke\b.*?>\s*", "", text, flags=re.DOTALL)
+        text = re.sub(r"\[(?:TOOL_CALL|tool_call)\].*?\[/(?:TOOL_CALL|tool_call)\]\s*", "", text, flags=re.DOTALL)
         text = re.sub(
             r"(?ims)^\s*(?:tool|function)\s*:\s*[\w.-]+\s*\n\s*(?:arguments|payload|args)\s*:\s*\{.*?\}\s*",
             "",
@@ -52,6 +55,77 @@ class ToolCallParser:
         if not calls:
             calls.extend(self._extract_lenient_json_pairs(text))
         return calls
+
+    def _extract_bracket_tool_calls(self, text: str) -> list[ParsedToolCall]:
+        calls = []
+        for match in re.finditer(
+            r"\[(?:TOOL_CALL|tool_call)\](?P<body>.*?)\[/(?:TOOL_CALL|tool_call)\]",
+            text,
+            flags=re.DOTALL,
+        ):
+            call = self._parse_hashrocket_tool_call(match.group("body"))
+            if call:
+                calls.append(call)
+        return calls
+
+    def _parse_hashrocket_tool_call(self, body: str) -> ParsedToolCall | None:
+        tool_match = re.search(
+            r'["\']?tool["\']?\s*(?:=>|:)\s*(?:"([^"]+)"|\'([^\']+)\'|([\w.-]+))',
+            body,
+        )
+        if not tool_match:
+            return None
+        tool = (tool_match.group(1) or tool_match.group(2) or tool_match.group(3) or "").strip()
+        if not tool:
+            return None
+        payload: dict[str, Any] = {}
+        payload_match = re.search(r'["\']?payload["\']?\s*(?:=>|:)', body)
+        if payload_match:
+            brace_index = body.find("{", payload_match.end())
+            if brace_index >= 0:
+                payload = self._parse_relaxed_object(body[brace_index:])
+        return ParsedToolCall(tool=tool, payload=payload)
+
+    def _parse_relaxed_object(self, text: str) -> dict[str, Any]:
+        raw = self._balanced_brace_slice(text)
+        if not raw:
+            return {}
+        normalized = re.sub(r"=>", ":", raw)
+        normalized = re.sub(r"(?<=[{,\s])([A-Za-z_][\w.-]*)\s*:", r'"\1":', normalized)
+        normalized = normalized.replace("'", '"')
+        try:
+            parsed = json.loads(normalized)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _balanced_brace_slice(self, text: str) -> str:
+        start = text.find("{")
+        if start < 0:
+            return ""
+        depth = 0
+        in_string = ""
+        escaped = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == in_string:
+                    in_string = ""
+                continue
+            if char in {"'", '"'}:
+                in_string = char
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1]
+        return ""
 
     def _calls_from_json_data(self, data: Any) -> list[ParsedToolCall]:
         if isinstance(data, list):

@@ -6,6 +6,7 @@ from typing import Any
 
 from xbot.adapters.base import BaseAdapter
 from xbot.adapters.wechat869.client import Wechat869Client
+from xbot.adapters.wechat869.media import Wechat869MediaResolver
 from xbot.core.config import Wechat869AdapterConfig
 from xbot.core.logging import logger
 from xbot.messaging.models import Message, MessageEnvelope, Reply
@@ -54,6 +55,7 @@ class Wechat869Adapter(BaseAdapter):
         self.queue = queue
         self.client_factory = client_factory
         self.client = None
+        self.media = None
         self.started = False
         self._task: asyncio.Task | None = None
 
@@ -66,6 +68,7 @@ class Wechat869Adapter(BaseAdapter):
             self.client.wxid = self.config.bot_wxid
         if self.config.bot_nickname:
             self.client.nickname = self.config.bot_nickname
+        self.media = Wechat869MediaResolver(self.config, self.client)
         if self.queue and self._task is None:
             self._task = asyncio.create_task(self._listen_loop(), name="xbot-wechat869-adapter")
 
@@ -111,14 +114,26 @@ class Wechat869Adapter(BaseAdapter):
         raw["mentions_bot"] = self._mentions_bot(clean_content)
         raw["bot_wxid"] = self.config.bot_wxid
         raw["bot_nickname"] = self.config.bot_nickname
+        media = self.media or Wechat869MediaResolver(self.config, self.client or self._create_client())
+        media_info = await media.enrich(
+            raw,
+            message,
+            msg_type=msg_type,
+            conversation_id=conversation_id or "unknown_869",
+            msg_id=raw_id or "",
+        )
+        raw["attachments"] = media_info.get("attachments") or []
+        if media_info.get("quote"):
+            raw["quote"] = media_info["quote"]
+        display_content = self._content_with_media_summary(clean_content, msg_type, raw)
         message_data = {
             "platform": self.platform,
             "adapter": self.name,
-            "type": "text" if msg_type == 1 else "event",
+            "type": self._message_type(msg_type, raw),
             "conversation_id": conversation_id or "unknown_869",
             "sender_id": sender_id or sender or "unknown_869",
             "sender_name": sender_name,
-            "content": clean_content,
+            "content": display_content,
             "raw": raw,
         }
         if raw_id:
@@ -159,6 +174,15 @@ class Wechat869Adapter(BaseAdapter):
         logger.info("Wechat869Adapter 提取到 {} 条候选消息", len(messages))
         for raw in messages:
             message = await self.normalize(raw)
+            if self._should_ignore_message(message):
+                logger.info(
+                    "Wechat869Adapter 丢弃自身或系统消息: id={} sender={} type={} content={}",
+                    message.id,
+                    message.sender_id,
+                    message.type,
+                    self._preview(message.content),
+                )
+                continue
             if self.config.text_only and message.type != "text":
                 logger.info(
                     "Wechat869Adapter 丢弃非文本消息: id={} type={} raw_type={}",
@@ -178,14 +202,27 @@ class Wechat869Adapter(BaseAdapter):
                 logger.warning("Wechat869Adapter 未配置消息队列，消息不会进入框架: {}", message.id)
                 continue
             logger.info(
-                "Wechat869Adapter 发布消息到队列: id={} scope={} conversation={} sender={} content={}",
+                "Wechat869Adapter 发布消息到队列: id={} scope={} conversation={} sender={} attachments={} quote_attachments={} content={}",
                 message.id,
                 message.raw.get("scope"),
                 message.conversation_id,
                 message.sender_id,
+                len(message.raw.get("attachments") or []),
+                len((message.raw.get("quote") or {}).get("attachments") or []) if isinstance(message.raw.get("quote"), dict) else 0,
                 self._preview(message.content),
             )
             await self.queue.publish(MessageEnvelope.from_message(message))
+
+    def _should_ignore_message(self, message: Message) -> bool:
+        bot_wxid = self.config.bot_wxid or getattr(self.client, "wxid", "")
+        if bot_wxid and message.sender_id == bot_wxid:
+            return True
+        raw_type = self._pick_int(message.raw, MSG_TYPE_KEYS, default=1)
+        if message.raw.get("scope") == "private" and message.sender_id == message.conversation_id and message.sender_id == bot_wxid:
+            return True
+        if raw_type in {51, 10000, 10002}:
+            return True
+        return False
 
     def _loads_json(self, payload: Any) -> Any:
         if isinstance(payload, (dict, list)):
@@ -263,6 +300,56 @@ class Wechat869Adapter(BaseAdapter):
 
     def _extract_content(self, raw: dict) -> str:
         return self._pick_text(raw, TEXT_KEYS)
+
+    def _message_type(self, msg_type: int, raw: dict) -> str:
+        if msg_type == 1:
+            return "text"
+        if msg_type == 3:
+            return "image"
+        quote = raw.get("quote") if isinstance(raw.get("quote"), dict) else {}
+        if msg_type == 49 and (raw.get("attachments") or quote.get("attachments")):
+            return "file"
+        return "event"
+
+    def _content_with_media_summary(self, content: str, msg_type: int, raw: dict) -> str:
+        content = content.strip() if content else ""
+        lines = [content] if content and (msg_type == 1 or not content.lstrip().startswith("<")) else []
+        for attachment in raw.get("attachments") or []:
+            lines.append(self._attachment_line(attachment))
+        quote = raw.get("quote")
+        if isinstance(quote, dict):
+            quote_content = str(quote.get("content") or "").strip()
+            sender = str(quote.get("sender_name") or quote.get("sender_wxid") or "").strip()
+            prefix = f"[引用] {sender}: {quote_content}" if sender and quote_content else f"[引用] {quote_content or sender}".strip()
+            if prefix and prefix != "[引用]":
+                lines.append(prefix)
+            for attachment in quote.get("attachments") or []:
+                lines.append("[引用" + self._attachment_line(attachment).lstrip("["))
+        if not lines:
+            if msg_type == 3:
+                lines.append("[图片]")
+            elif msg_type == 49:
+                lines.append("[文件/应用消息]")
+            else:
+                lines.append(f"[非文本消息 MsgType={msg_type}]")
+        return "\n".join(lines)
+
+    def _attachment_line(self, attachment: dict) -> str:
+        kind = "图片" if attachment.get("kind") == "image" else "文件"
+        filename = str(attachment.get("filename") or "")
+        status = str(attachment.get("download_status") or "")
+        local_path = str(attachment.get("local_path") or "")
+        size = attachment.get("size") or 0
+        parts = [f"[{kind}]"]
+        if filename:
+            parts.append(f"filename={filename}")
+        if size:
+            parts.append(f"size={size}")
+        if local_path:
+            parts.append(f"local_path={local_path}")
+        elif status:
+            parts.append(f"status={status}")
+        return " ".join(parts)
 
     def _extract_sender(self, raw: dict) -> str:
         return self._pick_text(raw, SENDER_KEYS)

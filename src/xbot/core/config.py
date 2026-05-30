@@ -221,10 +221,10 @@ class AgentToolsetConfig(BaseModel):
         ]
     )
     private: list[str] = Field(
-        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
+        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "wechat", "mcp", "environment", "task", "plugin"]
     )
     group: list[str] = Field(
-        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
+        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "wechat", "mcp", "environment", "task", "plugin"]
     )
     terminal: list[str] = Field(
         default_factory=lambda: [
@@ -299,12 +299,37 @@ class Wechat869AdapterConfig(BaseModel):
     bot_nickname: str = ""
     connect_timeout_seconds: int = 10
     reconnect_seconds: int = 5
-    text_only: bool = True
+    text_only: bool = False
+    media_enabled: bool = True
+    media_dir: str = "data/wechat869/media"
+    auto_download_images: bool = True
+    auto_download_files: bool = True
+    max_image_bytes: int = 20 * 1024 * 1024
+    max_file_bytes: int = 100 * 1024 * 1024
+
+
+class WechatIlinkAdapterConfig(BaseModel):
+    enabled: bool = False
+    base_url: str = "https://ilinkai.weixin.qq.com"
+    cdn_base_url: str = "https://novac2c.cdn.weixin.qq.com/c2c"
+    token: str = ""
+    cursor: str = ""
+    poll_interval_seconds: float = 1.0
+    connect_timeout_seconds: int = 45
+    bot_wxid: str = ""
+    bot_nickname: str = ""
+    media_enabled: bool = True
+    media_dir: str = "data/wechat_ilink/media"
+    auto_download_images: bool = True
+    auto_download_files: bool = True
+    max_image_bytes: int = 20 * 1024 * 1024
+    max_file_bytes: int = 100 * 1024 * 1024
 
 
 class AdapterConfig(BaseModel):
     web: WebAdapterConfig = Field(default_factory=WebAdapterConfig)
     wechat869: Wechat869AdapterConfig = Field(default_factory=Wechat869AdapterConfig)
+    wechat_ilink: WechatIlinkAdapterConfig = Field(default_factory=WechatIlinkAdapterConfig)
 
 
 class Settings(BaseModel):
@@ -381,6 +406,8 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("storage", {})["admin_url"] = admin_database_url
     if auto_bootstrap := env.get("XBOT_DATABASE_AUTO_BOOTSTRAP"):
         data.setdefault("storage", {})["auto_bootstrap"] = _env_bool(auto_bootstrap)
+    if run_migrations := env.get("XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP"):
+        data.setdefault("storage", {})["run_migrations_on_startup"] = _env_bool(run_migrations)
     if redis_url := env.get("XBOT_REDIS_URL"):
         data.setdefault("queue", {})["redis_url"] = redis_url
     if llm_api_key := env.get("XBOT_LLM_API_KEY"):
@@ -494,6 +521,90 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if wechat869_bot_nickname := env.get("XBOT_WECHAT869_BOT_NICKNAME"):
         data.setdefault("adapters", {}).setdefault("wechat869", {})["bot_nickname"] = (
             wechat869_bot_nickname
+        )
+    if wechat869_text_only := env.get("XBOT_WECHAT869_TEXT_ONLY"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["text_only"] = _env_bool(
+            wechat869_text_only
+        )
+    if wechat869_media_enabled := env.get("XBOT_WECHAT869_MEDIA_ENABLED"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["media_enabled"] = _env_bool(
+            wechat869_media_enabled
+        )
+    if wechat869_media_dir := env.get("XBOT_WECHAT869_MEDIA_DIR"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["media_dir"] = wechat869_media_dir
+    if wechat869_auto_download_images := env.get("XBOT_WECHAT869_AUTO_DOWNLOAD_IMAGES"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["auto_download_images"] = _env_bool(
+            wechat869_auto_download_images
+        )
+    if wechat869_auto_download_files := env.get("XBOT_WECHAT869_AUTO_DOWNLOAD_FILES"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["auto_download_files"] = _env_bool(
+            wechat869_auto_download_files
+        )
+    if wechat869_max_image_bytes := env.get("XBOT_WECHAT869_MAX_IMAGE_BYTES"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["max_image_bytes"] = int(
+            wechat869_max_image_bytes
+        )
+    if wechat869_max_file_bytes := env.get("XBOT_WECHAT869_MAX_FILE_BYTES"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["max_file_bytes"] = int(
+            wechat869_max_file_bytes
+        )
+    if wechat_ilink_enabled := env.get("XBOT_WECHAT_ILINK_ENABLED"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["enabled"] = _env_bool(
+            wechat_ilink_enabled
+        )
+    if wechat_ilink_base_url := env.get("XBOT_WECHAT_ILINK_BASE_URL"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["base_url"] = (
+            wechat_ilink_base_url
+        )
+    if wechat_ilink_cdn_base_url := env.get("XBOT_WECHAT_ILINK_CDN_BASE_URL"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["cdn_base_url"] = (
+            wechat_ilink_cdn_base_url
+        )
+    if wechat_ilink_token := env.get("XBOT_WECHAT_ILINK_TOKEN"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["token"] = wechat_ilink_token
+    if wechat_ilink_cursor := env.get("XBOT_WECHAT_ILINK_CURSOR"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["cursor"] = (
+            wechat_ilink_cursor
+        )
+    if wechat_ilink_poll_interval := env.get("XBOT_WECHAT_ILINK_POLL_INTERVAL_SECONDS"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})[
+            "poll_interval_seconds"
+        ] = float(wechat_ilink_poll_interval)
+    if wechat_ilink_timeout := env.get("XBOT_WECHAT_ILINK_CONNECT_TIMEOUT_SECONDS"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})[
+            "connect_timeout_seconds"
+        ] = int(wechat_ilink_timeout)
+    if wechat_ilink_bot_wxid := env.get("XBOT_WECHAT_ILINK_BOT_WXID"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["bot_wxid"] = (
+            wechat_ilink_bot_wxid
+        )
+    if wechat_ilink_bot_nickname := env.get("XBOT_WECHAT_ILINK_BOT_NICKNAME"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["bot_nickname"] = (
+            wechat_ilink_bot_nickname
+        )
+    if wechat_ilink_media_enabled := env.get("XBOT_WECHAT_ILINK_MEDIA_ENABLED"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["media_enabled"] = _env_bool(
+            wechat_ilink_media_enabled
+        )
+    if wechat_ilink_media_dir := env.get("XBOT_WECHAT_ILINK_MEDIA_DIR"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["media_dir"] = (
+            wechat_ilink_media_dir
+        )
+    if wechat_ilink_auto_download_images := env.get("XBOT_WECHAT_ILINK_AUTO_DOWNLOAD_IMAGES"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["auto_download_images"] = _env_bool(
+            wechat_ilink_auto_download_images
+        )
+    if wechat_ilink_auto_download_files := env.get("XBOT_WECHAT_ILINK_AUTO_DOWNLOAD_FILES"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["auto_download_files"] = _env_bool(
+            wechat_ilink_auto_download_files
+        )
+    if wechat_ilink_max_image_bytes := env.get("XBOT_WECHAT_ILINK_MAX_IMAGE_BYTES"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["max_image_bytes"] = int(
+            wechat_ilink_max_image_bytes
+        )
+    if wechat_ilink_max_file_bytes := env.get("XBOT_WECHAT_ILINK_MAX_FILE_BYTES"):
+        data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["max_file_bytes"] = int(
+            wechat_ilink_max_file_bytes
         )
     _normalize_agent_config(data)
     if isinstance(data.get("xbot"), dict):

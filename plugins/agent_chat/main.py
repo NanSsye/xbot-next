@@ -15,8 +15,15 @@ class AgentChatPlugin(PluginBase):
         if not ctx.agent or not ctx.send_reply:
             logger.warning("AgentChatPlugin 未配置 agent 或 send_reply，跳过消息: {}", message.id)
             return False
-        if message.type != "text" or not message.content:
-            logger.info("AgentChatPlugin 跳过非文本或空消息: id={} type={}", message.id, message.type)
+        if message.type not in {"text", "image", "file", "event"} or not message.content:
+            logger.info("AgentChatPlugin 跳过不支持或空消息: id={} type={}", message.id, message.type)
+            return False
+        if self._should_defer_unquoted_ilink_media(message):
+            logger.info(
+                "AgentChatPlugin 跳过 iLink 未引用媒体消息: id={} type={}",
+                message.id,
+                message.type,
+            )
             return False
         if not self._should_handle(message):
             logger.info(
@@ -56,6 +63,13 @@ class AgentChatPlugin(PluginBase):
             await self._send_error_reply(message, ctx, f"Agent 处理失败：{exc}")
             return True
         logger.info("AgentChatPlugin Agent 完成: id={} task_id={}", message.id, getattr(result, "task_id", ""))
+        if getattr(result, "suppress_channel_reply", False):
+            logger.info(
+                "AgentChatPlugin 跳过自动回发: id={} task_id={} reason=explicit_wechat_send",
+                message.id,
+                getattr(result, "task_id", ""),
+            )
+            return True
         output = (getattr(result, "output", "") or "").strip()
         if not output:
             output = "Agent 没有生成有效回复，请换一种说法再试。"
@@ -118,6 +132,13 @@ class AgentChatPlugin(PluginBase):
         if message.platform == "web":
             return True
         return False
+
+    def _should_defer_unquoted_ilink_media(self, message: Message) -> bool:
+        return (
+            message.adapter == "wechat_ilink"
+            and message.type in {"image", "file"}
+            and not isinstance(message.raw.get("quote"), dict)
+        )
 
     def _clean_content(self, message: Message) -> str:
         content = message.content or ""
@@ -218,11 +239,54 @@ class AgentChatPlugin(PluginBase):
             f"mentions_bot: {bool(message.raw.get('mentions_bot'))}\n"
             f"conversation_summaries:\n{summaries or '- none'}\n"
             f"recent_conversation_messages:\n{history or '- none'}\n"
+            f"message_attachments:\n{self._attachments_block(message) or '- none'}\n"
+            f"quoted_message:\n{self._quote_block(message) or '- none'}\n"
             f"content: {content}\n"
-            "When using WeChat sending skills/tools, use reply_target_wxid as --to.\n"
+            "When sending WeChat text/image/file proactively, prefer wechat.send_text, wechat.send_image, or wechat.send_file; the runtime routes to the current adapter automatically.\n"
+            "Do not call adapter-specific WeChat media skills directly unless the generic wechat.send_* tool is unavailable.\n"
+            "When using older WeChat sending skills/tools, use reply_target_wxid as --to.\n"
             "For private chat, reply_target_wxid equals private_wxid.\n"
             "For group chat, reply_target_wxid equals group_wxid, and group_member_wxid is the sender in the group.\n"
             "Do not ask the user for wxid/chatroom id when these fields are already present.\n"
             "If the content asks about real project files, directories, plugins, skills, config, or runtime state, use tools before answering.\n"
             "Reply to the user in Chinese unless the user clearly asks for another language."
         )
+
+    def _attachments_block(self, message: Message) -> str:
+        attachments = message.raw.get("attachments") if isinstance(message.raw, dict) else None
+        if not isinstance(attachments, list) or not attachments:
+            return ""
+        return "\n".join(self._attachment_line(item) for item in attachments if isinstance(item, dict))
+
+    def _quote_block(self, message: Message) -> str:
+        quote = message.raw.get("quote") if isinstance(message.raw, dict) else None
+        if not isinstance(quote, dict):
+            return ""
+        lines = [
+            f"message_id: {quote.get('message_id') or ''}",
+            f"sender_wxid: {quote.get('sender_wxid') or ''}",
+            f"sender_name: {quote.get('sender_name') or ''}",
+            f"type: {quote.get('msg_type') or ''}",
+            f"content: {quote.get('content') or ''}",
+        ]
+        attachments = quote.get("attachments") if isinstance(quote.get("attachments"), list) else []
+        if attachments:
+            lines.append("attachments:")
+            lines.extend(self._attachment_line(item) for item in attachments if isinstance(item, dict))
+        return "\n".join(lines)
+
+    def _attachment_line(self, attachment: dict) -> str:
+        fields = [
+            f"- kind={attachment.get('kind') or ''}",
+            f"filename={attachment.get('filename') or ''}",
+            f"mime={attachment.get('mime') or ''}",
+            f"size={attachment.get('size') or 0}",
+            f"status={attachment.get('download_status') or ''}",
+        ]
+        local_path = attachment.get("local_path")
+        if local_path:
+            fields.append(f"local_path={local_path}")
+        sha256 = attachment.get("sha256")
+        if sha256:
+            fields.append(f"sha256={sha256}")
+        return " ".join(fields)

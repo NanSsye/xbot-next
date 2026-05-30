@@ -172,7 +172,15 @@
 - [x] Hermes 短期压缩第一版完成：旧轮次不再直接遗忘；默认不按轮数裁剪，超过 `short_term_max_tokens=128000` 的内容会压入 session summary，再与最近原文一起带入后续对话；微信通道同样按 conversation source 隔离。
 - [x] Wiki Knowledge Base 第一阶段完成：新增 `WikiStore`、`wiki.manage`、`/api/v1/agent/wiki`、默认 `data/agent/wiki/xbot/` Markdown 种子；默认不依赖第三方软件，使用 Markdown 页面、目录索引、文件检索和 LLM 维护页面，RAG/向量库仅作为后续派生缓存。
 - [x] Wiki Knowledge Base 第二阶段完成：新增页面合并建议、交叉链接维护、冲突检测、专题 digest、派生 search/RAG index 重建；生成报告写入 `merge-suggestions.md` / `conflicts.md`，派生索引写入 `derived/search-index.json` 且可随时重建。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `150 passed`。
+- [x] 子代理后台任务第一版完成：新增 `task.agent_start`，支持主 Agent 把完整任务委托给后台子 Agent，先向用户回复任务已开始，子 Agent 完成后通过 background notify 自动回发结果；微信通道也支持子代理完成通知。
+- [x] 微信消息消费并发修复完成：`MessageConsumer` 开始使用 `runtime.concurrency.max_message_tasks` 并发处理消息，同时按 `conversation.concurrency.per_conversation_serial` 默认保持同会话串行，避免一个长任务堵住所有微信消息；生产 `xbot run` 也会写入 `logs/xbot.log` 方便排查。
+- [x] Wechat869 媒体接收第一版完成：新增图片/文件/引用消息附件解析，支持 `SendCdnDownload` 下载引用图片和可 CDN 下载的文件，直接 base64 媒体会保存到 `data/wechat869/media`；Agent 输入会携带 `message_attachments` 与 `quoted_message`，二进制不进数据库，只传本地路径和元数据。
+- [x] 微信 iLink 第二通道第一版完成：新增独立 `wechat_ilink` adapter 和配置段，可单独开启/关闭，也可与 `wechat869` 同时启用；复用旧框架 iLink 长轮询协议收消息，按 `context_token + from_user_id` 文本回发，并把 text/image/file/video/voice item 标准化为统一 `Message`。
+- [x] 微信 iLink 扫码登录第一版完成：新增 `/api/v1/adapters/wechat_ilink/login/qrcode` 和 `/api/v1/adapters/wechat_ilink/login/status`，用户可通过扫码拿到 bot token；`wechat_ilink.enabled=true` 但 token 为空时，`xbot run` 启动会在终端打印二维码链接，扫码成功后写入 `adapter_states` 持久化表并开始轮询，下一次启动会自动恢复登录态。
+- [x] 数据库更新自动迁移确认完成：`xbot run` / FastAPI lifespan / CLI Agent 启动前会执行 `ensure_storage_ready()`，默认 `run_migrations_on_startup=true` 自动 `alembic upgrade head`；新增 `XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP` 环境变量用于显式控制，正常软件更新不需要用户手动迁移数据库。
+- [x] 微信统一发送工具第一版完成：新增 `wechat.send_text`、`wechat.send_image`、`wechat.send_file`，Agent 在微信通道内不需要选择协议细节，runtime 会根据 `source=channel:wechat:<adapter>:...` 自动路由；`wechat869` 图片/文件复用现有 869 media skill，`wechat_ilink` 图片/文件通过 iLink upload CDN + media item 协议回发到当前会话。
+- [x] iLink 媒体收发第一版完成：图片/文件发送支持 `/ilink/bot/getuploadurl`、AES-128-ECB 加密上传 CDN、`image_item/file_item` 发送；接收采用“引用触发”策略，用户单独发送 iLink 图片/文件时只记录/暂存不触发 Agent，用户引用媒体提问时下载到 `data/wechat_ilink/media` 并把本地路径放入 `quoted_message`。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，最近结果为 `192 passed`。
 
 进行中：
 
@@ -182,7 +190,8 @@
 - [ ] Agent 记忆外部化：预留 memory provider 接口，后续支持数据库、向量检索或外部知识库，但默认仍保持文件化 curated memory 简单可靠。
 - [ ] Toolset 二阶段：当前已按 API/私聊/群聊控制可见范围，admin 默认全部可见；下一步细化到具体 adapter、用户身份、群管理员和会话状态。
 - [ ] MCP 二阶段：当前已有 include/exclude、status、reload 和失败状态记录；下一步补自动重连退避、周期健康检查、失败工具降级和连接池隔离。
-- [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息和回复链路；下一步验证长连接重连、群聊高频消息、异常消息格式和生产日志可观测性。
+- [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息、回复链路、消息消费并发、生产 `logs/xbot.log` 落盘和媒体/引用附件解析；下一步重启生产后验证日志实际写入、图片引用下载、文件 metadata、长连接重连、群聊高频消息和异常消息格式。
+- [ ] 微信 iLink 第二通道生产验证：开启 `XBOT_WECHAT_ILINK_ENABLED=true` 并执行 migration 后验证扫码登录、登录态重启恢复、长轮询收消息、cursor 更新、文本/图片/文件回发、引用媒体下载、和 869 双通道同时启用时的独立会话隔离；后续再补 token 加密和 token 过期恢复。
 - [ ] Agent 工具 provider 四阶段：浏览器会话生命周期接入 runtime stop、数据库更多方言边界验证、GitHub 写操作审批细化、插件工具权限持久化开关和前端 UI。
 - [ ] Agent 工具体验对齐 Codex 五阶段：真正前端后台任务页面、后台任务失败原因聚合、按工具/平台配置自动后台策略。
 - [ ] 终端 Hermes 对齐六阶段：基于 `chat-bridge` 实现真正独立 UI 进程的 TUI/Web/PTY 前端，并继续规避 Windows 中文 IME 兼容问题。
@@ -1166,7 +1175,8 @@ class BaseAdapter:
 第一版已实现：
 
 - `WebAdapter`：用于本地 API 模拟消息输入，确保核心框架可以独立跑通。
-- `Wechat869Adapter`：复用已登录 869 协议服务，不实现登录流程，只负责文本收发通道。
+- `Wechat869Adapter`：复用已登录 869 协议服务，不实现登录流程，负责 869 通道收发、群聊识别和媒体/引用附件解析。
+- `WechatIlinkAdapter`：复用 iLink bot token 长轮询协议，不替换 869；通过 `[adapters.wechat_ilink]` 或 `XBOT_WECHAT_ILINK_*` 单独开启，也可以和 `wechat869` 同时开启。
 
 `Wechat869Adapter` 第一阶段能力：
 
@@ -1175,7 +1185,30 @@ class BaseAdapter:
 - 标准化群聊文本消息。
 - 识别群聊消息是否 @ 当前 bot。
 - 通过 869 `send_text_message` 发送文本回复。
-- 图片、文件、语音等富媒体不直接内置在 adapter，后续作为 skill/tool 交给 Agent 按需调用。
+- 图片/文件/引用消息会提取为 `raw.attachments` / `raw.quote`，大文件和二进制不进入数据库，Agent 只接收本地路径和元数据。
+
+`WechatIlinkAdapter` 第一阶段能力：
+
+- 通过 `/api/v1/adapters/wechat_ilink/login/qrcode` 获取扫码登录二维码。
+- 当 `wechat_ilink.enabled=true` 且没有从 `adapter_states` 恢复到 token 时，`python -m xbot.cli.main run` 启动会自动请求二维码并在终端日志打印二维码链接。
+- 通过 `/api/v1/adapters/wechat_ilink/login/status` 轮询扫码状态；扫码成功后更新 bot token、base_url 和 bot_wxid，保存到 `adapter_states`，并启动轮询。
+- 启动时会优先从 `adapter_states` 恢复 `token/base_url/cursor/bot_wxid`，因此重启后不需要重复扫码；`.env.example` 只暴露启用开关、默认 base_url、轮询间隔和超时，不引导用户填写动态登录密钥。
+- 通过 `/ilink/bot/getupdates` 长轮询接收 iLink 消息。
+- 使用 `get_updates_buf` cursor 续拉。
+- 按 `from_user_id` 生成独立 conversation：`ilink:<from_user_id>`。
+- 记录最近 `context_token`，通过 `/ilink/bot/sendmessage` 回发文本。
+- 标准化 text、image、file、voice、video item；图片/文件按通道保存到 `data/wechat_ilink/media`，不会混入 869 的 `data/wechat869/media`。
+
+通道选择原则：
+
+- `adapters.wechat869.enabled` 和 `adapters.wechat_ilink.enabled` 是两个独立开关。
+- 两个通道可同时启用，统一进入消息队列和插件/Agent fallback，但 adapter 名不同，回复路由会回到原通道。
+- Agent 输入会显式携带 `platform`、`adapter`、`conversation_id`、`scope`、`message_attachments` 和 `quoted_message`，因此模型可以识别消息来自 `wechat869` 还是 `wechat_ilink`，并根据附件元数据决定后续工具调用。
+- 文本回复由统一 `Reply(adapter=原 adapter)` 自动路由回原通道；图片/文件发送中，869 继续走 `wechat-869-media-sender`，iLink 走 `/ilink/bot/getuploadurl` + CDN 上传 + media item 回发。
+- Agent 主动发送微信消息时优先使用通用工具：`wechat.send_text`、`wechat.send_image`、`wechat.send_file`。这些工具由 runtime 根据当前 source 自动选择 adapter，不要求模型填写 `context_token`、`to_user_id` 或 869 key。
+- `wechat.send_image` / `wechat.send_file` 当前在 `wechat869` 中会转发到 `wechat-869-media-sender`；在 `wechat_ilink` 中会回到当前 conversation 的 `Reply(type=image/file)`，由 iLink adapter 使用上一次消息保存的 `context_token + from_user_id` 发送。
+- iLink 图片/文件接收采用“引用触发”策略：单独收到 `image/file` 不进入 Agent；当用户引用该媒体并发送文字时，`ref_msg.message_item` 会被解析成 `raw.quote.attachments`，可下载媒体会保存到 `data/wechat_ilink/media/YYYY/MM/DD/<conversation>/<message>/`，并通过 `quoted_message` 传给 Agent。
+- 插件如果只想匹配某个通道，可以在 `plugin.toml` 的 `routing.adapters` 中指定 `wechat869` 或 `wechat_ilink`。
 
 后续再实现：
 

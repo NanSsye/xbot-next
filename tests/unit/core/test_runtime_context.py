@@ -65,6 +65,7 @@ class FakeMessageRepository:
 
 class FakeAgentResult:
     output = "agent reply"
+    suppress_channel_reply = False
 
 
 class FakeAgent:
@@ -74,6 +75,18 @@ class FakeAgent:
     async def run_task(self, input_text: str, source: str = "api"):
         self.inputs.append((input_text, source))
         return FakeAgentResult()
+
+
+class SuppressingAgent(FakeAgent):
+    async def run_task(self, input_text: str, source: str = "api"):
+        self.inputs.append((input_text, source))
+
+        class Result:
+            output = "已发送。"
+            suppress_channel_reply = True
+            task_id = "task-1"
+
+        return Result()
 
 
 class SlowAgent:
@@ -235,6 +248,175 @@ async def test_agent_chat_plugin_handles_private_text_as_fallback():
         assert replies[-1].adapter == "wechat869"
         assert replies[-1].conversation_id == "wxid_sender"
         assert replies[-1].content == "agent reply"
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
+async def test_agent_chat_plugin_does_not_auto_reply_after_explicit_wechat_send():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+    fake_agent = SuppressingAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="wechat",
+            adapter="wechat_ilink",
+            conversation_id="ilink:u1",
+            sender_id="u1",
+            content="什么情况？",
+            raw={
+                "id": "ilink-explicit-send-1",
+                "scope": "private",
+                "mentions_bot": True,
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        replies = await ctx.messages.recent_replies()
+        assert fake_agent.inputs
+        assert replies == []
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
+async def test_agent_chat_plugin_passes_media_attachments_to_agent():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+    fake_agent = FakeAgent()
+    ctx.plugins.attach_runtime(
+        agent=fake_agent,
+        send_reply=ctx.engine.send_reply,
+        conversations=ctx.conversations,
+        settings=settings,
+    )
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="wechat",
+            adapter="wechat869",
+            type="image",
+            conversation_id="wxid_sender",
+            sender_id="wxid_sender",
+            content="[图片] local_path=data/wechat869/media/img.jpg",
+            raw={
+                "id": "private-image-1",
+                "scope": "private",
+                "sender_wxid": "wxid_sender",
+                "sender_name": "张三",
+                "private_wxid": "wxid_sender",
+                "conversation_wxid": "wxid_sender",
+                "attachments": [
+                    {
+                        "kind": "image",
+                        "filename": "img.jpg",
+                        "mime": "image/jpeg",
+                        "size": 10,
+                        "download_status": "downloaded",
+                        "local_path": "data/wechat869/media/img.jpg",
+                        "sha256": "abc",
+                    }
+                ],
+                "quote": {
+                    "message_id": "quoted-1",
+                    "sender_wxid": "wxid_other",
+                    "sender_name": "李四",
+                    "msg_type": 3,
+                    "content": "quoted image",
+                    "attachments": [
+                        {
+                            "kind": "image",
+                            "filename": "quoted.jpg",
+                            "mime": "image/jpeg",
+                            "size": 20,
+                            "download_status": "downloaded",
+                            "local_path": "data/wechat869/media/quoted.jpg",
+                        }
+                    ],
+                },
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        agent_input = fake_agent.inputs[-1][0]
+        assert "message_attachments:" in agent_input
+        assert "local_path=data/wechat869/media/img.jpg" in agent_input
+        assert "quoted_message:" in agent_input
+        assert "local_path=data/wechat869/media/quoted.jpg" in agent_input
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
+async def test_agent_chat_plugin_skips_unquoted_ilink_media():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+    fake_agent = FakeAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="wechat",
+            adapter="wechat_ilink",
+            conversation_id="ilink:u1",
+            sender_id="u1",
+            type="file",
+            content="测试.txt",
+            raw={
+                "scope": "private",
+                "attachments": [{"kind": "file", "filename": "测试.txt"}],
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        replies = await ctx.messages.recent_replies()
+        assert fake_agent.inputs == []
+        assert replies == []
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
+async def test_agent_chat_plugin_passes_quoted_ilink_media_to_agent():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+    fake_agent = FakeAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="wechat",
+            adapter="wechat_ilink",
+            conversation_id="ilink:u1",
+            sender_id="u1",
+            type="text",
+            content="看这个文件",
+            raw={
+                "scope": "private",
+                "quote": {
+                    "message_id": "file1",
+                    "msg_type": "file",
+                    "content": "测试.txt",
+                    "attachments": [{"kind": "file", "filename": "测试.txt"}],
+                },
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        assert fake_agent.inputs
+        agent_input = fake_agent.inputs[-1][0]
+        assert "quoted_message:" in agent_input
+        assert "filename=测试.txt" in agent_input
     finally:
         await ctx.engine.stop()
         await ctx.storage.close()

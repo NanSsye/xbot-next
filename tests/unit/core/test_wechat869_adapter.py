@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from xbot.adapters.wechat869.adapter import Wechat869Adapter
@@ -25,6 +27,23 @@ class FakeClient869:
     async def send_text_message(self, wxid: str, content: str, at=None):
         self.sent.append((wxid, content, at))
         return 1, 2, 3
+
+    async def download_image(self, aes_key: str, cdn_url: str):
+        return b"\xff\xd8\xfffake-jpeg"
+
+    async def download_file(self, aes_key: str, file_url: str):
+        return b"file-bytes"
+
+    async def download_attach(self, attach_id: str):
+        return b"attach-bytes"
+
+
+class FakeQueue:
+    def __init__(self) -> None:
+        self.items = []
+
+    async def publish(self, envelope):
+        self.items.append(envelope)
 
 
 @pytest.mark.anyio
@@ -104,6 +123,24 @@ async def test_wechat869_send_text_reply_uses_raw_conversation_id() -> None:
     assert client.sent[-1][1] == "reply"
 
 
+@pytest.mark.anyio
+async def test_wechat869_ignores_self_system_messages() -> None:
+    queue = FakeQueue()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(bot_wxid="wxid_bot"),
+        queue=queue,
+    )
+
+    await adapter._handle_ws_text(
+        '{"message":{"msg_id": "sys-1", "msg_type": 51, '
+        '"from_user_name": {"str": "wxid_bot"}, '
+        '"to_user_name": {"str": "wxid_bot"}, '
+        '"content": {"str": "<msg><op id=\\"11\\"></op></msg>"}}}'
+    )
+
+    assert queue.items == []
+
+
 def test_wechat869_internal_client_appends_ws_key() -> None:
     client = Wechat869Client("127.0.0.1", 5253)
 
@@ -137,6 +174,12 @@ def test_wechat869_internal_client_extracts_send_tuple() -> None:
     ) == (1, 2, 3)
 
 
+def test_wechat869_internal_client_extracts_short_base64_payload() -> None:
+    client = Wechat869Client("127.0.0.1", 5253)
+
+    assert client._extract_base64_from_payload({"FileData": base64.b64encode(b"short").decode("ascii")})
+
+
 def test_wechat869_extracts_nested_json_string_message() -> None:
     adapter = Wechat869Adapter(Wechat869AdapterConfig())
 
@@ -156,3 +199,159 @@ def test_wechat869_extracts_nested_json_string_message() -> None:
             "content": "hello",
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_wechat869_normalizes_image_message_and_saves_media(tmp_path) -> None:
+    image_data = b"\xff\xd8\xffimage"
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(media_dir=str(tmp_path), text_only=False),
+    )
+
+    message = await adapter.normalize(
+        {
+            "MsgId": "img-1",
+            "MsgType": 3,
+            "FromUserName": "wxid_sender",
+            "File": base64.b64encode(image_data).decode("ascii"),
+            "Filename": "photo.jpg",
+        }
+    )
+
+    assert message.type == "image"
+    assert "[图片]" in (message.content or "")
+    attachment = message.raw["attachments"][0]
+    assert attachment["kind"] == "image"
+    assert attachment["download_status"] == "downloaded"
+    assert attachment["local_path"]
+    assert (tmp_path / "2026").exists() or attachment["local_path"].startswith(str(tmp_path))
+
+
+@pytest.mark.anyio
+async def test_wechat869_downloads_quoted_image_from_cdn(tmp_path) -> None:
+    client = FakeClient869()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(media_dir=str(tmp_path), text_only=False),
+        client_factory=lambda: client,
+    )
+    await adapter.start()
+
+    message = await adapter.normalize(
+        {
+            "MsgId": "quote-1",
+            "MsgType": 49,
+            "FromUserName": "wxid_sender",
+            "Content": "看图",
+            "Quote": {
+                "MsgType": 3,
+                "NewMsgId": "img-quoted",
+                "Content": "quoted-image",
+                "aeskey": "aes",
+                "cdnmidimgurl": "https://cdn/image",
+            },
+        }
+    )
+
+    quote = message.raw["quote"]
+    attachment = quote["attachments"][0]
+    assert message.type == "file"
+    assert attachment["kind"] == "image"
+    assert attachment["download_status"] == "downloaded"
+    assert attachment["local_path"]
+
+
+@pytest.mark.anyio
+async def test_wechat869_keeps_quoted_file_metadata_when_no_download_url(tmp_path) -> None:
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(media_dir=str(tmp_path), text_only=False, auto_download_files=False)
+    )
+
+    message = await adapter.normalize(
+        {
+            "MsgId": "quote-file-1",
+            "MsgType": 49,
+            "FromUserName": "wxid_sender",
+            "Content": "看文件",
+            "Quote": {
+                "MsgType": 49,
+                "XmlType": 6,
+                "NewMsgId": "file-1",
+                "Content": "report.pdf",
+                "appattach": {
+                    "attachid": "attach-id",
+                    "fileext": "pdf",
+                    "totallen": 1234,
+                },
+            },
+        }
+    )
+
+    attachment = message.raw["quote"]["attachments"][0]
+    assert attachment["kind"] == "file"
+    assert attachment["filename"] == "report.pdf"
+    assert attachment["download_status"] == "metadata_only"
+
+
+@pytest.mark.anyio
+async def test_wechat869_downloads_quoted_file_by_attachid(tmp_path) -> None:
+    client = FakeClient869()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(media_dir=str(tmp_path), text_only=False),
+        client_factory=lambda: client,
+    )
+    await adapter.start()
+
+    message = await adapter.normalize(
+        {
+            "MsgId": "quote-file-download",
+            "MsgType": 49,
+            "FromUserName": "wxid_sender",
+            "Content": "看文件",
+            "Quote": {
+                "MsgType": 49,
+                "XmlType": 6,
+                "NewMsgId": "file-download-1",
+                "Content": "report.txt",
+                "appattach": {
+                    "attachid": "@cdn_fileurl_aeskey_1",
+                    "fileext": "txt",
+                    "totallen": 12,
+                },
+            },
+        }
+    )
+
+    attachment = message.raw["quote"]["attachments"][0]
+    assert attachment["kind"] == "file"
+    assert attachment["download_status"] == "downloaded"
+    assert attachment["local_path"]
+    assert attachment["size"] == len(b"attach-bytes")
+
+
+@pytest.mark.anyio
+async def test_wechat869_parses_group_prefixed_file_xml_metadata(tmp_path) -> None:
+    adapter = Wechat869Adapter(Wechat869AdapterConfig(media_dir=str(tmp_path), text_only=False))
+
+    message = await adapter.normalize(
+        {
+            "MsgId": "file-xml-1",
+            "MsgType": 49,
+            "FromUserName": {"str": "room@chatroom"},
+            "Content": {
+                "str": "member_wxid:\n"
+                "<?xml version=\"1.0\"?>\n"
+                "<msg><appmsg><title>测试.txt</title><type>6</type>"
+                "<appattach><totallen>18</totallen><attachid>attach-id</attachid>"
+                "<fileext>txt</fileext></appattach></appmsg></msg>"
+            },
+            "IsGroup": True,
+        }
+    )
+
+    attachment = message.raw["attachments"][0]
+    assert message.type == "file"
+    assert attachment["kind"] == "file"
+    assert attachment["filename"] == "测试.txt"
+    assert attachment["size"] == 18
+    assert attachment["download_status"] == "download_empty"
+    assert "测试.txt" in (message.content or "")

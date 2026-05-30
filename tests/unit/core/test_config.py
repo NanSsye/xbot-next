@@ -36,6 +36,7 @@ def test_load_default_config(monkeypatch):
         "wiki",
         "filesystem",
         "skill",
+        "wechat",
         "mcp",
         "environment",
         "task",
@@ -49,6 +50,7 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_DATABASE_URL", "postgresql+asyncpg://u:p@db:5432/app")
     monkeypatch.setenv("XBOT_ADMIN_DATABASE_URL", "postgresql://postgres:admin@db:5432/postgres")
     monkeypatch.setenv("XBOT_DATABASE_AUTO_BOOTSTRAP", "false")
+    monkeypatch.setenv("XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP", "false")
     monkeypatch.setenv("XBOT_REDIS_URL", "redis://redis:6379/2")
     monkeypatch.setenv("XBOT_LLM_ENABLED", "true")
     monkeypatch.setenv("XBOT_LLM_API_KEY", "test-key")
@@ -69,10 +71,24 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_WECHAT869_HOST", "wechat.local")
     monkeypatch.setenv("XBOT_WECHAT869_PORT", "8848")
     monkeypatch.setenv("XBOT_WECHAT869_TOKEN_KEY", "token")
+    monkeypatch.setenv("XBOT_WECHAT869_TEXT_ONLY", "false")
+    monkeypatch.setenv("XBOT_WECHAT869_MEDIA_DIR", "data/custom-media")
+    monkeypatch.setenv("XBOT_WECHAT869_MAX_IMAGE_BYTES", "123")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_ENABLED", "true")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_BASE_URL", "https://ilink.local")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_TOKEN", "ilink-token")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_CURSOR", "cursor-1")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_POLL_INTERVAL_SECONDS", "2.5")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_CONNECT_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_CDN_BASE_URL", "https://cdn.ilink.local/c2c")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_MEDIA_DIR", "data/ilink-media")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_MAX_IMAGE_BYTES", "456")
+    monkeypatch.setenv("XBOT_WECHAT_ILINK_MAX_FILE_BYTES", "789")
     settings = load_settings("configs/xbot.toml")
     assert settings.storage.url == "postgresql+asyncpg://u:p@db:5432/app"
     assert settings.storage.admin_url == "postgresql://postgres:admin@db:5432/postgres"
     assert settings.storage.auto_bootstrap is False
+    assert settings.storage.run_migrations_on_startup is False
     assert settings.queue.redis_url == "redis://redis:6379/2"
     assert settings.agent.llm.enabled is True
     assert settings.agent.llm.api_key == "test-key"
@@ -94,3 +110,16 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.adapters.wechat869.host == "wechat.local"
     assert settings.adapters.wechat869.port == 8848
     assert settings.adapters.wechat869.token_key == "token"
+    assert settings.adapters.wechat869.text_only is False
+    assert settings.adapters.wechat869.media_dir == "data/custom-media"
+    assert settings.adapters.wechat869.max_image_bytes == 123
+    assert settings.adapters.wechat_ilink.enabled is True
+    assert settings.adapters.wechat_ilink.base_url == "https://ilink.local"
+    assert settings.adapters.wechat_ilink.token == "ilink-token"
+    assert settings.adapters.wechat_ilink.cursor == "cursor-1"
+    assert settings.adapters.wechat_ilink.poll_interval_seconds == 2.5
+    assert settings.adapters.wechat_ilink.connect_timeout_seconds == 30
+    assert settings.adapters.wechat_ilink.cdn_base_url == "https://cdn.ilink.local/c2c"
+    assert settings.adapters.wechat_ilink.media_dir == "data/ilink-media"
+    assert settings.adapters.wechat_ilink.max_image_bytes == 456
+    assert settings.adapters.wechat_ilink.max_file_bytes == 789

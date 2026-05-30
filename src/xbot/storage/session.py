@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from xbot.core.config import StorageConfig
 from xbot.storage.repositories.agent_repo import AgentRepository
+from xbot.storage.repositories.adapter_repo import AdapterRepository
 from xbot.storage.repositories.conversation_repo import ConversationRepository
 from xbot.storage.repositories.message_repo import MessageRepository
 from xbot.storage.repositories.plugin_repo import PluginRepository
@@ -39,3 +40,6 @@ class Storage:
 
     def agent(self, session) -> AgentRepository:
         return AgentRepository(session)
+
+    def adapters(self, session) -> AdapterRepository:
+        return AdapterRepository(session)

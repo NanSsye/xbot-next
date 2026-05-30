@@ -10,7 +10,7 @@ enabled = true
 priority = 10000
 fallback = true
 exclusive = false
-message_types = ["text"]
+message_types = ["text", "image", "file", "event"]
 platforms = ["wechat", "web"]
 
 [permissions]

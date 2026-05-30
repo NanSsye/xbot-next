@@ -7,6 +7,7 @@ from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
 from xbot.core.exceptions import XBotError
 
 ToolExecutorCallback = Callable[[str, dict[str, Any]], Awaitable[Any]]
+AgentRunnerCallback = Callable[[str, str], Awaitable[Any]]
 
 
 def register_task_tools(
@@ -14,16 +15,24 @@ def register_task_tools(
     *,
     background: BackgroundTaskManager,
     execute_tool: ToolExecutorCallback,
+    run_agent: AgentRunnerCallback,
 ) -> None:
-    provider = TaskToolProvider(background=background, execute_tool=execute_tool)
+    provider = TaskToolProvider(background=background, execute_tool=execute_tool, run_agent=run_agent)
     for tool in provider.tools():
         registry.register(tool)
 
 
 class TaskToolProvider:
-    def __init__(self, *, background: BackgroundTaskManager, execute_tool: ToolExecutorCallback) -> None:
+    def __init__(
+        self,
+        *,
+        background: BackgroundTaskManager,
+        execute_tool: ToolExecutorCallback,
+        run_agent: AgentRunnerCallback,
+    ) -> None:
         self.background = background
         self.execute_tool = execute_tool
+        self.run_agent = run_agent
 
     def tools(self) -> list[ToolDefinition]:
         return [
@@ -59,6 +68,29 @@ class TaskToolProvider:
                     "type": "object",
                     "required": ["task_id"],
                     "properties": {"task_id": {"type": "string"}},
+                },
+            ),
+            ToolDefinition(
+                name="task.agent_start",
+                description=(
+                    "Start a full child Agent task in the background and return immediately. "
+                    "Use this when the user asks for longer work that should continue after the first reply."
+                ),
+                risk_level="execute",
+                handler=self.agent_start,
+                toolset="task",
+                source="task",
+                timeout_seconds=10,
+                input_schema={
+                    "type": "object",
+                    "required": ["input"],
+                    "properties": {
+                        "input": {"type": "string"},
+                        "source": {"type": "string", "default": "background"},
+                        "description": {"type": "string"},
+                        "notify": {"type": "object"},
+                        "replayable": {"type": "boolean", "default": True},
+                    },
                 },
             ),
             ToolDefinition(
@@ -109,6 +141,31 @@ class TaskToolProvider:
             metadata={
                 "tool": tool,
                 "payload": tool_payload,
+                "notify": payload.get("notify") if isinstance(payload.get("notify"), dict) else None,
+                "replayable": bool(payload.get("replayable", True)),
+            },
+        )
+        return record.model_dump(mode="json")
+
+    async def agent_start(self, payload: dict[str, Any]) -> dict[str, Any]:
+        input_text = str(payload.get("input") or "").strip()
+        if not input_text:
+            raise XBotError("task.agent_start input is required.")
+        source = str(payload.get("source") or "background")
+        if source.startswith("channel:") or source.startswith("terminal:"):
+            source = "background"
+
+        async def runner():
+            return await self.run_agent(input_text, source)
+
+        record = self.background.start(
+            kind="agent",
+            runner=runner,
+            source="agent",
+            description=str(payload.get("description") or "Run child Agent task"),
+            metadata={
+                "input": input_text,
+                "source": source,
                 "notify": payload.get("notify") if isinstance(payload.get("notify"), dict) else None,
                 "replayable": bool(payload.get("replayable", True)),
             },

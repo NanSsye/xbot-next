@@ -71,6 +71,12 @@ def build_context(settings: Settings) -> AppContext:
             async with session.begin():
                 yield storage.agent(session)
 
+    @asynccontextmanager
+    async def adapter_repository_provider():
+        async with storage.session_factory() as session:
+            async with session.begin():
+                yield storage.adapters(session)
+
     messages = InMemoryMessageStore(
         repository_provider=message_repository_provider
         if settings.storage.persist_runtime_events
@@ -94,7 +100,13 @@ def build_context(settings: Settings) -> AppContext:
         if settings.storage.persist_runtime_events
         else None,
     )
-    adapters = AdapterRegistry(settings.adapters, queue=message_queue)
+    adapters = AdapterRegistry(
+        settings.adapters,
+        queue=message_queue,
+        repository_provider=adapter_repository_provider
+        if settings.storage.persist_runtime_events
+        else None,
+    )
     agent = AgentRuntime(
         settings.agent,
         plugins=plugins,
@@ -121,6 +133,9 @@ def build_context(settings: Settings) -> AppContext:
         conversations=conversations,
         engine=engine,
         message_store=messages,
+        max_message_tasks=settings.runtime.concurrency.max_message_tasks,
+        per_conversation_serial=settings.conversation.concurrency.per_conversation_serial,
+        max_active_conversations=settings.conversation.concurrency.max_active_conversations,
     )
     engine.attach_messaging(consumer=consumer, queue=message_queue)
     return AppContext(

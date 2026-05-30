@@ -7,6 +7,8 @@ def test_create_app():
     assert "/api/v1/system/status" in paths
     assert "/api/v1/bot/status" in paths
     assert "/api/v1/adapters" in paths
+    assert "/api/v1/adapters/wechat_ilink/login/qrcode" in paths
+    assert "/api/v1/adapters/wechat_ilink/login/status" in paths
     assert "/api/v1/agent/tools" in paths
     assert "/api/v1/agent/llm/status" in paths
     assert "/api/v1/agent/tools/{tool_name}/execute" in paths

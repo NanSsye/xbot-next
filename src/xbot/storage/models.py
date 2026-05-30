@@ -74,6 +74,14 @@ class AgentBackgroundTaskRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AdapterStateRecord(Base):
+    __tablename__ = "adapter_states"
+
+    adapter: Mapped[str] = mapped_column(String(128), primary_key=True)
+    state_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class AgentMemoryRecord(Base):
     __tablename__ = "agent_memories"
 

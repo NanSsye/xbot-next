@@ -20,7 +20,7 @@ from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
 from xbot.agent.policy import PolicyEngine
 from xbot.agent.tool_executor import ToolExecutor
-from xbot.agent.tool_registry import ToolRegistry
+from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
 from xbot.agent.tools import register_builtin_tools
 from xbot.agent.tools.browser_provider import register_browser_tools
 from xbot.agent.tools.cache_policy import ToolCachePolicy
@@ -36,6 +36,7 @@ from xbot.agent.workspace import Workspace
 from xbot.core.config import AgentConfig
 from xbot.core.exceptions import PolicyDeniedError, XBotError
 from xbot.core.logging import logger
+from xbot.messaging.models import Reply
 
 
 class AgentResult(BaseModel):
@@ -43,6 +44,7 @@ class AgentResult(BaseModel):
     source: str
     status: str
     output: str
+    suppress_channel_reply: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -111,6 +113,7 @@ class AgentRuntime:
         self._turns_since_curator = 0
         self._session_histories: dict[str, list[LLMMessage]] = {}
         self._session_summaries: dict[str, str] = {}
+        self._suppress_channel_reply_task_ids: set[str] = set()
         register_builtin_tools(
             self.tools,
             workspace=self.workspace,
@@ -122,7 +125,13 @@ class AgentRuntime:
         register_environment_tools(self.tools, workspace=self.workspace)
         register_browser_tools(self.tools, workspace=self.workspace)
         register_git_tools(self.tools, workspace=self.workspace)
-        register_task_tools(self.tools, background=self.background, execute_tool=self._execute_tool_for_task)
+        register_task_tools(
+            self.tools,
+            background=self.background,
+            execute_tool=self._execute_tool_for_task,
+            run_agent=self._run_agent_for_task,
+        )
+        self._register_wechat_send_tools()
 
     async def start(self) -> None:
         register_plugin_tools(self.tools, self.plugins)
@@ -160,11 +169,14 @@ class AgentRuntime:
         memory_item = await self.memory.add("episodic", f"Task received from {source}: {input_text}")
         logger.info("Agent 任务进入 LLM: task_id={}", task_id)
         output = await self._run_llm(task_id, input_text, source=source)
+        suppress_channel_reply = task_id in self._suppress_channel_reply_task_ids
+        self._suppress_channel_reply_task_ids.discard(task_id)
         result = AgentResult(
             task_id=task_id,
             source=source,
             status="completed",
             output=output,
+            suppress_channel_reply=suppress_channel_reply,
         )
         if self.repository_provider:
             logger.info("Agent 任务结果写入存储开始: task_id={}", task_id)
@@ -270,7 +282,15 @@ class AgentRuntime:
 
     async def continue_task(self, task_id: str, user_input: str) -> AgentResult:
         output = await self._run_llm(task_id, user_input, source="api")
-        return AgentResult(task_id=task_id, source="api", status="completed", output=output)
+        suppress_channel_reply = task_id in self._suppress_channel_reply_task_ids
+        self._suppress_channel_reply_task_ids.discard(task_id)
+        return AgentResult(
+            task_id=task_id,
+            source="api",
+            status="completed",
+            output=output,
+            suppress_channel_reply=suppress_channel_reply,
+        )
 
     async def cancel_task(self, task_id: str) -> None:
         item = await self.memory.add("episodic", f"Task cancelled: {task_id}")
@@ -290,7 +310,30 @@ class AgentRuntime:
         task_id = task_id or str(uuid4())
         tool = self.tools.get(tool_name)
         if tool is None:
-            raise XBotError(f"Tool not found: {tool_name}")
+            result = ToolCallResult(
+                task_id=task_id,
+                tool=tool_name,
+                status="failed",
+                error=f"Tool not found: {tool_name}",
+                error_type="tool_not_found",
+                fallback={
+                    "error_type": "tool_not_found",
+                    "message": f"Tool not found: {tool_name}",
+                    "suggestion": "Use a visible registered tool name exactly as listed in the tool catalog.",
+                },
+            )
+            logger.warning("Agent 工具不存在: task_id={} tool={}", task_id, tool_name)
+            await self._add_event(
+                task_id,
+                "tool.failed",
+                {
+                    "tool": tool_name,
+                    "risk_level": "unknown",
+                    "error": result.error,
+                    "fallback": result.fallback,
+                },
+            )
+            return result
         logger.info("Agent 工具调用开始: task_id={} tool={} source={}", task_id, tool_name, source)
         await self._add_event(
             task_id,
@@ -401,6 +444,177 @@ class AgentRuntime:
         )
         return result
 
+    def _register_wechat_send_tools(self) -> None:
+        self.tools.register(
+            ToolDefinition(
+                name="wechat.send_text",
+                description=(
+                    "Send a text message back through the current WeChat channel. "
+                    "The runtime automatically routes to the current adapter and conversation."
+                ),
+                risk_level="execute",
+                handler=self._wechat_send_text_tool,
+                toolset="wechat",
+                source="wechat",
+                timeout_seconds=30,
+                input_schema={
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {"text": {"type": "string"}},
+                },
+            )
+        )
+        self.tools.register(
+            ToolDefinition(
+                name="wechat.send_image",
+                description=(
+                    "Send an image file through the current WeChat channel. "
+                    "The runtime automatically routes to the current adapter and conversation."
+                ),
+                risk_level="execute",
+                handler=self._wechat_send_image_tool,
+                toolset="wechat",
+                source="wechat",
+                timeout_seconds=300,
+                metadata={"background_candidate": True, "background_reason": "media sending may take time"},
+                input_schema={
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {
+                        "path": {"type": "string"},
+                        "name": {"type": "string"},
+                    },
+                },
+            )
+        )
+        self.tools.register(
+            ToolDefinition(
+                name="wechat.send_file",
+                description=(
+                    "Send a file through the current WeChat channel. "
+                    "The runtime automatically routes to the current adapter and conversation."
+                ),
+                risk_level="execute",
+                handler=self._wechat_send_file_tool,
+                toolset="wechat",
+                source="wechat",
+                timeout_seconds=300,
+                metadata={"background_candidate": True, "background_reason": "media sending may take time"},
+                input_schema={
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {
+                        "path": {"type": "string"},
+                        "name": {"type": "string"},
+                    },
+                },
+            )
+        )
+
+    async def _wechat_send_text_tool(self, payload: dict) -> dict:
+        source = str(payload.get("_source") or "")
+        target = self._wechat_reply_target_from_payload(payload)
+        text = str(payload.get("text") or "")
+        if not text:
+            raise XBotError("wechat.send_text requires text.")
+        if not target:
+            raise XBotError("wechat.send_text can only be used from a WeChat channel context.")
+        if self.background.send_reply:
+            await self.background.send_reply(
+                Reply(
+                    platform=target["platform"],
+                    adapter=target["adapter"],
+                    conversation_id=target["conversation_id"],
+                    type="text",
+                    content=text,
+                    quote_message_id=target.get("quote_message_id") or None,
+                )
+            )
+            return {"sent": True, "adapter": target["adapter"], "type": "text"}
+        if target["adapter"] == "wechat869":
+            return await self._run_wechat869_media_action("send-text", payload, target)
+        raise XBotError(f"Reply sender is not available for {source}.")
+
+    async def _wechat_send_image_tool(self, payload: dict) -> dict:
+        target = self._wechat_reply_target_from_payload(payload)
+        if not target:
+            raise XBotError("wechat.send_image can only be used from a WeChat channel context.")
+        if target["adapter"] == "wechat869":
+            return await self._run_wechat869_media_action("send-image", payload, target)
+        if target["adapter"] == "wechat_ilink":
+            return await self._send_wechat_reply_media("image", payload, target)
+        raise XBotError(f"Unsupported WeChat adapter for image sending: {target['adapter']}")
+
+    async def _wechat_send_file_tool(self, payload: dict) -> dict:
+        target = self._wechat_reply_target_from_payload(payload)
+        if not target:
+            raise XBotError("wechat.send_file can only be used from a WeChat channel context.")
+        if target["adapter"] == "wechat869":
+            return await self._run_wechat869_media_action("send-file", payload, target)
+        if target["adapter"] == "wechat_ilink":
+            return await self._send_wechat_reply_media("file", payload, target)
+        raise XBotError(f"Unsupported WeChat adapter for file sending: {target['adapter']}")
+
+    async def _send_wechat_reply_media(self, reply_type: str, payload: dict, target: dict) -> dict:
+        path = str(payload.get("path") or "")
+        if not path:
+            raise XBotError(f"wechat.send_{reply_type} requires path.")
+        if not self.background.send_reply:
+            raise XBotError(f"Reply sender is not available for {target['adapter']}.")
+        await self.background.send_reply(
+            Reply(
+                platform=target["platform"],
+                adapter=target["adapter"],
+                conversation_id=target["conversation_id"],
+                type=reply_type,
+                content=path,
+                quote_message_id=target.get("quote_message_id") or None,
+            )
+        )
+        return {"sent": True, "adapter": target["adapter"], "type": reply_type, "path": path}
+
+    async def _run_wechat869_media_action(self, action: str, payload: dict, target: dict) -> dict:
+        args = {
+            "to": str(payload.get("to") or target["raw_conversation_id"]),
+        }
+        if action == "send-text":
+            args["text"] = str(payload.get("text") or "")
+        else:
+            args["path"] = str(payload.get("path") or "")
+            if payload.get("name"):
+                args["name"] = str(payload["name"])
+        for key in ("thumb", "thumb_mode", "format", "seconds", "url", "title", "desc", "thumb_url"):
+            if payload.get(key):
+                args[key] = payload[key]
+        if payload.get("at"):
+            args["at"] = payload["at"]
+        return await self.skill_tools.run_skill(
+            {
+                "skill": "wechat-869-media-sender",
+                "action": action,
+                "args": args,
+            }
+        )
+
+    def _wechat_reply_target_from_payload(self, payload: dict) -> dict | None:
+        source = str(payload.get("_source") or "")
+        input_text = str(payload.get("_input_text") or "")
+        notify = self._notification_target(source, input_text, include_wechat=True)
+        if not notify or notify.get("platform") != "wechat":
+            return None
+        conversation_id = str(notify["conversation_id"])
+        raw_conversation_id = conversation_id
+        if str(notify["adapter"]) == "wechat869":
+            raw_conversation_id = self._raw_wechat869_conversation_id(conversation_id)
+            match = re.search(r"(?m)^reply_target_wxid:\s*(.+)$", input_text)
+            if match:
+                raw_conversation_id = match.group(1).strip()
+        return {
+            **notify,
+            "conversation_id": conversation_id,
+            "raw_conversation_id": raw_conversation_id,
+        }
+
     def llm_status(self) -> dict:
         return self.llm.status()
 
@@ -479,6 +693,10 @@ class AgentRuntime:
 
     async def _execute_tool_for_task(self, tool_name: str, payload: dict) -> dict:
         result = await self.execute_tool(tool_name, payload, source="background")
+        return result.model_dump(mode="json")
+
+    async def _run_agent_for_task(self, input_text: str, source: str = "background") -> dict:
+        result = await self.run_task(input_text, source=source or "background")
         return result.model_dump(mode="json")
 
     def _maybe_start_memory_review(
@@ -862,6 +1080,7 @@ class AgentRuntime:
 
             tool_results = []
             background_started = False
+            explicit_wechat_send = False
             for call in plan.tool_calls:
                 tool_name, payload = self._prepare_tool_call(call.tool, call.payload, source, input_text)
                 result = await self.execute_tool(
@@ -871,10 +1090,25 @@ class AgentRuntime:
                     source="agent",
                 )
                 used_tool = True
-                if tool_name == "task.start" and result.status == "completed":
+                if tool_name in {"task.start", "task.agent_start"} and result.status == "completed":
                     background_started = True
+                if (
+                    tool_name == "wechat.send_text"
+                    and result.status == "completed"
+                    and source.startswith("channel:wechat:")
+                ):
+                    explicit_wechat_send = True
                 tool_results.append(result.model_dump(mode="json"))
-            if background_started and self._should_return_after_background(source):
+            if explicit_wechat_send:
+                self._suppress_channel_reply_task_ids.add(task_id)
+                output = "已发送。"
+                if history_key:
+                    self._append_session_turn(history_key, input_text, output)
+                return output
+            if background_started and (
+                self._should_return_after_background(source)
+                or self._has_child_agent_started(tool_results)
+            ):
                 output = self._background_started_message(tool_results)
                 if history_key:
                     self._append_session_turn(history_key, input_text, output)
@@ -1209,6 +1443,12 @@ class AgentRuntime:
         source: str,
         input_text: str,
     ) -> tuple[str, dict]:
+        tool_name = self._canonical_tool_name(tool_name)
+        if tool_name.startswith("wechat.send_"):
+            enriched = dict(payload)
+            enriched["_source"] = source
+            enriched["_input_text"] = input_text
+            return tool_name, enriched
         if tool_name == "task.start":
             nested_tool = str(payload.get("tool") or "")
             nested_payload = payload.get("payload") or {}
@@ -1218,6 +1458,15 @@ class AgentRuntime:
                 and self._is_fast_skill_run(nested_payload)
             ):
                 return nested_tool, nested_payload
+        if tool_name == "task.agent_start":
+            enriched = dict(payload)
+            if "input" not in enriched:
+                enriched["input"] = self._actual_user_request_text(input_text)
+            if not isinstance(enriched.get("notify"), dict):
+                notify = self._notification_target(source, input_text, include_wechat=True)
+                if notify:
+                    enriched["notify"] = notify
+            return tool_name, enriched
         if self._should_auto_background(tool_name, payload, source):
             payload = {
                 "tool": tool_name,
@@ -1237,6 +1486,28 @@ class AgentRuntime:
             if notify:
                 enriched["notify"] = notify
         return tool_name, enriched
+
+    def _canonical_tool_name(self, tool_name: str) -> str:
+        if self.tools.get(tool_name):
+            return tool_name
+        aliases = {
+            "read_file": "filesystem.read_file",
+            "write_file": "filesystem.write_file",
+            "list_dir": "filesystem.list_dir",
+            "delete_file": "filesystem.delete_path",
+            "delete_path": "filesystem.delete_path",
+            "shell": "shell.exec",
+            "exec": "shell.exec",
+            "run_shell": "shell.exec",
+            "send_text": "wechat.send_text",
+            "send_image": "wechat.send_image",
+            "send_file": "wechat.send_file",
+        }
+        canonical = aliases.get(tool_name)
+        if canonical and self.tools.get(canonical):
+            logger.info("Agent 工具别名映射: {} -> {}", tool_name, canonical)
+            return canonical
+        return tool_name
 
     def _should_auto_background(self, tool_name: str, payload: dict, source: str) -> bool:
         if tool_name == "task.start" or source == "background":
@@ -1260,15 +1531,25 @@ class AgentRuntime:
 
     def _background_started_message(self, tool_results: list[dict]) -> str:
         task_ids = []
+        has_child_agent = False
         for result in tool_results:
-            if result.get("tool") != "task.start" or result.get("status") != "completed":
+            if result.get("tool") not in {"task.start", "task.agent_start"} or result.get("status") != "completed":
                 continue
+            if result.get("tool") == "task.agent_start":
+                has_child_agent = True
             output = result.get("output")
             if isinstance(output, dict) and output.get("id"):
                 task_ids.append(str(output["id"]))
+        prefix = "子代理任务" if has_child_agent else "后台任务"
         if task_ids:
-            return f"后台任务已开始，完成后会自动回发结果。任务ID：{', '.join(task_ids)}"
-        return "后台任务已开始，完成后会自动回发结果。"
+            return f"{prefix}已开始，完成后会自动回发结果。任务ID：{', '.join(task_ids)}"
+        return f"{prefix}已开始，完成后会自动回发结果。"
+
+    def _has_child_agent_started(self, tool_results: list[dict]) -> bool:
+        return any(
+            result.get("tool") == "task.agent_start" and result.get("status") == "completed"
+            for result in tool_results
+        )
 
     def _should_return_after_background(self, source: str) -> bool:
         return not self._is_wechat869_source(source)
@@ -1277,13 +1558,19 @@ class AgentRuntime:
         parts = source.split(":", 3)
         return len(parts) >= 3 and parts[0] == "channel" and parts[2] == "wechat869"
 
-    def _notification_target(self, source: str, input_text: str) -> dict | None:
+    def _raw_wechat869_conversation_id(self, conversation_id: str) -> str:
+        marker = "wechat:wechat869:"
+        if conversation_id.startswith(marker):
+            return conversation_id.split(":", 3)[-1]
+        return conversation_id
+
+    def _notification_target(self, source: str, input_text: str, *, include_wechat: bool = False) -> dict | None:
         if not source.startswith("channel:"):
             return None
         parts = source.split(":", 3)
         if len(parts) < 4:
             return None
-        if parts[2] == "wechat869":
+        if parts[2] == "wechat869" and not include_wechat:
             return None
         message_id = ""
         match = re.search(r"(?m)^message_id:\s*(.+)$", input_text)
@@ -1336,6 +1623,7 @@ class AgentRuntime:
             "- If the user asks about installed commands, browser availability, ports, proxies, or runtime environment, call environment.snapshot or environment.which first.\n"
             "- Tools marked with metadata.background_candidate are good candidates for task.start when the request may take time or the user does not need an immediate result.\n"
             "- For long-running screenshots, browser interactions, downloads, GitHub Actions logs, or skill execution, prefer task.start so the request can run in the background.\n"
+            "- For longer multi-step work where the user can receive an immediate acknowledgement and a later result, prefer task.agent_start to delegate a full child Agent task in the background.\n"
             "- If a tool result contains fallback guidance or suggested_tool, use that guidance before retrying.\n"
             "- Use memory.add proactively for durable user preferences, corrections, stable environment facts, and project conventions. Keep entries compact. Do not save temporary task progress.\n"
             "- If the user changes your name, identity, persona, or 'soul', save it to memory target=memory, not target=user. target=user is only for facts about the user.\n"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import time
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -80,6 +81,55 @@ class Wechat869Client:
         if isinstance(payload, dict) and "Data" in payload:
             return payload.get("Data")
         return payload
+
+    async def send_cdn_download(self, aes_key: str, file_url: str, file_type: int) -> str:
+        if not aes_key or not file_url:
+            return ""
+        data = await self.call_path(
+            "/message/SendCdnDownload",
+            body={"AesKey": aes_key, "FileURL": file_url, "FileType": int(file_type)},
+        )
+        return self._extract_base64_from_payload(data)
+
+    async def download_image(self, aes_key: str, cdn_url: str) -> bytes:
+        for file_type in (2, 3):
+            try:
+                payload = await self.send_cdn_download(aes_key, cdn_url, file_type)
+                if payload:
+                    return base64.b64decode(payload)
+            except Exception:
+                continue
+        return b""
+
+    async def download_file(self, aes_key: str, file_url: str) -> bytes:
+        payload = await self.send_cdn_download(aes_key, file_url, 5)
+        return base64.b64decode(payload) if payload else b""
+
+    async def download_attach(self, attach_id: str) -> bytes:
+        attach_id = str(attach_id or "").strip()
+        if not attach_id:
+            return b""
+        aes_key = ""
+        file_url = ""
+        if attach_id.startswith("@cdn_"):
+            raw = attach_id[len("@cdn_") :]
+            parts = [part for part in raw.split("_") if part]
+            if len(parts) >= 3:
+                aes_key = parts[-2]
+                file_url = "_".join(parts[:-2])
+        if aes_key and file_url:
+            data = await self.download_file(aes_key, file_url)
+            if data:
+                return data
+        try:
+            payload = await self.call_path(
+                "/api/Tools/DownloadFile",
+                body={"Wxid": self.wxid, "AttachId": attach_id},
+            )
+        except Exception:
+            return b""
+        encoded = self._extract_base64_from_payload(payload)
+        return base64.b64decode(encoded) if encoded else b""
 
     async def request(
         self,
@@ -163,6 +213,30 @@ class Wechat869Client:
                 except (TypeError, ValueError):
                     return default
         return default
+
+    def _extract_base64_from_payload(self, payload: Any) -> str:
+        if isinstance(payload, str):
+            text = payload.strip()
+            if text.startswith("data:") and "," in text:
+                return text.split(",", 1)[1].strip()
+            return text
+        if isinstance(payload, list):
+            for item in payload:
+                value = self._extract_base64_from_payload(item)
+                if value:
+                    return value
+            return ""
+        if isinstance(payload, dict):
+            for key in ("FileData", "fileData", "base64", "Base64", "data", "Data", "buffer", "Buffer"):
+                if key in payload:
+                    value = self._extract_base64_from_payload(payload.get(key))
+                    if value:
+                        return value
+            for value in payload.values():
+                nested = self._extract_base64_from_payload(value)
+                if nested:
+                    return nested
+        return ""
 
     def _extract_error(self, payload: Any) -> str:
         if not isinstance(payload, dict):
