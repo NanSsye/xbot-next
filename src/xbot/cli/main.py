@@ -10,6 +10,7 @@ import anyio
 
 from xbot.cli.bridge import run_terminal_bridge
 from xbot.cli.chat import run_terminal_chat
+from xbot.cli.setup import run_setup
 from xbot.cli.tui import run_terminal_tui
 from xbot.core.config import load_settings
 from xbot.storage.bootstrap import ensure_storage_ready
@@ -21,7 +22,7 @@ app = typer.Typer(help="xbot backend CLI", invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
-    anyio.run(_run_chat_command, None, None, None, False, False, False, False, False)
+    anyio.run(_run_chat_command, None, None, None, False, False, False, False, True)
 
 
 @app.command()
@@ -41,6 +42,24 @@ def status() -> None:
     typer.echo(f"xbot config: {settings.config_file}")
     typer.echo(f"server: {settings.server.host}:{settings.server.port}")
     typer.echo(f"storage: {settings.storage.type} {settings.storage.url}")
+
+
+@app.command("setup")
+def setup(
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Runtime profile: local or production.",
+    ),
+    wechat: str | None = typer.Option(
+        None,
+        "--wechat",
+        help="WeChat channel: none, ilink, 869, or both.",
+    ),
+    env_path: str | None = typer.Option(None, "--env", help="Path to .env file."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Use defaults without prompting."),
+) -> None:
+    run_setup(profile=profile, wechat=wechat, env_path=env_path, yes=yes)
 
 
 @app.command()

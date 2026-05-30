@@ -23,7 +23,7 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     settings = load_settings()
-    if settings.storage.admin_url:
+    if settings.storage.type == "postgresql" and settings.storage.admin_url:
         target = make_url(settings.storage.url)
         return (
             make_url(settings.storage.admin_url)

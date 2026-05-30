@@ -20,7 +20,7 @@ class ServerConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    type: Literal["postgresql"] = "postgresql"
+    type: Literal["postgresql", "sqlite"] = "postgresql"
     url: str = "postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot"
     echo: bool = False
     persist_runtime_events: bool = True
@@ -66,7 +66,7 @@ class ConversationConcurrencyConfig(BaseModel):
 
 class ConversationConfig(BaseModel):
     enabled: bool = True
-    store: Literal["postgresql"] = "postgresql"
+    store: Literal["postgresql", "sqlite"] = "postgresql"
     default_scope: Literal["private", "group", "channel", "agent_task", "system"] = "private"
     context: ConversationContextConfig = Field(default_factory=ConversationContextConfig)
     concurrency: ConversationConcurrencyConfig = Field(default_factory=ConversationConcurrencyConfig)
@@ -402,6 +402,8 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         else _load_dotenv(path.parent.parent / ".env")
     )
     env = {**dotenv_values, **os.environ}
+    if storage_type := env.get("XBOT_STORAGE_TYPE"):
+        data.setdefault("storage", {})["type"] = storage_type
     if database_url := env.get("XBOT_DATABASE_URL"):
         data.setdefault("storage", {})["url"] = database_url
     if admin_database_url := env.get("XBOT_ADMIN_DATABASE_URL"):
@@ -412,6 +414,10 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("storage", {})["run_migrations_on_startup"] = _env_bool(run_migrations)
     if redis_url := env.get("XBOT_REDIS_URL"):
         data.setdefault("queue", {})["redis_url"] = redis_url
+    if queue_type := env.get("XBOT_QUEUE_TYPE"):
+        data.setdefault("queue", {})["type"] = queue_type
+    if conversation_store := env.get("XBOT_CONVERSATION_STORE"):
+        data.setdefault("conversation", {})["store"] = conversation_store
     if llm_api_key := env.get("XBOT_LLM_API_KEY"):
         data.setdefault("agent", {}).setdefault("llm", {})["api_key"] = llm_api_key
     if llm_base_url := env.get("XBOT_LLM_BASE_URL"):

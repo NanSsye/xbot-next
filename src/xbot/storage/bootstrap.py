@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import anyio
 import asyncpg
@@ -25,6 +26,11 @@ class StorageBootstrapError(RuntimeError):
 async def ensure_storage_ready(settings: Settings) -> None:
     config = settings.storage
     if not config.auto_bootstrap:
+        return
+    if config.type == "sqlite":
+        _ensure_sqlite_parent_dir(config.url)
+        if config.run_migrations_on_startup:
+            await anyio.to_thread.run_sync(_run_upgrade)
         return
 
     if config.admin_url:
@@ -127,6 +133,16 @@ def _run_upgrade() -> None:
     from xbot.cli.main import _alembic_config
 
     command.upgrade(_alembic_config(), "head")
+
+
+def _ensure_sqlite_parent_dir(url: str) -> None:
+    parsed = make_url(url)
+    if parsed.drivername not in {"sqlite", "sqlite+aiosqlite"}:
+        return
+    database = parsed.database
+    if not database or database == ":memory:":
+        return
+    Path(database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
 
 def _database_target(url: str) -> DatabaseTarget:

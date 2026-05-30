@@ -24,6 +24,7 @@ skills/                  Skill 目录
 src/xbot/                后端源码
 tests/                   单元测试和集成测试
 .env.example             环境变量示例
+.env.local.example       本地简易版环境变量示例
 ```
 
 ## 环境要求
@@ -35,6 +36,74 @@ tests/                   单元测试和集成测试
 - 可选：OpenAI-compatible LLM 服务，用于 Agent
 
 ## 快速开始
+
+### 一键安装
+
+Linux/macOS/WSL：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
+```
+
+Windows PowerShell：
+
+```powershell
+iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
+```
+
+安装器会把项目安装到用户目录，创建 `.venv`、复制 `.env.example` 为 `.env`，生成全局 `xbot` 命令，并在首次安装完成后自动进入 `xbot setup` 配置向导：
+
+```bat
+xbot setup  # 配置模型、数据库、队列和微信通道
+xbot        # 进入终端 TUI
+xbot run    # 启动后端服务和通道
+```
+
+`xbot setup` 支持两种运行模式：
+
+- 简易版：SQLite + 本地 memory queue，适合个人电脑首次运行，也可以开启 iLink 扫码微信或 869 通道。
+- 生产版：PostgreSQL + Redis，适合服务器长期运行，也可以同时开启 iLink 和 869。
+
+非交互默认生成“简易版 + iLink”：
+
+```bat
+xbot setup --yes
+```
+
+如果安装时想跳过向导：
+
+```bash
+XBOT_SKIP_SETUP=1 curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
+```
+
+Windows PowerShell：
+
+```powershell
+$env:XBOT_SKIP_SETUP="1"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
+```
+
+升级使用同一个安装命令，脚本会更新已有安装目录并保留 `.env`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
+```
+
+Windows PowerShell：
+
+```powershell
+iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
+```
+
+可选环境变量：
+
+```text
+XBOT_INSTALL_DIR    自定义安装目录
+XBOT_BIN_DIR        自定义 xbot 命令目录
+XBOT_REPO_URL       自定义 Git 仓库地址
+XBOT_BRANCH         自定义分支，默认 main
+```
+
+### 手动开发安装
 
 ### 1. 创建虚拟环境
 

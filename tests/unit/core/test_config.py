@@ -48,10 +48,13 @@ def test_load_default_config(monkeypatch):
 def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_LOAD_DOTENV", "false")
     monkeypatch.setenv("XBOT_DATABASE_URL", "postgresql+asyncpg://u:p@db:5432/app")
+    monkeypatch.setenv("XBOT_STORAGE_TYPE", "postgresql")
     monkeypatch.setenv("XBOT_ADMIN_DATABASE_URL", "postgresql://postgres:admin@db:5432/postgres")
     monkeypatch.setenv("XBOT_DATABASE_AUTO_BOOTSTRAP", "false")
     monkeypatch.setenv("XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP", "false")
     monkeypatch.setenv("XBOT_REDIS_URL", "redis://redis:6379/2")
+    monkeypatch.setenv("XBOT_QUEUE_TYPE", "redis")
+    monkeypatch.setenv("XBOT_CONVERSATION_STORE", "postgresql")
     monkeypatch.setenv("XBOT_LLM_ENABLED", "true")
     monkeypatch.setenv("XBOT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("XBOT_LLM_BASE_URL", "http://llm.local/v1")
@@ -89,10 +92,13 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_WECHAT_ILINK_MAX_FILE_BYTES", "789")
     settings = load_settings("configs/xbot.toml")
     assert settings.storage.url == "postgresql+asyncpg://u:p@db:5432/app"
+    assert settings.storage.type == "postgresql"
     assert settings.storage.admin_url == "postgresql://postgres:admin@db:5432/postgres"
     assert settings.storage.auto_bootstrap is False
     assert settings.storage.run_migrations_on_startup is False
     assert settings.queue.redis_url == "redis://redis:6379/2"
+    assert settings.queue.type == "redis"
+    assert settings.conversation.store == "postgresql"
     assert settings.agent.llm.enabled is True
     assert settings.agent.llm.api_key == "test-key"
     assert settings.agent.llm.base_url == "http://llm.local/v1"
@@ -129,3 +135,18 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.adapters.wechat_ilink.media_dir == "data/ilink-media"
     assert settings.adapters.wechat_ilink.max_image_bytes == 456
     assert settings.adapters.wechat_ilink.max_file_bytes == 789
+
+
+def test_env_overrides_local_storage_and_memory_queue(monkeypatch):
+    monkeypatch.setenv("XBOT_LOAD_DOTENV", "false")
+    monkeypatch.setenv("XBOT_STORAGE_TYPE", "sqlite")
+    monkeypatch.setenv("XBOT_DATABASE_URL", "sqlite+aiosqlite:///data/xbot.db")
+    monkeypatch.setenv("XBOT_QUEUE_TYPE", "memory")
+    monkeypatch.setenv("XBOT_CONVERSATION_STORE", "sqlite")
+
+    settings = load_settings("configs/xbot.toml")
+
+    assert settings.storage.type == "sqlite"
+    assert settings.storage.url == "sqlite+aiosqlite:///data/xbot.db"
+    assert settings.queue.type == "memory"
+    assert settings.conversation.store == "sqlite"
