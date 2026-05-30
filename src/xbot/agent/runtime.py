@@ -1338,6 +1338,7 @@ class AgentRuntime:
             "- For long-running screenshots, browser interactions, downloads, GitHub Actions logs, or skill execution, prefer task.start so the request can run in the background.\n"
             "- If a tool result contains fallback guidance or suggested_tool, use that guidance before retrying.\n"
             "- Use memory.add proactively for durable user preferences, corrections, stable environment facts, and project conventions. Keep entries compact. Do not save temporary task progress.\n"
+            "- If the user changes your name, identity, persona, or 'soul', save it to memory target=memory, not target=user. target=user is only for facts about the user.\n"
             "- Use memory.replace or memory.remove when a memory becomes outdated or too broad.\n"
             "- Use wiki.manage for structured project knowledge, architecture notes, research notes, design decisions, procedures, and reusable documentation. Query the wiki before answering from knowledge base content.\n"
             "- Do not put user preferences or temporary chat state in the wiki; use memory.* for durable preferences and short-term history for active task context.\n"

@@ -149,7 +149,7 @@
 - [x] Agent 工具体验对齐 Codex 二阶段第一版完成：后台任务完成后可按通道主动回发，后台任务已接入 PostgreSQL 持久化表，fallback 已支持只读建议工具自动降级执行。
 - [x] Agent 工具体验对齐 Codex 三阶段第一版完成：长任务工具已标记 `background_candidate`，后台任务可恢复/安全重放只读任务，timeout fallback 可自动转入后台任务。
 - [x] Agent 工具体验对齐 Codex 四阶段第一版完成：后台任务 overview API、失败任务 replay API、通道场景按 provider metadata 自动后台执行策略已落地。
-- [x] Agent 工具调用解析增强：支持宽容解析非标准 `{"tool": ...}`、半坏 `tool_calls` JSON，并防止内部工具调用 JSON 外泄到用户回复。
+- [x] Agent 工具调用解析增强：新增 `ToolCallParser` 适配层，支持标准 JSON、宽松 JSON、OpenAI function call、MiniMax XML、通用 XML function_call 和 `Tool/Arguments` 文本格式，并防止内部工具调用原文外泄到用户回复。
 - [x] `filesystem.read_file` 已增加目录路径保护，目录读取会提示改用 `filesystem.list_dir`，避免 Windows 上目录读取显示为权限错误。
 - [x] 终端 Agent 对话模式第一阶段完成：新增 `python -m xbot.cli.main chat`，复用同一套 `AgentRuntime`、toolset、后台任务和 slash command。
 - [x] 终端 Agent 对话模式五阶段第一版完成：终端会话内保留最近 Agent 事件和后台任务事件，新增 `/events [n]` 与 `/logs [n]` 用于回看工具执行链路和后台任务结果。

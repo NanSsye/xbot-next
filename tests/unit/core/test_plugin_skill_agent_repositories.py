@@ -1886,6 +1886,84 @@ def test_planner_cleans_lenient_final_json_with_inner_quotes():
     assert output == '已回复！虽然被调侃"蠢"，但态度还是很友好的~'
 
 
+def test_planner_parses_minimax_tool_call_xml():
+    planner = AgentPlanner()
+
+    plan = planner.parse_llm_response(
+        '<minimax:tool_call>\n'
+        '<invoke name="memory.read","payload":{"target": "user"}}\n'
+        '</minimax:tool_call>'
+    )
+
+    assert len(plan.tool_calls) == 1
+    assert plan.tool_calls[0].tool == "memory.read"
+    assert plan.tool_calls[0].payload == {"target": "user"}
+    assert plan.final is None
+
+
+def test_planner_strips_minimax_tool_call_from_final_output():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        '<minimax:tool_call>\n'
+        '<invoke name="memory.add","payload":{"target":"memory","content":"Agent 名字：老夏"}}\n'
+        '</minimax:tool_call>\n'
+        "记住了，我以后叫老夏。"
+    )
+
+    assert output == "记住了，我以后叫老夏。"
+    assert "minimax:tool_call" not in output
+    assert "memory.add" not in output
+
+
+def test_planner_parses_openai_function_call_shape():
+    planner = AgentPlanner()
+
+    plan = planner.parse_llm_response(
+        '{"tool_calls":[{"function":{"name":"memory.read","arguments":"{\\"target\\":\\"user\\"}"}}]}'
+    )
+
+    assert len(plan.tool_calls) == 1
+    assert plan.tool_calls[0].tool == "memory.read"
+    assert plan.tool_calls[0].payload == {"target": "user"}
+
+
+def test_planner_parses_function_call_xml_shape():
+    planner = AgentPlanner()
+
+    plan = planner.parse_llm_response(
+        '<function_call name="wiki.manage">{"action":"query","query":"memory"}</function_call>'
+    )
+
+    assert len(plan.tool_calls) == 1
+    assert plan.tool_calls[0].tool == "wiki.manage"
+    assert plan.tool_calls[0].payload == {"action": "query", "query": "memory"}
+
+
+def test_planner_parses_tool_arguments_text_shape():
+    planner = AgentPlanner()
+
+    plan = planner.parse_llm_response(
+        'Tool: memory.read\nArguments: {"target":"memory"}'
+    )
+
+    assert len(plan.tool_calls) == 1
+    assert plan.tool_calls[0].tool == "memory.read"
+    assert plan.tool_calls[0].payload == {"target": "memory"}
+
+
+def test_planner_strips_generic_tool_blocks_from_final_output():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        '<function_call name="memory.read">{"target":"user"}</function_call>\n'
+        '读取完成。'
+    )
+
+    assert output == "读取完成。"
+    assert "function_call" not in output
+
+
 @pytest.mark.anyio
 async def test_background_task_replays_interrupted_read_task(tmp_path):
     repo = FakeAgentRepository()

@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from xbot.agent.tool_call_parser import ToolCallParser
+
 
 class PlannedToolCall(BaseModel):
     tool: str
@@ -18,18 +20,21 @@ class AgentPlan(BaseModel):
 
 
 class AgentPlanner:
+    def __init__(self) -> None:
+        self.tool_parser = ToolCallParser()
+
     async def plan(self, task: str) -> list[str]:
         return [task]
 
     def parse_llm_response(self, content: str) -> AgentPlan:
         objects = self._extract_json_objects(content)
-        lenient_calls = self._extract_tool_calls_lenient(content)
+        parsed_calls = self.tool_parser.extract(content)
         if not objects:
             return AgentPlan(
-                final=None if lenient_calls else content,
+                final=None if parsed_calls else content,
                 tool_calls=[
-                    PlannedToolCall(tool=tool, payload=payload)
-                    for tool, payload in lenient_calls
+                    PlannedToolCall(tool=call.tool, payload=call.payload)
+                    for call in parsed_calls
                 ],
             )
         calls = []
@@ -41,8 +46,14 @@ class AgentPlanner:
                 calls.append(data)
             calls.extend(data.get("tool_calls") or data.get("tools") or [])
             final = data.get("final") or data.get("answer") or final
-        if not calls and lenient_calls:
-            calls.extend({"tool": tool, "payload": payload} for tool, payload in lenient_calls)
+        if parsed_calls:
+            return AgentPlan(
+                final=final,
+                tool_calls=[
+                    PlannedToolCall(tool=call.tool, payload=call.payload)
+                    for call in parsed_calls
+                ],
+            )
         return AgentPlan(
             final=final,
             tool_calls=[
@@ -66,35 +77,13 @@ class AgentPlanner:
         if lenient_final:
             return lenient_final
 
-        stripped = self._strip_tool_json_blocks(text)
+        stripped = self.tool_parser.strip_blocks(text)
         if self.contains_tool_call_intent(stripped):
             return ""
         return stripped.strip()
 
     def contains_tool_call_intent(self, content: str) -> bool:
-        return bool(re.search(r'"(?:tool_calls|tools)"\s*:', content))
-
-    def _extract_tool_calls_lenient(self, content: str) -> list[tuple[str, dict[str, Any]]]:
-        text = self._strip_code_fences(content.strip())
-        calls: list[tuple[str, dict[str, Any]]] = []
-        tool_pattern = re.compile(r'"(?:tool|name)"\s*:\s*"([^"]+)"')
-        decoder = json.JSONDecoder()
-        for match in tool_pattern.finditer(text):
-            tool_name = match.group(1)
-            payload: dict[str, Any] = {}
-            payload_match = re.search(r'"(?:payload|arguments)"\s*:', text[match.end() :])
-            if payload_match:
-                payload_start = match.end() + payload_match.end()
-                brace_index = text.find("{", payload_start)
-                if brace_index >= 0:
-                    try:
-                        parsed_payload, _ = decoder.raw_decode(text[brace_index:])
-                    except json.JSONDecodeError:
-                        parsed_payload = {}
-                    if isinstance(parsed_payload, dict):
-                        payload = parsed_payload
-            calls.append((tool_name, payload))
-        return calls
+        return self.tool_parser.contains_intent(content)
 
     def is_empty_final_response(self, content: str) -> bool:
         data = self._extract_json(content)
@@ -166,22 +155,3 @@ class AgentPlanner:
             return json.loads(f'"{value}"').strip()
         except json.JSONDecodeError:
             return value.replace('\\"', '"').strip()
-
-    def _strip_tool_json_blocks(self, content: str) -> str:
-        text = content.lstrip()
-        prefix_match = re.match(
-            r"^```(?:json)?\s*(\{.*?\"(?:tool_calls|tools)\".*?\})\s*```\s*",
-            text,
-            flags=re.DOTALL,
-        )
-        if prefix_match:
-            return self._strip_tool_json_blocks(text[prefix_match.end() :])
-
-        decoder = json.JSONDecoder()
-        try:
-            data, index = decoder.raw_decode(text)
-        except json.JSONDecodeError:
-            return content
-        if isinstance(data, dict) and ("tool_calls" in data or "tools" in data):
-            return self._strip_tool_json_blocks(text[index:])
-        return content
