@@ -58,7 +58,7 @@
 
 ## 4. 当前实现进度
 
-更新时间：2026-05-29
+更新时间：2026-05-30
 
 已完成：
 
@@ -161,10 +161,25 @@
 - [x] 终端对话视觉增强第二版完成：参考 Hermes classic CLI，把用户输入改为 prompt 行，assistant 改为轻量 `xbot` 标题块流式输出，短系统提示保留一行状态，避免对话区堆叠大面板。
 - [x] 终端交互修复：取消用户输入二次显示，补充 stream restart/suffix 去重，避免 OpenAI-compatible 流式接口重复输出回答后半段。
 - [x] 终端 Hermes 状态栏增强：每轮回复后显示模型名、上下文占用、百分比进度条、本轮耗时和 LLM 耗时；上下文已用量优先读取接口 usage，窗口总量支持 `agent.llm.context_window_tokens` / `XBOT_LLM_CONTEXT_WINDOW_TOKENS`，未配置时按模型名兜底。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `122 passed`。
+- [x] Hermes 记忆系统对齐第一阶段完成：新增文件化 curated memory，使用 `data/agent/memories/MEMORY.md` 与 `USER.md` 保存长期事实和用户画像；新增 `memory.read/add/replace/remove` 工具，并在 Agent system prompt 中注入会话启动时冻结的长期记忆快照。
+- [x] Hermes 自进化第二阶段第一版完成：任务完成后按 `agent.memory.review_interval` 启动后台 memory review；review 使用受限 prompt，只允许执行 `memory.read/add/replace/remove`，用于保存用户偏好、纠正、稳定环境事实和项目约定，不阻塞主回复。
+- [x] Hermes 自进化第三/四阶段第一版完成：新增 `skill.manage` 程序性记忆工具，限定只能管理 `skills/.agent/` 下的 agent-owned skills；新增 `.usage.json`、pin/unpin、archive/restore 基础 curator 能力，后台 review 可在受限范围内 patch/create agent-owned skill。
+- [x] Hermes 生态级生命周期第五阶段完成：新增 memory flush、curator 自动间隔调度、agent-owned skill stale/archive 自动转换，以及终端 `/memory`、`/curator`、`/skills agent` 管理入口；默认仍只影响主项目，不触碰桌面生产副本。
+- [x] Hermes 生态级控制面第一版完成：新增 `/api/v1/agent/memory/*`、`/api/v1/agent/curator/*`、`/api/v1/agent/skills/agent-owned`，管理后台或外部控制台可直接读写 curated memory、触发 flush、查看/运行 curator、pin/archive/restore agent-owned skill。
+- [x] Hermes 自进化增强完成：curator 新增 dry-run report、规则建议、重复 skill 检测、可选 LLM 建议、latest report 持久化和人工确认 apply；终端新增 `/curator report`、`/curator apply`，API 新增 `/curator/report`、`/curator/apply`。
+- [x] Hermes 灵魂/模板种子完成：新增 tracked 的 `data/agent/memories/MEMORY.md`、`USER.md`、`skills/.agent/.templates/`、`skills/.agent/.curator/README.md` 和种子 skill `skills/.agent/xbot-self-evolution/`；memory 解析会忽略模板注释，避免模板说明被注入 prompt。
+- [x] Hermes 短期记忆对齐完成：`AgentRuntime` 新增按 source 隔离的 session working memory，terminal/channel 每轮会把短期 summary 和最近 user/assistant 轮次带入下一次 LLM 调用；`/new` 会清理当前终端 session 的短期历史。
+- [x] Hermes 短期压缩第一版完成：旧轮次不再直接遗忘；默认不按轮数裁剪，超过 `short_term_max_tokens=128000` 的内容会压入 session summary，再与最近原文一起带入后续对话；微信通道同样按 conversation source 隔离。
+- [x] Wiki Knowledge Base 第一阶段完成：新增 `WikiStore`、`wiki.manage`、`/api/v1/agent/wiki`、默认 `data/agent/wiki/xbot/` Markdown 种子；默认不依赖第三方软件，使用 Markdown 页面、目录索引、文件检索和 LLM 维护页面，RAG/向量库仅作为后续派生缓存。
+- [x] Wiki Knowledge Base 第二阶段完成：新增页面合并建议、交叉链接维护、冲突检测、专题 digest、派生 search/RAG index 重建；生成报告写入 `merge-suggestions.md` / `conflicts.md`，派生索引写入 `derived/search-index.json` 且可随时重建。
+- [x] 添加基础测试，当前 `python -m pytest -q` 通过，结果为 `150 passed`。
 
 进行中：
 
+- [ ] Hermes 生态下一阶段：补 memory / curator 的前端管理页或独立控制台视图，能查看 `USER.md`、`MEMORY.md`、agent-owned skill usage、stale/archive 状态和手动操作入口。
+- [ ] Hermes 自进化增强二阶段：把 curator report 的 merge 建议升级为更强的内容合并 diff、人工审批 UI 和回滚入口。
+- [ ] Wiki Knowledge Base 第三阶段：补 LLM 辅助页面合并 diff、人工审批 apply、双向链接质量评分、冲突解决状态和可选真正 embedding provider。
+- [ ] Agent 记忆外部化：预留 memory provider 接口，后续支持数据库、向量检索或外部知识库，但默认仍保持文件化 curated memory 简单可靠。
 - [ ] Toolset 二阶段：当前已按 API/私聊/群聊控制可见范围，admin 默认全部可见；下一步细化到具体 adapter、用户身份、群管理员和会话状态。
 - [ ] MCP 二阶段：当前已有 include/exclude、status、reload 和失败状态记录；下一步补自动重连退避、周期健康检查、失败工具降级和连接池隔离。
 - [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息和回复链路；下一步验证长连接重连、群聊高频消息、异常消息格式和生产日志可观测性。
@@ -1885,6 +1900,124 @@ External UI process
 ```
 
 第一步已完成非流式显示优化：每轮输出一个 activity 面板，聚合 thinking、工具调用、耗时和错误摘要；保留 `/events`、`/logs` 作为完整事件回看。第二步已完成终端自然语言流式第一版：LLM delta 先经过安全判断，疑似 JSON/tool-call 的内容不展示，最终仍由 planner 解析后输出干净回复，并兼容累计/重叠 stream chunk 去重。第三步已完成启动概览、工具摘要分层和当前任务取消。第四步已完成 `--fancy-input` 的多行输入、状态栏和输出保护。第五步已完成 JSONL bridge，后续真正独立 UI 进程应基于该协议实现。
+
+#### 17.6.10 Hermes 参考后的长期记忆与自进化架构
+
+Hermes 的长期能力分三层：
+
+- 声明式记忆：`MEMORY.md` 保存 Agent 自己的稳定笔记，例如环境事实、项目约定、工具坑点；`USER.md` 保存用户画像，例如偏好、沟通风格、明确纠正。
+- 程序性记忆：Skill 保存“怎么做某类任务”，包括 `SKILL.md`、`references/`、`templates/`、`scripts/`、`assets/`。
+- 生命周期维护：后台 review agent 负责复盘是否需要写 memory 或 patch/create skill；curator 负责 skill 使用统计、stale/archive/pin/restore，避免自进化长期膨胀。
+
+xbot 采用分阶段落地：
+
+1. [x] 第一阶段：文件化 curated memory。默认目录 `data/agent/memories/`，包含 `MEMORY.md` 与 `USER.md`；系统提示词只注入会话启动时的冻结快照，当前会话写入立即落盘但不刷新本轮 system prompt，避免 prompt cache 和对话行为在中途漂移。
+2. [x] 第一阶段工具面：新增 `memory.read`、`memory.add`、`memory.replace`、`memory.remove`。`target=user` 用于用户偏好和个人画像，`target=memory` 用于环境事实、项目约定、工具经验；写入有长度预算和基础敏感/注入词拦截。
+3. [x] 第二阶段：后台 memory review。每 N 轮复制本轮输入、输出和 source，启动一个受限 review task；该 task 只允许 `memory.read/add/replace/remove`，不能调用 shell/browser/filesystem/skill，避免复盘过程污染主任务或执行危险操作。
+4. [x] 第三阶段：程序性记忆。新增 `skill.manage`，支持在 `skills/.agent/` 目录中 create/patch/write_file/archive；优先 patch 已加载或已有 umbrella skill，避免每个任务都创建窄 skill。
+5. [x] 第四阶段：curator 基础能力。新增 `.usage.json` 记录 `created_by=agent`、use/view/patch 计数、pinned、state；支持 pin/unpin、archive/restore，不自动删除。
+6. [x] 第五阶段：生命周期与管理入口。`AgentRuntime.flush_memory()` 可在 `/new`、stop 或后续 reset/compress 边界前触发受限复盘；`curator_interval_turns` 触发后台 curator 自动转换 stale/archive；终端增加 `/memory`、`/curator status/run/archive/restore/pin/unpin`、`/skills agent`。
+7. [x] 第六阶段：生态控制面 API。后台和外部管理工具可通过 `/api/v1/agent/memory/{target}`、`POST/PUT/DELETE /api/v1/agent/memory`、`POST /api/v1/agent/memory/flush`、`GET /api/v1/agent/curator`、`POST /api/v1/agent/curator/run`、`POST /api/v1/agent/curator/{action}/{name}`、`GET /api/v1/agent/skills/agent-owned` 管理长期记忆、自进化 skill 和 curator 生命周期。
+8. [x] 第七阶段：LLM 辅助 curator。`AgentRuntime.generate_curator_report()` 生成 dry-run 报告，报告保存在 `skills/.agent/.curator/latest.json`；报告融合规则 stale/archive 建议、启发式重复 skill 检测和可选 LLM proposals。`apply_curator_report()` 只在人工指定 apply 后执行 proposal，支持 archive、mark_stale、pin/unpin、merge-source-archive；常规自动 curator 仍保留规则路径，不让 LLM 自动改文件。
+9. [x] 第八阶段：可见模板种子。仓库提供初始 memory 和 self-evolution skill 模板，运行时也会在缺失 `MEMORY.md` / `USER.md` 时创建注释模板；注释模板不会进入长期记忆快照。
+10. [x] 第九阶段：短期 working memory。参考 Hermes 的 `conversation_history -> messages` 模型，xbot 在 `AgentRuntime` 内维护 source-scoped `LLMMessage` 历史；terminal session 和 channel conversation 默认不按轮数裁剪，主要受 `agent.memory.short_term_max_tokens` 控制。API 默认不共享短期历史，避免无 session 的调用互相污染。
+11. [x] 第十阶段：短期压缩。旧轮次超过 token 窗口后进入 `Short-term session summary`，最近轮次继续保留原文；下一轮消息顺序为 system prompt、长期记忆、短期 summary、最近历史、当前用户输入。默认原文窗口 `128K tokens`、summary `32K tokens`，字符预算配置保留为兼容兜底；当前为确定性摘要，后续可升级为 LLM 压缩 diff/主题化摘要。
+12. [x] 第十一阶段：Wiki Knowledge Base。新增 `data/agent/wiki/<wiki-name>/`，用于系统化项目知识、研究资料和业务知识沉淀；它不替代 `MEMORY.md` / `USER.md`，而是承载更大、更结构化的长期知识。
+
+记忆写入原则：
+
+- 应保存：用户明确纠正、稳定偏好、长期项目约定、可复用环境事实、反复出现的工具坑点。
+- 不应保存：本次任务进度、一次性结论、临时错误、可轻易重新读取的文件内容、密钥和 token。
+- 用户偏好和沟通风格进 `USER.md`；项目/环境/工具事实进 `MEMORY.md`；“怎么做”进 skill。
+
+#### 17.6.11 Karpathy llm-wiki 参考后的知识库层
+
+Karpathy 的 `llm-wiki` 思路适合补足 xbot 当前记忆体系的第四层：把大规模资料、项目知识和长期研究整理成可持续演进的 Markdown wiki。它和 RAG 的区别是：RAG 通常每次从原始 chunk 临时检索拼上下文；wiki 则把资料读入后“编译”为稳定页面、索引、交叉链接、矛盾点和综合判断，后续查询直接利用这个已经沉淀过的知识结构。
+
+xbot 的分层定位：
+
+- 短期 working memory：当前 session / conversation 的上下文和压缩摘要。
+- `USER.md`：用户偏好、纠正、沟通风格和长期个人画像。
+- `MEMORY.md`：少量高密度、稳定的环境事实、项目约定和工具坑点。
+- `skills/.agent/`：程序性记忆，保存“怎么做某类任务”。
+- `data/agent/wiki/<wiki-name>/`：知识库，保存大量结构化项目资料、研究资料、业务知识和长期综合判断。
+
+第一版已落地，不需要额外第三方软件：
+
+- 存储：本地 Markdown 文件。
+- 检索：目录索引、filesystem/`rg` 可读文件、`wiki.manage action=query` 标题/正文匹配。
+- 维护：LLM 通过 `wiki.manage` 更新页面、索引和日志。
+- 审计：每次 ingest/update 写入 `log.md`。
+
+默认目录：
+
+```text
+data/agent/wiki/
+  xbot/
+    schema.md      # 维护规则和页面结构约定
+    index.md       # 总索引
+    log.md         # ingest/update/lint 操作日志
+    merge-suggestions.md
+    conflicts.md
+    raw/           # 原始资料快照或链接记录
+    derived/       # 可重建的派生检索/RAG 索引，不是权威源
+    pages/
+      architecture.md
+      decisions.md
+      plugins.md
+      memory-system.md
+```
+
+第一阶段工具面：
+
+```text
+wiki.manage action=bootstrap wiki=xbot
+wiki.manage action=ingest wiki=xbot source=<file/url/text> topic=<topic>
+wiki.manage action=query wiki=xbot query=<question>
+wiki.manage action=read_page wiki=xbot page=<slug>
+wiki.manage action=write_page wiki=xbot page=<slug> content=<markdown>
+wiki.manage action=append_page wiki=xbot page=<slug> content=<markdown>
+wiki.manage action=suggest_merge wiki=xbot query=<topic>
+wiki.manage action=maintain_links wiki=xbot page=<slug> dry_run=true
+wiki.manage action=detect_conflicts wiki=xbot query=<topic>
+wiki.manage action=digest wiki=xbot topic=<topic> query=<query> page=<optional-slug>
+wiki.manage action=rebuild_index wiki=xbot
+wiki.manage action=update_index wiki=xbot
+wiki.manage action=lint wiki=xbot
+wiki.manage action=log wiki=xbot
+```
+
+控制面 API：
+
+```text
+POST /api/v1/agent/wiki
+GET  /api/v1/agent/wiki/{wiki}/query?query=<question>&limit=5
+```
+
+默认配置：
+
+```toml
+[agent.wiki]
+enabled = true
+directory = "data/agent/wiki"
+default_wiki = "xbot"
+query_max_chars = 12000
+rag_enabled = false
+vector_index = false
+```
+
+是否需要 RAG / 向量库：
+
+- 当前不需要。对中小规模项目知识，本地 Markdown + 索引 + grep/rg + LLM 整理已经足够，并且更容易审计和 Git 化。
+- 后续可以加 RAG，但作为可插拔增强，不作为 wiki 第一版依赖。
+- 如果加 RAG，推荐只给 `raw/` 和 `pages/` 建派生索引；Markdown wiki 仍是权威源，向量库只是加速召回的缓存，不保存唯一事实。
+- 第二阶段的 `rebuild_index` 只生成 rebuildable JSON 检索索引，不接入第三方向量库；后续 embedding provider 必须从 Markdown 重新构建。
+
+写入边界：
+
+- 适合进入 wiki：成体系的项目架构、设计决策、插件能力、业务规则、长期研究资料、外部文档摘要和冲突整理。
+- 不适合进入 wiki：临时聊天、用户偏好、一次性任务进度、敏感信息、可直接从项目文件实时读取的短期状态。
+- memory review 遇到“少量稳定事实”写 `MEMORY.md`；遇到“成体系知识”应建议写入 wiki。
 
 ## 18. Skill 体系
 

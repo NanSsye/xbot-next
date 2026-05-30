@@ -31,6 +31,7 @@ from xbot.agent.tools.plugin_provider import register_plugin_tools
 from xbot.agent.tools.skill_provider import SkillToolProvider
 from xbot.agent.tools.task_provider import register_task_tools
 from xbot.agent.tools.toolsets import source_context, toolsets_for_source
+from xbot.agent.wiki import WikiStore
 from xbot.agent.workspace import Workspace
 from xbot.core.config import AgentConfig
 from xbot.core.exceptions import PolicyDeniedError, XBotError
@@ -85,7 +86,16 @@ class AgentRuntime:
         self.executor = ToolExecutor(self.tools)
         self.mcp = MCPClientManager(config.mcp, self.tools)
         self.background = BackgroundTaskManager(repository_provider=repository_provider)
-        self.memory = MemoryStore()
+        self.memory = MemoryStore(
+            config.memory.directory,
+            memory_char_limit=config.memory.memory_char_limit,
+            user_char_limit=config.memory.user_char_limit,
+        )
+        self.wiki = WikiStore(
+            config.wiki.directory,
+            default_wiki=config.wiki.default_wiki,
+            query_max_chars=config.wiki.query_max_chars,
+        ) if config.wiki.enabled else None
         self.compressor = MemoryCompressor()
         self.planner = AgentPlanner()
         self.llm = llm_provider or create_llm_provider(config.llm)
@@ -96,10 +106,17 @@ class AgentRuntime:
         self._static_prompt_cache: tuple[tuple[object, ...], str] | None = None
         self._skill_prompt_cache: tuple[int, str] | None = None
         self._event_subscribers: set[AgentEventSubscriber] = set()
+        self._turns_since_memory_review = 0
+        self._completed_turns = 0
+        self._turns_since_curator = 0
+        self._session_histories: dict[str, list[LLMMessage]] = {}
+        self._session_summaries: dict[str, str] = {}
         register_builtin_tools(
             self.tools,
             workspace=self.workspace,
             skills=self.skills,
+            memory=self.memory,
+            wiki=self.wiki,
             run_skill=self.skill_tools.run_skill,
         )
         register_environment_tools(self.tools, workspace=self.workspace)
@@ -114,6 +131,7 @@ class AgentRuntime:
         await self.mcp.start()
 
     async def stop(self) -> None:
+        await self.flush_memory(reason="runtime stop")
         await self.background.stop()
         await self.mcp.stop()
 
@@ -157,7 +175,98 @@ class AgentRuntime:
             logger.info("Agent 任务结果写入存储完成: task_id={}", task_id)
         else:
             await self._add_event(task_id, "task.completed", result.output)
+        self._completed_turns += 1
+        self._maybe_start_memory_review(
+            parent_task_id=task_id,
+            input_text=input_text,
+            output_text=result.output,
+            source=source,
+        )
+        self._maybe_start_curator()
         return result
+
+    async def flush_memory(self, *, reason: str = "manual") -> dict:
+        if not self.config.memory.enabled or not self.config.memory.review_enabled:
+            return {"success": True, "skipped": True, "reason": "memory review disabled"}
+        if self._completed_turns < int(self.config.memory.flush_min_turns or 0):
+            return {"success": True, "skipped": True, "reason": "below flush_min_turns"}
+        return await self._run_memory_review(
+            parent_task_id=str(uuid4()),
+            input_text=f"Memory flush requested: {reason}",
+            output_text="Review recent durable facts before context/session boundary.",
+            source="memory_flush",
+        )
+
+    async def run_curator(self) -> dict:
+        if not self.skills or not hasattr(self.skills, "run_curator"):
+            return {"success": False, "error": "Skill manager is not available."}
+        return await self.skills.run_curator()
+
+    async def generate_curator_report(self, *, use_llm: bool = True) -> dict:
+        if not self.skills or not hasattr(self.skills, "build_curator_report"):
+            return {"success": False, "error": "Skill manager is not available."}
+        llm_proposals: list[dict] = []
+        llm_error = ""
+        if use_llm and self.config.llm.enabled:
+            try:
+                response = await self.llm.complete(
+                    [
+                        LLMMessage(
+                            role="system",
+                            content=(
+                                "You are xbot's skill curator. Analyze agent-owned procedural "
+                                "skills and propose maintenance actions. This is dry-run only. "
+                                "Never ask to delete skills. Prefer archive, mark_stale, merge, "
+                                "pin, or unpin. For merge, choose target as the skill to keep and "
+                                "source_skill as the skill to archive. Return JSON only."
+                            ),
+                        ),
+                        LLMMessage(role="user", content=self._curator_report_prompt()),
+                    ]
+                )
+                llm_proposals = self._parse_curator_llm_proposals(response.content)
+            except Exception as exc:
+                llm_error = str(exc)
+        report = self.skills.build_curator_report(llm_proposals=llm_proposals)
+        if llm_error:
+            report["llm_error"] = llm_error
+            self.skills.save_curator_report(report)
+        return report
+
+    async def apply_curator_report(
+        self,
+        *,
+        report_id: str = "latest",
+        proposal_ids: list[str] | None = None,
+    ) -> dict:
+        if not self.skills or not hasattr(self.skills, "apply_curator_report"):
+            return {"success": False, "error": "Skill manager is not available."}
+        return await self.skills.apply_curator_report(
+            report_id=report_id,
+            proposal_ids=proposal_ids,
+        )
+
+    def _maybe_start_curator(self) -> BackgroundTaskRecord | None:
+        if not self.skills or not getattr(self.skills.config, "curator_enabled", False):
+            return None
+        interval = int(getattr(self.skills.config, "curator_interval_turns", 0) or 0)
+        if interval <= 0:
+            return None
+        self._turns_since_curator += 1
+        if self._turns_since_curator < interval:
+            return None
+        self._turns_since_curator = 0
+
+        async def runner():
+            return await self.run_curator()
+
+        return self.background.start(
+            kind="curator",
+            runner=runner,
+            source="agent",
+            description="Run agent-owned skill curator transitions",
+            metadata={},
+        )
 
     async def continue_task(self, task_id: str, user_input: str) -> AgentResult:
         output = await self._run_llm(task_id, user_input, source="api")
@@ -372,6 +481,141 @@ class AgentRuntime:
         result = await self.execute_tool(tool_name, payload, source="background")
         return result.model_dump(mode="json")
 
+    def _maybe_start_memory_review(
+        self,
+        *,
+        parent_task_id: str,
+        input_text: str,
+        output_text: str,
+        source: str,
+    ) -> BackgroundTaskRecord | None:
+        if not self.config.memory.enabled or not self.config.memory.review_enabled:
+            return None
+        if source == "background" or not output_text.strip():
+            return None
+        if source == "memory_flush":
+            return None
+        interval = int(self.config.memory.review_interval or 0)
+        if interval <= 0:
+            return None
+        self._turns_since_memory_review += 1
+        if self._turns_since_memory_review < interval:
+            return None
+        self._turns_since_memory_review = 0
+
+        async def runner():
+            return await self._run_memory_review(
+                parent_task_id=parent_task_id,
+                input_text=input_text,
+                output_text=output_text,
+                source=source,
+            )
+
+        return self.background.start(
+            kind="memory_review",
+            runner=runner,
+            source="agent",
+            description="Review completed task for durable memory",
+            metadata={"parent_task_id": parent_task_id, "source": source},
+        )
+
+    async def _run_memory_review(
+        self,
+        *,
+        parent_task_id: str,
+        input_text: str,
+        output_text: str,
+        source: str,
+    ) -> dict:
+        prompt = self._memory_review_prompt(input_text=input_text, output_text=output_text, source=source)
+        response = await self.llm.complete(
+            [
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "You are xbot's background memory reviewer. "
+                        "You may only request memory.read, memory.add, memory.replace, memory.remove, or skill.manage tool calls. "
+                        "Save only durable user preferences, corrections, stable environment facts, and project conventions. "
+                        "Use skill.manage only for reusable procedures in agent-owned skills under skills/.agent. "
+                        "Do not save temporary task progress, one-off outputs, secrets, tokens, or raw logs. "
+                        "Return JSON tool_calls when memory should change; otherwise return {\"final\":\"Nothing to save.\"}."
+                    ),
+                ),
+                LLMMessage(role="user", content=prompt),
+            ]
+        )
+        plan = self.planner.parse_llm_response(response.content)
+        allowed_tools = {"memory.read", "memory.add", "memory.replace", "memory.remove", "skill.manage"}
+        tool_results = []
+        for call in plan.tool_calls[:4]:
+            if call.tool not in allowed_tools:
+                tool_results.append({"tool": call.tool, "status": "skipped", "error": "not allowed in memory review"})
+                continue
+            result = await self.execute_tool(
+                call.tool,
+                call.payload,
+                task_id=parent_task_id,
+                source="background",
+            )
+            tool_results.append(result.model_dump(mode="json"))
+        return {
+            "parent_task_id": parent_task_id,
+            "tool_calls": len(plan.tool_calls),
+            "results": tool_results,
+            "final": self.planner.clean_final_output(plan.final or response.content),
+        }
+
+    def _memory_review_prompt(self, *, input_text: str, output_text: str, source: str) -> str:
+        return (
+            "Review this completed xbot turn for long-term memory value.\n"
+            f"source: {source}\n\n"
+            "User/input:\n"
+            f"{input_text[:4000]}\n\n"
+            "Assistant/output:\n"
+            f"{output_text[:4000]}\n\n"
+            "Targets:\n"
+            "- target=user: durable user preferences, corrections, communication style, personal workflow.\n"
+            "- target=memory: stable environment facts, project conventions, reusable tool quirks.\n"
+            "- skill.manage: create or patch reusable agent-owned procedural skills only when a durable workflow emerged.\n"
+            "Skip temporary progress, one-off results, and anything sensitive."
+        )
+
+    def _curator_report_prompt(self) -> str:
+        snapshot = self.skills.curator_snapshot() if self.skills else []
+        compact = [
+            {
+                "name": item.get("name"),
+                "state": item.get("state"),
+                "pinned": item.get("pinned"),
+                "use_count": item.get("use_count"),
+                "view_count": item.get("view_count"),
+                "patch_count": item.get("patch_count"),
+                "age_days": item.get("age_days"),
+                "description": item.get("description"),
+                "instructions_preview": item.get("instructions_preview"),
+            }
+            for item in snapshot
+        ]
+        return (
+            "Agent-owned skill snapshot as JSON:\n"
+            f"{json.dumps(compact, ensure_ascii=False)}\n"
+            "Return JSON in this shape only:\n"
+            '{"proposals":[{"action":"archive|mark_stale|merge|pin|unpin",'
+            '"target":"skill-to-keep-or-change",'
+            '"source_skill":"skill-to-archive-for-merge",'
+            '"reason":"short reason","confidence":0.0,'
+            '"merged_content":"optional full SKILL.md only when confidently merging"}]}'
+        )
+
+    def _parse_curator_llm_proposals(self, content: str) -> list[dict]:
+        for data in self.planner._extract_json_objects(content):
+            if not isinstance(data, dict):
+                continue
+            proposals = data.get("proposals") or data.get("actions") or []
+            if isinstance(proposals, list):
+                return [item for item in proposals if isinstance(item, dict)]
+        return []
+
     async def _auto_fallback(self, task_id: str, fallback: dict) -> dict | None:
         suggested_tool_name = fallback.get("suggested_tool")
         suggested_payload = fallback.get("suggested_payload")
@@ -490,10 +734,13 @@ class AgentRuntime:
         return {"truncated": True, "chars": len(text), "preview": text[:1200]}
 
     async def _run_llm(self, task_id: str, input_text: str, *, source: str = "api") -> str:
+        history_key = self._session_history_key(source)
         messages = [
             LLMMessage(role="system", content=self._agent_system_prompt(source=source)),
-            LLMMessage(role="user", content=input_text),
         ]
+        if history_key:
+            messages.extend(self._session_history(history_key))
+        messages.append(LLMMessage(role="user", content=input_text))
         last_content = ""
         used_tool = False
         iteration = 0
@@ -570,7 +817,10 @@ class AgentRuntime:
                     or self._must_continue_for_missing_tool(input_text, cleaned, used_tool)
                 ):
                     if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
-                        return "这个请求需要继续调用工具，但已达到配置的工具循环上限。"
+                        output = "这个请求需要继续调用工具，但已达到配置的工具循环上限。"
+                        if history_key:
+                            self._append_session_turn(history_key, input_text, output)
+                        return output
                     missing_tool_reprompts += 1
                     if missing_tool_reprompts > 3:
                         logger.warning(
@@ -578,7 +828,10 @@ class AgentRuntime:
                             task_id,
                             missing_tool_reprompts,
                         )
-                        return "这个请求需要调用工具读取当前状态，但模型连续没有发起工具调用，请换一种更明确的说法再试。"
+                        output = "这个请求需要调用工具读取当前状态，但模型连续没有发起工具调用，请换一种更明确的说法再试。"
+                        if history_key:
+                            self._append_session_turn(history_key, input_text, output)
+                        return output
                     messages.append(LLMMessage(role="assistant", content=response.content))
                     messages.append(
                         LLMMessage(
@@ -595,12 +848,17 @@ class AgentRuntime:
                     )
                     iteration += 1
                     continue
+                if history_key:
+                    self._append_session_turn(history_key, input_text, cleaned)
                 return cleaned
             missing_tool_reprompts = 0
             if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
-                return self.planner.clean_final_output(
+                output = self.planner.clean_final_output(
                     plan.final or "工具调用次数达到上限，任务没有完成。"
                 )
+                if history_key:
+                    self._append_session_turn(history_key, input_text, output)
+                return output
 
             tool_results = []
             background_started = False
@@ -617,7 +875,10 @@ class AgentRuntime:
                     background_started = True
                 tool_results.append(result.model_dump(mode="json"))
             if background_started and self._should_return_after_background(source):
-                return self._background_started_message(tool_results)
+                output = self._background_started_message(tool_results)
+                if history_key:
+                    self._append_session_turn(history_key, input_text, output)
+                return output
             messages.append(LLMMessage(role="assistant", content=response.content))
             messages.append(
                 LLMMessage(
@@ -631,9 +892,155 @@ class AgentRuntime:
             )
             iteration += 1
         if self._request_requires_current_state_tool(input_text) and not used_tool:
-            return "这个请求需要读取当前项目状态，但我没有成功调用工具，请稍后重试。"
+            output = "这个请求需要读取当前项目状态，但我没有成功调用工具，请稍后重试。"
+            if history_key:
+                self._append_session_turn(history_key, input_text, output)
+            return output
         cleaned = self.planner.clean_final_output(last_content)
-        return cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
+        output = cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
+        if history_key:
+            self._append_session_turn(history_key, input_text, output)
+        return output
+
+    def _session_history_key(self, source: str) -> str:
+        if not self.config.memory.short_term_enabled:
+            return ""
+        if source.startswith("terminal:") or source.startswith("channel:"):
+            return source
+        return ""
+
+    def _session_history(self, key: str) -> list[LLMMessage]:
+        messages = []
+        summary = self._session_summaries.get(key, "").strip()
+        if summary:
+            messages.append(
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "Short-term session summary from earlier turns. "
+                        "Use it as prior conversation context, not as a new user request.\n"
+                        f"{summary}"
+                    ),
+                )
+            )
+        messages.extend(self._session_histories.get(key, []))
+        return messages
+
+    def _append_session_turn(self, key: str, user_input: str, assistant_output: str) -> None:
+        if not key:
+            return
+        history = self._session_histories.setdefault(key, [])
+        history.extend(
+            [
+                LLMMessage(role="user", content=self._short_term_user_content(user_input)),
+                LLMMessage(role="assistant", content=assistant_output),
+            ]
+        )
+        self._compress_session_history(key)
+
+    def clear_session_history(self, source: str | None = None) -> None:
+        if source is None:
+            self._session_histories.clear()
+            self._session_summaries.clear()
+            return
+        self._session_histories.pop(source, None)
+        self._session_summaries.pop(source, None)
+
+    def _compress_session_history(self, key: str) -> None:
+        if not self.config.memory.auto_compress:
+            self._session_histories[key] = self._trim_session_history(
+                self._session_histories.get(key, []),
+                summarize=False,
+            )
+            return
+        self._session_histories[key] = self._trim_session_history(
+            self._session_histories.get(key, []),
+            summarize=True,
+            key=key,
+        )
+
+    def _trim_session_history(
+        self,
+        history: list[LLMMessage],
+        *,
+        summarize: bool = False,
+        key: str = "",
+    ) -> list[LLMMessage]:
+        max_turns = max(0, int(self.config.memory.short_term_recent_turns or 0))
+        older: list[LLMMessage] = []
+        if max_turns > 0:
+            older.extend(history[: -(max_turns * 2)])
+            history = history[-(max_turns * 2) :]
+        token_budget = max(0, int(getattr(self.config.memory, "short_term_max_tokens", 0) or 0))
+        char_budget = max(0, int(self.config.memory.short_term_max_chars or 0))
+        if token_budget <= 0 and char_budget <= 0:
+            if summarize and key and older:
+                self._append_session_summary(key, older)
+            return history
+        total = 0
+        kept: list[LLMMessage] = []
+        for message in reversed(history):
+            total += self._short_term_size(message.content or "", token_budget=token_budget)
+            if kept and (
+                (token_budget > 0 and total > token_budget)
+                or (char_budget > 0 and sum(len(item.content or "") for item in kept) > char_budget)
+            ):
+                break
+            kept.append(message)
+        trimmed = list(reversed(kept))
+        keep_ids = {id(item) for item in trimmed}
+        older.extend(item for item in history if id(item) not in keep_ids)
+        if summarize and key and older:
+            self._append_session_summary(key, older)
+        return trimmed
+
+    def _append_session_summary(self, key: str, messages: list[LLMMessage]) -> None:
+        if not messages:
+            return
+        previous = self._session_summaries.get(key, "").strip()
+        addition = self._summarize_short_term_messages(messages)
+        combined = "\n".join(item for item in (previous, addition) if item)
+        token_limit = max(0, int(getattr(self.config.memory, "short_term_summary_max_tokens", 0) or 0))
+        char_limit = max(0, int(self.config.memory.short_term_summary_max_chars or 0))
+        limit = char_limit or (token_limit * 4 if token_limit > 0 else 6000)
+        limit = max(1000, limit)
+        if self._short_term_size(combined, token_budget=token_limit) > (token_limit or limit) or len(combined) > limit:
+            combined = combined[-limit:]
+            first_line = combined.find("\n")
+            if first_line > 0:
+                combined = combined[first_line + 1 :]
+            combined = "[Earlier summary truncated]\n" + combined
+        self._session_summaries[key] = combined
+
+    def _short_term_size(self, text: str, *, token_budget: int) -> int:
+        if token_budget <= 0:
+            return len(text)
+        # Conservative approximation without tokenizer dependency:
+        # CJK chars are close to one token; ASCII text is roughly four chars/token.
+        cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+        other = max(0, len(text) - cjk)
+        return cjk + max(1, other // 4)
+
+    def _summarize_short_term_messages(self, messages: list[LLMMessage]) -> str:
+        lines = ["Compressed earlier turns:"]
+        pair: list[str] = []
+        for message in messages:
+            text = " ".join((message.content or "").split())
+            if len(text) > 500:
+                text = text[:500] + "..."
+            pair.append(f"{message.role}: {text}")
+            if len(pair) >= 2:
+                lines.append("- " + " | ".join(pair))
+                pair = []
+        if pair:
+            lines.append("- " + " | ".join(pair))
+        return "\n".join(lines)
+
+    def _short_term_user_content(self, input_text: str) -> str:
+        match = re.search(r"(?m)^content:\s*(.*)$", input_text)
+        if match:
+            return match.group(1).strip()
+        return input_text
 
     async def _complete_llm(
         self,
@@ -802,6 +1209,15 @@ class AgentRuntime:
         source: str,
         input_text: str,
     ) -> tuple[str, dict]:
+        if tool_name == "task.start":
+            nested_tool = str(payload.get("tool") or "")
+            nested_payload = payload.get("payload") or {}
+            if (
+                nested_tool == "skill.run"
+                and isinstance(nested_payload, dict)
+                and self._is_fast_skill_run(nested_payload)
+            ):
+                return nested_tool, nested_payload
         if self._should_auto_background(tool_name, payload, source):
             payload = {
                 "tool": tool_name,
@@ -829,10 +1245,18 @@ class AgentRuntime:
             return False
         if isinstance(payload, dict) and payload.get("foreground") is True:
             return False
+        if tool_name == "skill.run" and self._is_fast_skill_run(payload):
+            return False
         tool = self.tools.get(tool_name)
         if tool is None:
             return False
         return bool((tool.metadata or {}).get("background_candidate"))
+
+    def _is_fast_skill_run(self, payload: dict) -> bool:
+        return (
+            str(payload.get("skill") or "") == "wechat-869-media-sender"
+            and str(payload.get("action") or "") == "send-text"
+        )
 
     def _background_started_message(self, tool_results: list[dict]) -> str:
         task_ids = []
@@ -875,7 +1299,8 @@ class AgentRuntime:
     def _agent_system_prompt(self, *, source: str = "api") -> str:
         current_time = self._current_time_prompt()
         static_prompt = self._static_agent_prompt(source=source)
-        return static_prompt + current_time
+        memory_prompt = self._memory_prompt()
+        return static_prompt + memory_prompt + current_time
 
     def _static_agent_prompt(self, *, source: str = "api") -> str:
         if self.config.cache.enabled and self.config.cache.static_prompt:
@@ -912,6 +1337,10 @@ class AgentRuntime:
             "- Tools marked with metadata.background_candidate are good candidates for task.start when the request may take time or the user does not need an immediate result.\n"
             "- For long-running screenshots, browser interactions, downloads, GitHub Actions logs, or skill execution, prefer task.start so the request can run in the background.\n"
             "- If a tool result contains fallback guidance or suggested_tool, use that guidance before retrying.\n"
+            "- Use memory.add proactively for durable user preferences, corrections, stable environment facts, and project conventions. Keep entries compact. Do not save temporary task progress.\n"
+            "- Use memory.replace or memory.remove when a memory becomes outdated or too broad.\n"
+            "- Use wiki.manage for structured project knowledge, architecture notes, research notes, design decisions, procedures, and reusable documentation. Query the wiki before answering from knowledge base content.\n"
+            "- Do not put user preferences or temporary chat state in the wiki; use memory.* for durable preferences and short-term history for active task context.\n"
             "- To run a skill script or local command, call shell.exec only when policy allows it.\n"
             "- Browser GUI control and screenshots are not available unless a browser/screenshot skill or tool is listed.\n"
             "- If the user asks for an unavailable capability, explain that it is not currently available instead of waiting or pretending to do it.\n"
@@ -921,6 +1350,18 @@ class AgentRuntime:
             '{"final":"your concise final answer"}\n'
             "Do not expose tool_calls, tools JSON, tool execution logs, or internal planning to the user.\n"
             "Do not invent tool results. Request tools first, then use returned results."
+        )
+
+    def _memory_prompt(self) -> str:
+        if not self.config.memory.enabled:
+            return ""
+        block = self.memory.format_for_system_prompt()
+        if not block:
+            return ""
+        return (
+            "\nLong-term memory snapshot from session start. Treat it as background context, "
+            "not as a new user message. Current-session memory writes refresh in future sessions.\n"
+            f"{block}\n"
         )
 
     def _skill_instructions_prompt(self) -> str:

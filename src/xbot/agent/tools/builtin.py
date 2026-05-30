@@ -14,6 +14,8 @@ def register_builtin_tools(
     *,
     workspace,
     skills,
+    memory,
+    wiki,
     run_skill: SkillRunner,
 ) -> None:
     async def read_file(payload: dict):
@@ -53,6 +55,8 @@ def register_builtin_tools(
         if instructions is None:
             raise XBotError(f"Skill not found or disabled: {name}")
         path = skills.get_path(name)
+        if hasattr(skills, "record_use"):
+            await skills.record_use(name, "view")
         return {
             "name": name,
             "path": str(path) if path else "",
@@ -60,7 +64,42 @@ def register_builtin_tools(
         }
 
     async def skill_run(payload: dict):
-        return await run_skill(payload)
+        result = await run_skill(payload)
+        if skills and hasattr(skills, "record_use"):
+            await skills.record_use(str(payload.get("skill") or ""), "use")
+        return result
+
+    async def skill_manage(payload: dict):
+        if not skills or not hasattr(skills, "manage"):
+            raise XBotError("Skill manager does not support skill.manage.")
+        return await skills.manage(payload)
+
+    async def memory_read(payload: dict):
+        return memory.read_curated(str(payload.get("target", "memory")))
+
+    async def memory_add(payload: dict):
+        return memory.add_curated(
+            str(payload.get("target", "memory")),
+            str(payload.get("content", "")),
+        )
+
+    async def memory_replace(payload: dict):
+        return memory.replace_curated(
+            str(payload.get("target", "memory")),
+            str(payload.get("old_text", "")),
+            str(payload.get("content", "")),
+        )
+
+    async def memory_remove(payload: dict):
+        return memory.remove_curated(
+            str(payload.get("target", "memory")),
+            str(payload.get("old_text", "")),
+        )
+
+    async def wiki_manage(payload: dict):
+        if not wiki:
+            raise XBotError("Wiki store is not available.")
+        return wiki.manage(payload)
 
     for tool in _builtin_tool_definitions(
         read_file=read_file,
@@ -71,6 +110,12 @@ def register_builtin_tools(
         skill_list=skill_list,
         skill_describe=skill_describe,
         skill_run=skill_run,
+        skill_manage=skill_manage,
+        memory_read=memory_read,
+        memory_add=memory_add,
+        memory_replace=memory_replace,
+        memory_remove=memory_remove,
+        wiki_manage=wiki_manage,
     ):
         registry.register(tool)
 
@@ -207,6 +252,162 @@ def _builtin_tool_definitions(**handlers: Callable[[dict[str, Any]], Awaitable[A
                     "skill": {"type": "string"},
                     "action": {"type": "string"},
                     "args": {"type": "object"},
+                },
+            },
+        ),
+        ToolDefinition(
+            name="skill.manage",
+            description=(
+                "Manage agent-owned procedural memory skills under skills/.agent only. "
+                "Actions: create, patch, write_file, archive, restore, pin, unpin, usage."
+            ),
+            risk_level="write",
+            handler=handlers["skill_manage"],
+            toolset="skill",
+            source="skill",
+            timeout_seconds=30,
+            invalidates_cache=True,
+            input_schema={
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["create", "patch", "write_file", "archive", "restore", "pin", "unpin", "usage"],
+                    },
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "content": {"type": "string"},
+                    "old_text": {"type": "string"},
+                    "new_text": {"type": "string"},
+                    "file_path": {"type": "string"},
+                    "file_content": {"type": "string"},
+                },
+            },
+        ),
+        ToolDefinition(
+            name="memory.read",
+            description="Read curated long-term memory entries. Targets: memory for agent notes, user for user profile.",
+            risk_level="read",
+            handler=handlers["memory_read"],
+            toolset="memory",
+            source="builtin",
+            cacheable=False,
+            timeout_seconds=10,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "enum": ["memory", "user"], "default": "memory"},
+                },
+            },
+        ),
+        ToolDefinition(
+            name="memory.add",
+            description=(
+                "Save a compact durable memory entry for future sessions. Use target=user for "
+                "user preferences/profile; target=memory for environment facts and project conventions."
+            ),
+            risk_level="write",
+            handler=handlers["memory_add"],
+            toolset="memory",
+            source="builtin",
+            invalidates_cache=True,
+            timeout_seconds=10,
+            input_schema={
+                "type": "object",
+                "required": ["target", "content"],
+                "properties": {
+                    "target": {"type": "string", "enum": ["memory", "user"]},
+                    "content": {"type": "string"},
+                },
+            },
+        ),
+        ToolDefinition(
+            name="memory.replace",
+            description="Replace one curated memory entry identified by a unique old_text substring.",
+            risk_level="write",
+            handler=handlers["memory_replace"],
+            toolset="memory",
+            source="builtin",
+            invalidates_cache=True,
+            timeout_seconds=10,
+            input_schema={
+                "type": "object",
+                "required": ["target", "old_text", "content"],
+                "properties": {
+                    "target": {"type": "string", "enum": ["memory", "user"]},
+                    "old_text": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+            },
+        ),
+        ToolDefinition(
+            name="memory.remove",
+            description="Remove one curated memory entry identified by a unique old_text substring.",
+            risk_level="write",
+            handler=handlers["memory_remove"],
+            toolset="memory",
+            source="builtin",
+            invalidates_cache=True,
+            timeout_seconds=10,
+            input_schema={
+                "type": "object",
+                "required": ["target", "old_text"],
+                "properties": {
+                    "target": {"type": "string", "enum": ["memory", "user"]},
+                    "old_text": {"type": "string"},
+                },
+            },
+        ),
+        ToolDefinition(
+            name="wiki.manage",
+            description=(
+                "Manage the file-based Markdown knowledge base. Actions: bootstrap, ingest, query, "
+                "read_page, write_page, append_page, suggest_merge, maintain_links, detect_conflicts, "
+                "digest, rebuild_index, update_index, lint, log. Markdown files are the source of truth; "
+                "vector/RAG indexes are optional derived artifacts."
+            ),
+            risk_level="write",
+            handler=handlers["wiki_manage"],
+            toolset="wiki",
+            source="builtin",
+            invalidates_cache=True,
+            timeout_seconds=30,
+            input_schema={
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "bootstrap",
+                            "ingest",
+                            "query",
+                            "read_page",
+                            "write_page",
+                            "append_page",
+                            "suggest_merge",
+                            "maintain_links",
+                            "detect_conflicts",
+                            "digest",
+                            "rebuild_index",
+                            "update_index",
+                            "lint",
+                            "log",
+                        ],
+                    },
+                    "wiki": {"type": "string", "default": "xbot"},
+                    "topic": {"type": "string"},
+                    "source": {"type": "string"},
+                    "text": {"type": "string"},
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5},
+                    "pages": {"type": "array", "items": {"type": "string"}},
+                    "page": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "message": {"type": "string"},
+                    "dry_run": {"type": "boolean", "default": True},
                 },
             },
         ),

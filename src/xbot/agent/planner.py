@@ -62,6 +62,9 @@ class AgentPlanner:
                 final = data.get("final") or data.get("answer")
                 if isinstance(final, str) and final.strip():
                     return final.strip()
+        lenient_final = self._extract_lenient_final(text)
+        if lenient_final:
+            return lenient_final
 
         stripped = self._strip_tool_json_blocks(text)
         if self.contains_tool_call_intent(stripped):
@@ -148,6 +151,21 @@ class AgentPlanner:
             text = re.sub(r"^```(?:json)?\s*", "", text)
             text = re.sub(r"\s*```$", "", text)
         return text
+
+    def _extract_lenient_final(self, content: str) -> str:
+        text = self._strip_code_fences(content.strip())
+        match = re.match(
+            r'^\{\s*"(?:final|answer)"\s*:\s*"(.*)"\s*\}\s*$',
+            text,
+            flags=re.DOTALL,
+        )
+        if not match:
+            return ""
+        value = match.group(1).strip()
+        try:
+            return json.loads(f'"{value}"').strip()
+        except json.JSONDecodeError:
+            return value.replace('\\"', '"').strip()
 
     def _strip_tool_json_blocks(self, content: str) -> str:
         text = content.lstrip()

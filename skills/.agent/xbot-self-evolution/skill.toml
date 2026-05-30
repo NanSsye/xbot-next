@@ -1,0 +1,7 @@
+name = "xbot-self-evolution"
+version = "0.1.0"
+description = "Seed workflow for xbot long-term memory, agent-owned skills, and curator maintenance."
+enabled = true
+
+[tools]
+required = []

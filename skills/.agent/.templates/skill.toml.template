@@ -1,0 +1,7 @@
+name = "agent-owned-skill-name"
+version = "0.1.0"
+description = "Short reusable workflow description."
+enabled = true
+
+[tools]
+required = []

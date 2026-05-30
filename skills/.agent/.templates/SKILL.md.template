@@ -1,0 +1,19 @@
+# Skill Name
+
+Use this skill when the agent repeatedly needs to perform this workflow.
+
+## Trigger
+
+- Describe when this skill should be used.
+
+## Workflow
+
+1. Inspect current state before assuming facts.
+2. Use the narrowest safe tool that can answer the question.
+3. Record durable lessons in memory only when they are stable and reusable.
+
+## Guardrails
+
+- Do not store secrets.
+- Do not preserve temporary task progress.
+- Prefer patching an existing skill over creating a narrow duplicate.

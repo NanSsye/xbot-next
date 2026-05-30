@@ -14,7 +14,23 @@ venv/
 env/
 *.egg-info/
 
-data/
+data/*
+!data/agent/
+data/agent/*
+!data/agent/memories/
+!data/agent/memories/MEMORY.md
+!data/agent/memories/USER.md
+!data/agent/wiki/
+!data/agent/wiki/xbot/
+!data/agent/wiki/xbot/schema.md
+!data/agent/wiki/xbot/index.md
+!data/agent/wiki/xbot/log.md
+!data/agent/wiki/xbot/merge-suggestions.md
+!data/agent/wiki/xbot/conflicts.md
+!data/agent/wiki/xbot/pages/
+!data/agent/wiki/xbot/pages/*.md
+data/agent/wiki/*/raw/
+data/agent/wiki/*/derived/
 logs/
 
 skills/**/wechat-869.json

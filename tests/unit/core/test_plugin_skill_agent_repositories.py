@@ -1,11 +1,14 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 import anyio
 import pytest
 
+from xbot.agent.planner import AgentPlanner
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.llm import LLMMessage, LLMResponse
+from xbot.agent.tools.skill_provider import SkillToolProvider
 from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import AgentConfig, AgentToolsetConfig, AgentWorkspaceConfig, PluginConfig, SkillConfig
 from xbot.messaging.models import Message
@@ -272,6 +275,229 @@ async def test_skill_manager_persists_manifest_and_enabled_state():
 
 
 @pytest.mark.anyio
+async def test_skill_manager_skips_agent_container_but_loads_agent_owned_skill(tmp_path):
+    skills_root = tmp_path / "skills"
+    (skills_root / ".agent" / ".templates").mkdir(parents=True)
+    agent_skill = skills_root / ".agent" / "debug-workflow"
+    agent_skill.mkdir(parents=True)
+    (agent_skill / "skill.toml").write_text(
+        """
+name = "debug-workflow"
+version = "0.1.0"
+description = "Debug workflow"
+enabled = true
+""",
+        encoding="utf-8",
+    )
+    (agent_skill / "SKILL.md").write_text("# Debug Workflow\n", encoding="utf-8")
+
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+    await manager.load_all()
+
+    loaded = {item["name"] for item in manager.list_skills()}
+    assert loaded == {"debug-workflow"}
+
+
+@pytest.mark.anyio
+async def test_skill_manage_creates_patches_archives_and_restores_agent_skill(tmp_path):
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+
+    created = await manager.manage(
+        {
+            "action": "create",
+            "name": "debug-workflow",
+            "description": "Reusable debugging workflow",
+            "content": "# Debug Workflow\n\nFirst inspect logs.",
+        }
+    )
+    patched = await manager.manage(
+        {
+            "action": "patch",
+            "name": "debug-workflow",
+            "old_text": "First inspect logs.",
+            "new_text": "First inspect logs, then reproduce.",
+        }
+    )
+    await manager.manage({"action": "pin", "name": "debug-workflow"})
+
+    with pytest.raises(ValueError):
+        await manager.manage({"action": "archive", "name": "debug-workflow"})
+
+    await manager.manage({"action": "unpin", "name": "debug-workflow"})
+    archived = await manager.manage({"action": "archive", "name": "debug-workflow"})
+    restored = await manager.manage({"action": "restore", "name": "debug-workflow"})
+    usage = await manager.manage({"action": "usage"})
+
+    assert created["success"] is True
+    assert patched["success"] is True
+    assert archived["success"] is True
+    assert restored["success"] is True
+    assert manager.get_instructions("debug-workflow")
+    assert usage["usage"]["debug-workflow"]["created_by"] == "agent"
+    assert usage["usage"]["debug-workflow"]["state"] == "active"
+
+
+@pytest.mark.anyio
+async def test_skill_manager_lists_agent_owned_skill_usage(tmp_path):
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+
+    await manager.manage(
+        {
+            "action": "create",
+            "name": "review-checklist",
+            "description": "Reusable review checklist",
+            "content": "# Review Checklist\n\nInspect tests.",
+        }
+    )
+    await manager.record_use("review-checklist", "view")
+    await manager.manage({"action": "pin", "name": "review-checklist"})
+
+    items = manager.list_agent_owned_skills()
+
+    assert items == [
+        {
+            "name": "review-checklist",
+            "state": "active",
+            "pinned": True,
+            "path": str(skills_root / ".agent" / "review-checklist"),
+            "use_count": 0,
+            "view_count": 1,
+            "patch_count": 0,
+            "created_at": items[0]["created_at"],
+            "last_use_at": None,
+            "last_view_at": items[0]["last_view_at"],
+            "last_patch_at": None,
+            "archived_at": None,
+        }
+    ]
+    assert manager.agent_usage_snapshot()["review-checklist"]["created_by"] == "agent"
+
+
+@pytest.mark.anyio
+async def test_skill_curator_archives_stale_agent_skill(tmp_path):
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+    manager.config.curator_stale_after_days = 1
+    manager.config.curator_archive_after_days = 2
+    await manager.manage(
+        {
+            "action": "create",
+            "name": "old-workflow",
+            "description": "Old workflow",
+            "content": "# Old Workflow\n\nOld steps.",
+        }
+    )
+    usage = manager._load_usage()
+    usage["old-workflow"]["created_at"] = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    manager._save_usage(usage)
+
+    result = await manager.run_curator()
+
+    assert result["archived"] == 1
+    assert (skills_root / ".agent" / ".archive" / "old-workflow").exists()
+    assert manager._load_usage()["old-workflow"]["state"] == "archived"
+
+
+@pytest.mark.anyio
+async def test_skill_curator_report_is_dry_run_and_detects_duplicates(tmp_path):
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+    await manager.manage(
+        {
+            "action": "create",
+            "name": "debug-python",
+            "description": "Debug Python workflow",
+            "content": "# Debug Python\n\nInspect logs and reproduce Python failures.",
+        }
+    )
+    await manager.manage(
+        {
+            "action": "create",
+            "name": "python-debugging",
+            "description": "Debug Python workflow",
+            "content": "# Python Debugging\n\nInspect logs and reproduce Python failures.",
+        }
+    )
+    usage = manager._load_usage()
+    usage["debug-python"]["created_at"] = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    manager._save_usage(usage)
+    manager.config.curator_stale_after_days = 1
+    manager.config.curator_archive_after_days = 30
+
+    report = manager.build_curator_report()
+
+    assert report["dry_run"] is True
+    assert (skills_root / ".agent" / "debug-python").exists()
+    assert any(item["action"] == "mark_stale" for item in report["proposals"])
+    assert any(item["action"] == "merge" for item in report["proposals"])
+    assert (skills_root / ".agent" / ".curator" / "latest.json").exists()
+
+
+@pytest.mark.anyio
+async def test_skill_curator_applies_selected_report_proposals(tmp_path):
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+    await manager.manage(
+        {
+            "action": "create",
+            "name": "old-cleanup",
+            "description": "Old cleanup",
+            "content": "# Old Cleanup\n\nCleanup steps.",
+        }
+    )
+    usage = manager._load_usage()
+    usage["old-cleanup"]["created_at"] = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+    manager._save_usage(usage)
+    manager.config.curator_archive_after_days = 1
+    report = manager.build_curator_report()
+    archive_id = next(item["id"] for item in report["proposals"] if item["action"] == "archive")
+
+    result = await manager.apply_curator_report(proposal_ids=[archive_id])
+
+    assert result["results"][0]["status"] == "applied"
+    assert not (skills_root / ".agent" / "old-cleanup").exists()
+    assert (skills_root / ".agent" / ".archive" / "old-cleanup").exists()
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_curator_report_uses_llm_suggestions(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            (
+                '{"proposals":[{"action":"pin","target":"keep-me",'
+                '"reason":"经常需要保留","confidence":0.9}]}'
+            )
+        ]
+    )
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+    await manager.manage(
+        {
+            "action": "create",
+            "name": "keep-me",
+            "description": "Important workflow",
+            "content": "# Keep Me\n\nImportant steps.",
+        }
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.llm.enabled = True
+    runtime = AgentRuntime(config, plugins=None, skills=manager, llm_provider=llm)
+
+    report = await runtime.generate_curator_report(use_llm=True)
+
+    assert any(
+        item["action"] == "pin" and item["source"] == "llm"
+        for item in report["proposals"]
+    )
+    assert llm.messages
+
+
+@pytest.mark.anyio
 async def test_agent_runtime_persists_task_event_and_memory():
     repo = FakeAgentRepository()
 
@@ -296,6 +522,353 @@ async def test_agent_runtime_persists_task_event_and_memory():
     assert repo.memories
     assert any(event[1] == "llm.completed" for event in repo.events)
     assert any(event[1] == "task.completed" for event in repo.events)
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_keeps_short_term_history_per_terminal_session(tmp_path):
+    llm = FakeLLMProvider(responses=['{"final":"你叫小明。"}', '{"final":"你叫小明。"}'])
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:session-a"
+
+    await runtime.run_task("我叫小明", source=source)
+    await runtime.run_task("我叫什么？", source=source)
+
+    second_messages = llm.messages[1]
+    assert [message.role for message in second_messages[:4]] == ["system", "user", "assistant", "user"]
+    assert second_messages[1].content == "我叫小明"
+    assert second_messages[2].content == "你叫小明。"
+    assert second_messages[3].content == "我叫什么？"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_short_term_history_is_scoped_by_source(tmp_path):
+    llm = FakeLLMProvider(responses=['{"final":"记住了。"}', '{"final":"不知道。"}'])
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    await runtime.run_task("我叫小明", source="terminal:local:session-a")
+    await runtime.run_task("我叫什么？", source="terminal:local:session-b")
+
+    second_messages = llm.messages[1]
+    assert [message.role for message in second_messages] == ["system", "user"]
+    assert second_messages[1].content == "我叫什么？"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_compresses_old_short_term_history(tmp_path):
+    llm = FakeLLMProvider(responses=['{"final":"一"}', '{"final":"二"}', '{"final":"三"}'])
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.short_term_recent_turns = 1
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:session-a"
+
+    await runtime.run_task("第一轮", source=source)
+    await runtime.run_task("第二轮", source=source)
+    await runtime.run_task("第三轮", source=source)
+
+    third_messages = llm.messages[2]
+    assert [message.role for message in third_messages] == ["system", "system", "user", "assistant", "user"]
+    assert "Compressed earlier turns" in third_messages[1].content
+    assert "第一轮" in third_messages[1].content
+    assert [message.content for message in third_messages[2:]] == ["第二轮", "二", "第三轮"]
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_compresses_short_term_history_by_token_budget(tmp_path):
+    llm = FakeLLMProvider(responses=['{"final":"一"}', '{"final":"二"}', '{"final":"三"}'])
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.short_term_recent_turns = 0
+    config.memory.short_term_max_tokens = 4
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:session-a"
+
+    await runtime.run_task("第一轮很长", source=source)
+    await runtime.run_task("第二轮也长", source=source)
+    await runtime.run_task("第三轮", source=source)
+
+    third_messages = llm.messages[2]
+    assert third_messages[1].role == "system"
+    assert "Compressed earlier turns" in third_messages[1].content
+    assert third_messages[-1].content == "第三轮"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_short_term_history_stores_actual_terminal_content(tmp_path):
+    from xbot.cli.chat import build_terminal_agent_input
+
+    llm = FakeLLMProvider(responses=['{"final":"记住了。"}', '{"final":"你叫小明。"}'])
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:session-a"
+
+    await runtime.run_task(
+        build_terminal_agent_input("我叫小明", session_id="session-a", cwd=tmp_path),
+        source=source,
+    )
+    await runtime.run_task(
+        build_terminal_agent_input("我叫什么？", session_id="session-a", cwd=tmp_path),
+        source=source,
+    )
+
+    second_messages = llm.messages[1]
+    assert second_messages[1].content == "我叫小明"
+    assert second_messages[-1].content.startswith("Terminal message received.")
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_exposes_curated_memory_tools(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(tmp_path / "memories")
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    added = await runtime.execute_tool(
+        "memory.add",
+        {"target": "user", "content": "用户喜欢直接、简洁的中文回复。"},
+    )
+    read = await runtime.execute_tool("memory.read", {"target": "user"})
+
+    assert added.status == "completed"
+    assert read.output["entries"] == ["用户喜欢直接、简洁的中文回复。"]
+    assert (tmp_path / "memories" / "USER.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_exposes_wiki_manage_tool(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.wiki.directory = str(tmp_path / "wiki")
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    result = await runtime.execute_tool(
+        "wiki.manage",
+        {
+            "action": "write_page",
+            "wiki": "xbot",
+            "page": "architecture",
+            "content": "# Architecture\n\nUses Markdown wiki.",
+        },
+    )
+    query = await runtime.execute_tool(
+        "wiki.manage",
+        {"action": "query", "wiki": "xbot", "query": "Markdown wiki"},
+    )
+
+    assert result.status == "completed"
+    assert result.output["success"] is True
+    assert query.status == "completed"
+    assert query.output["matches"][0]["page"] == "architecture"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_injects_memory_snapshot_at_start(tmp_path):
+    memory_dir = tmp_path / "memories"
+    memory_dir.mkdir()
+    (memory_dir / "USER.md").write_text("用户讨厌重复解释。", encoding="utf-8")
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(memory_dir)
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    prompt = runtime._agent_system_prompt(source="api")
+
+    assert "USER PROFILE" in prompt
+    assert "用户讨厌重复解释。" in prompt
+
+
+def test_memory_store_creates_templates_without_injecting_template_text(tmp_path):
+    from xbot.agent.memory import MemoryStore
+
+    memory = MemoryStore(tmp_path / "memories")
+
+    assert (tmp_path / "memories" / "MEMORY.md").exists()
+    assert (tmp_path / "memories" / "USER.md").exists()
+    assert memory.read_curated("memory")["entries"] == []
+    assert memory.read_curated("user")["entries"] == []
+    assert memory.format_for_system_prompt() == ""
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_starts_background_memory_review(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"我会按你的要求简洁回复。"}',
+            (
+                '{"tool_calls":[{"tool":"memory.add","payload":{"target":"user",'
+                '"content":"用户偏好简洁直接的中文回复。"}}]}'
+            ),
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(tmp_path / "memories")
+    config.memory.review_interval = 1
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("以后回复简洁一点", source="terminal:local:test")
+
+    for _ in range(50):
+        reviews = [item for item in runtime.background.list() if item.kind == "memory_review"]
+        if reviews and reviews[0].status == "completed":
+            break
+        await anyio.sleep(0.02)
+
+    assert result.output == "我会按你的要求简洁回复。"
+    assert "用户偏好简洁直接的中文回复。" in (tmp_path / "memories" / "USER.md").read_text(
+        encoding="utf-8"
+    )
+    assert reviews[0].result["results"][0]["tool"] == "memory.add"
+
+
+@pytest.mark.anyio
+async def test_background_memory_review_skips_non_memory_tools(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"完成。"}',
+            '{"tool_calls":[{"tool":"shell.exec","payload":{"command":"echo bad"}}]}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(tmp_path / "memories")
+    config.memory.review_interval = 1
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    await runtime.run_task("做完后复盘", source="terminal:local:test")
+
+    for _ in range(50):
+        reviews = [item for item in runtime.background.list() if item.kind == "memory_review"]
+        if reviews and reviews[0].status == "completed":
+            break
+        await anyio.sleep(0.02)
+
+    assert reviews[0].result["results"][0]["status"] == "skipped"
+    assert not (tmp_path / "bad").exists()
+
+
+@pytest.mark.anyio
+async def test_background_review_can_create_agent_owned_skill(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"完成。"}',
+            (
+                '{"tool_calls":[{"tool":"skill.manage","payload":{"action":"create",'
+                '"name":"terminal-display-tuning","description":"Tune terminal display",'
+                '"content":"# Terminal Display Tuning\\n\\nKeep terminal output compact."}}]}'
+            ),
+        ]
+    )
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(tmp_path / "memories")
+    config.memory.review_interval = 1
+    runtime = AgentRuntime(config, plugins=None, skills=manager, llm_provider=llm)
+
+    await runtime.run_task("终端显示优化完成", source="terminal:local:test")
+
+    for _ in range(50):
+        reviews = [item for item in runtime.background.list() if item.kind == "memory_review"]
+        if reviews and reviews[0].status == "completed":
+            break
+        await anyio.sleep(0.02)
+
+    skill_path = skills_root / ".agent" / "terminal-display-tuning" / "SKILL.md"
+    assert skill_path.exists()
+    assert manager.get_instructions("terminal-display-tuning")
+    assert reviews[0].result["results"][0]["tool"] == "skill.manage"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_flushes_memory_on_boundary(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"完成。"}',
+            '{"tool_calls":[{"tool":"memory.add","payload":{"target":"user","content":"用户要求边界前保存记忆。"}}]}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(tmp_path / "memories")
+    config.memory.review_interval = 0
+    config.memory.flush_min_turns = 1
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    await runtime.run_task("请记住边界前保存", source="terminal:local:test")
+    result = await runtime.flush_memory(reason="test")
+
+    assert result["results"][0]["tool"] == "memory.add"
+    assert "用户要求边界前保存记忆。" in (tmp_path / "memories" / "USER.md").read_text(
+        encoding="utf-8"
+    )
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_runs_curator_on_interval(tmp_path):
+    llm = FakeLLMProvider(responses=['{"final":"完成。"}'])
+    skills_root = tmp_path / "skills"
+    manager = SkillManager(SkillConfig(directory=str(skills_root)))
+    manager.config.curator_interval_turns = 1
+    manager.config.curator_archive_after_days = 1
+    await manager.manage(
+        {
+            "action": "create",
+            "name": "auto-archive-me",
+            "description": "Old workflow",
+            "content": "# Old Workflow\n\nOld steps.",
+        }
+    )
+    usage = manager._load_usage()
+    usage["auto-archive-me"]["created_at"] = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    manager._save_usage(usage)
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.review_interval = 0
+    runtime = AgentRuntime(config, plugins=None, skills=manager, llm_provider=llm)
+
+    await runtime.run_task("触发 curator", source="terminal:local:test")
+
+    for _ in range(50):
+        tasks = [item for item in runtime.background.list() if item.kind == "curator"]
+        if tasks and tasks[0].status == "completed":
+            break
+        await anyio.sleep(0.02)
+
+    assert tasks[0].result["archived"] == 1
+    assert (skills_root / ".agent" / ".archive" / "auto-archive-me").exists()
 
 
 @pytest.mark.anyio
@@ -1234,6 +1807,83 @@ async def test_channel_task_start_auto_injects_notification_target(tmp_path):
     assert replies[0].conversation_id == "conversation-1"
     assert replies[0].quote_message_id == "msg-1"
     assert replies[0].content == "channel notify ok"
+
+
+@pytest.mark.anyio
+async def test_channel_send_text_skill_does_not_start_background(tmp_path):
+    calls = []
+    llm = FakeLLMProvider(
+        responses=[
+            (
+                '{"tool_calls":[{"tool":"task.start","payload":{"tool":"skill.run",'
+                '"payload":{"skill":"wechat-869-media-sender","action":"send-text",'
+                '"args":{"to":"room@chatroom","text":"你好"}}}}]}'
+            ),
+            '{"final":"已发送。"}',
+        ]
+    )
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    async def fake_execute(tool_name, payload):
+        calls.append((tool_name, payload))
+        return {"ok": True}
+
+    runtime.executor.execute = fake_execute
+
+    result = await runtime.run_task(
+        "Channel message received.\ncontent: 发送文字",
+        source="channel:wechat:wechat869:room@chatroom",
+    )
+
+    assert result.output == "已发送。"
+    assert calls[0][0] == "skill.run"
+    assert calls[0][1]["args"]["text"] == "你好"
+    assert not runtime.background.list(limit=5)
+
+
+@pytest.mark.anyio
+async def test_skill_run_accepts_flat_wechat_text_args(tmp_path):
+    commands = []
+
+    class FakeWorkspace:
+        async def run_shell(self, command, **kwargs):
+            commands.append(command)
+            return {"output": "ok"}
+
+    class FakeSkills:
+        def get_path(self, name):
+            assert name == "wechat-869-media-sender"
+            return tmp_path
+
+    provider = SkillToolProvider(workspace=FakeWorkspace(), skills=FakeSkills())
+
+    result = await provider.run_skill(
+        {
+            "skill": "wechat-869-media-sender",
+            "action": "send-text",
+            "to": "room@chatroom",
+            "text": "你好",
+        }
+    )
+
+    assert result == {"output": "ok"}
+    assert "--to room@chatroom" in commands[0]
+    assert "--text" in commands[0]
+
+
+def test_planner_cleans_lenient_final_json_with_inner_quotes():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        '{"final":"已回复！虽然被调侃"蠢"，但态度还是很友好的~"}'
+    )
+
+    assert output == '已回复！虽然被调侃"蠢"，但态度还是很友好的~'
 
 
 @pytest.mark.anyio

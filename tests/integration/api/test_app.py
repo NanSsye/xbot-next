@@ -11,6 +11,18 @@ def test_create_app():
     assert "/api/v1/agent/llm/status" in paths
     assert "/api/v1/agent/tools/{tool_name}/execute" in paths
     assert "/api/v1/agent/policy/validate" in paths
+    assert "/api/v1/agent/memory/{target}" in paths
+    assert "/api/v1/agent/memory" in paths
+    assert "/api/v1/agent/memory/flush" in paths
+    assert "/api/v1/agent/wiki" in paths
+    assert "/api/v1/agent/wiki/{wiki}/query" in paths
+    assert "/api/v1/agent/curator" in paths
+    assert "/api/v1/agent/curator/run" in paths
+    assert "/api/v1/agent/curator/report" in paths
+    assert "/api/v1/agent/curator/report/{report_id}" in paths
+    assert "/api/v1/agent/curator/apply" in paths
+    assert "/api/v1/agent/curator/{action}/{name}" in paths
+    assert "/api/v1/agent/skills/agent-owned" in paths
     assert "/api/v1/agent/memories" in paths
     assert "/api/v1/messages/simulate" in paths
     assert "/api/v1/messages/recent" in paths

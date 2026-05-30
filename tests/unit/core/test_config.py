@@ -19,9 +19,21 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.workspace.roots == ["."]
     assert settings.agent.llm.enabled is False
     assert settings.agent.llm.provider == "openai_compatible"
+    assert settings.agent.memory.short_term_enabled is True
+    assert settings.agent.memory.short_term_recent_turns == 0
+    assert settings.agent.memory.short_term_max_tokens == 128000
+    assert settings.agent.memory.short_term_summary_max_tokens == 32000
+    assert settings.agent.memory.short_term_max_chars == 0
+    assert settings.agent.memory.short_term_summary_max_chars == 0
+    assert settings.agent.wiki.enabled is True
+    assert settings.agent.wiki.directory == "data/agent/wiki"
+    assert settings.agent.wiki.default_wiki == "xbot"
+    assert settings.agent.wiki.rag_enabled is False
     assert settings.agent.mcp.enabled is True
     assert settings.agent.toolsets.group == [
         "core",
+        "memory",
+        "wiki",
         "filesystem",
         "skill",
         "mcp",
@@ -48,6 +60,9 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ROOTS", "C:/tmp;D:/project")
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ALLOW_ALL_FILESYSTEM", "true")
     monkeypatch.setenv("XBOT_AGENT_CACHE_TOOL_RESULT_TTL_SECONDS", "90")
+    monkeypatch.setenv("XBOT_AGENT_WIKI_DIRECTORY", "data/custom-wiki")
+    monkeypatch.setenv("XBOT_AGENT_WIKI_DEFAULT", "project")
+    monkeypatch.setenv("XBOT_AGENT_WIKI_QUERY_MAX_CHARS", "4096")
     monkeypatch.setenv("XBOT_AGENT_TOOLSETS_GROUP", "core,skill")
     monkeypatch.setenv("XBOT_AGENT_MCP_ENABLED", "false")
     monkeypatch.setenv("XBOT_WECHAT869_ENABLED", "true")
@@ -70,6 +85,9 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.workspace.allow_all_filesystem is True
     assert settings.agent.cache.enabled is True
     assert settings.agent.cache.tool_result_ttl_seconds == 90
+    assert settings.agent.wiki.directory == "data/custom-wiki"
+    assert settings.agent.wiki.default_wiki == "project"
+    assert settings.agent.wiki.query_max_chars == 4096
     assert settings.agent.toolsets.group == ["core", "skill"]
     assert settings.agent.mcp.enabled is False
     assert settings.adapters.wechat869.enabled is True

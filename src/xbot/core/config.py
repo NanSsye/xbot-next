@@ -101,6 +101,10 @@ class PluginConfig(BaseModel):
 class SkillConfig(BaseModel):
     directory: str = "skills"
     auto_load: bool = True
+    curator_enabled: bool = True
+    curator_interval_turns: int = 20
+    curator_stale_after_days: int = 30
+    curator_archive_after_days: int = 90
 
 
 class AgentWorkspaceConfig(BaseModel):
@@ -128,6 +132,18 @@ class AgentMemoryRedactionConfig(BaseModel):
 class AgentMemoryConfig(BaseModel):
     enabled: bool = True
     store: Literal["postgresql"] = "postgresql"
+    directory: str = "data/agent/memories"
+    memory_char_limit: int = 2200
+    user_char_limit: int = 1375
+    review_enabled: bool = True
+    review_interval: int = 10
+    flush_min_turns: int = 6
+    short_term_enabled: bool = True
+    short_term_recent_turns: int = 0
+    short_term_max_tokens: int = 128000
+    short_term_summary_max_tokens: int = 32000
+    short_term_max_chars: int = 0
+    short_term_summary_max_chars: int = 0
     auto_compress: bool = True
     max_working_events: int = 50
     max_tool_output_chars: int = 12000
@@ -135,6 +151,15 @@ class AgentMemoryConfig(BaseModel):
     vector_search: bool = False
     retention_days: int = 180
     redaction: AgentMemoryRedactionConfig = Field(default_factory=AgentMemoryRedactionConfig)
+
+
+class AgentWikiConfig(BaseModel):
+    enabled: bool = True
+    directory: str = "data/agent/wiki"
+    default_wiki: str = "xbot"
+    query_max_chars: int = 12000
+    rag_enabled: bool = False
+    vector_index: bool = False
 
 
 class AgentLLMConfig(BaseModel):
@@ -179,6 +204,8 @@ class AgentToolsetConfig(BaseModel):
     api: list[str] = Field(
         default_factory=lambda: [
             "core",
+            "memory",
+            "wiki",
             "filesystem",
             "filesystem_write",
             "filesystem_dangerous",
@@ -194,14 +221,16 @@ class AgentToolsetConfig(BaseModel):
         ]
     )
     private: list[str] = Field(
-        default_factory=lambda: ["core", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
+        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
     )
     group: list[str] = Field(
-        default_factory=lambda: ["core", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
+        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "mcp", "environment", "task", "plugin"]
     )
     terminal: list[str] = Field(
         default_factory=lambda: [
             "core",
+            "memory",
+            "wiki",
             "filesystem",
             "filesystem_write",
             "skill",
@@ -218,6 +247,8 @@ class AgentToolsetConfig(BaseModel):
     admin: list[str] = Field(
         default_factory=lambda: [
             "core",
+            "memory",
+            "wiki",
             "filesystem",
             "filesystem_write",
             "filesystem_dangerous",
@@ -246,6 +277,7 @@ class AgentConfig(BaseModel):
     workspace: AgentWorkspaceConfig = Field(default_factory=AgentWorkspaceConfig)
     approval: AgentApprovalConfig = Field(default_factory=AgentApprovalConfig)
     memory: AgentMemoryConfig = Field(default_factory=AgentMemoryConfig)
+    wiki: AgentWikiConfig = Field(default_factory=AgentWikiConfig)
     llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig)
     mcp: AgentMCPConfig = Field(default_factory=AgentMCPConfig)
     cache: AgentCacheConfig = Field(default_factory=AgentCacheConfig)
@@ -402,6 +434,16 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if agent_cache_skills := env.get("XBOT_AGENT_CACHE_SKILLS"):
         data.setdefault("agent", {}).setdefault("cache", {})["skills"] = _env_bool(
             agent_cache_skills
+        )
+    if agent_wiki_enabled := env.get("XBOT_AGENT_WIKI_ENABLED"):
+        data.setdefault("agent", {}).setdefault("wiki", {})["enabled"] = _env_bool(agent_wiki_enabled)
+    if agent_wiki_directory := env.get("XBOT_AGENT_WIKI_DIRECTORY"):
+        data.setdefault("agent", {}).setdefault("wiki", {})["directory"] = agent_wiki_directory
+    if agent_wiki_default := env.get("XBOT_AGENT_WIKI_DEFAULT"):
+        data.setdefault("agent", {}).setdefault("wiki", {})["default_wiki"] = agent_wiki_default
+    if agent_wiki_query_max_chars := env.get("XBOT_AGENT_WIKI_QUERY_MAX_CHARS"):
+        data.setdefault("agent", {}).setdefault("wiki", {})["query_max_chars"] = _env_int(
+            agent_wiki_query_max_chars
         )
     if agent_toolsets_api := env.get("XBOT_AGENT_TOOLSETS_API"):
         data.setdefault("agent", {}).setdefault("toolsets", {})["api"] = _env_list(

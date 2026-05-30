@@ -17,7 +17,7 @@ class SkillToolProvider:
             raise XBotError("Skill manager is not available.")
         skill_name = str(payload["skill"])
         action = str(payload["action"])
-        args = payload.get("args") or {}
+        args = self._skill_args(payload)
         if not isinstance(args, dict):
             raise XBotError("skill.run args must be an object.")
         skill_path = self.skills.get_path(skill_name)
@@ -71,3 +71,14 @@ class SkillToolProvider:
             timeout_seconds=int(args.get("timeout_seconds", 300)),
             max_output_chars=int(args.get("max_output_chars", 12000)),
         )
+
+    def _skill_args(self, payload: dict) -> dict:
+        args = payload.get("args") or {}
+        if not isinstance(args, dict):
+            raise XBotError("skill.run args must be an object.")
+        merged = dict(args)
+        for key, value in payload.items():
+            if key in {"skill", "action", "args", "foreground"}:
+                continue
+            merged.setdefault(key, value)
+        return merged
