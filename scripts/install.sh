@@ -28,7 +28,7 @@ need_cmd() {
 
 need_cmd git
 
-run_git() {
+run_git_network() {
   if ! git "$@"; then
     echo >&2
     echo "GitHub connection failed. If your network needs a proxy, retry with:" >&2
@@ -36,6 +36,34 @@ run_git() {
     echo >&2
     return 1
   fi
+}
+
+run_git() {
+  git "$@"
+}
+
+update_install_repo() {
+  echo "Updating xbot-next in $INSTALL_DIR"
+  run_git_network -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
+
+  local remote_ref="origin/$BRANCH"
+  local local_head remote_head status backup_branch
+  local_head="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+  remote_head="$(git -C "$INSTALL_DIR" rev-parse "$remote_ref")"
+  status="$(git -C "$INSTALL_DIR" status --porcelain)"
+
+  if [ "$local_head" != "$remote_head" ] || [ -n "$status" ]; then
+    backup_branch="xbot-local-backup-$(date +%Y%m%d%H%M%S)"
+    run_git -C "$INSTALL_DIR" branch "$backup_branch" HEAD
+    echo "Install repo has local changes or diverged commits." >&2
+    echo "Backed up current HEAD to branch $backup_branch, then upgrading to $remote_ref." >&2
+    if [ -n "$status" ]; then
+      run_git -C "$INSTALL_DIR" stash push -m "xbot install backup before upgrade" || true
+    fi
+    run_git -C "$INSTALL_DIR" reset --hard
+  fi
+
+  run_git -C "$INSTALL_DIR" checkout -B "$BRANCH" "$remote_ref"
 }
 
 if command -v python3.11 >/dev/null 2>&1; then
@@ -56,14 +84,11 @@ PY
 mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
-  echo "Updating xbot-next in $INSTALL_DIR"
-  run_git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
-  run_git -C "$INSTALL_DIR" checkout "$BRANCH"
-  run_git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
+  update_install_repo
 else
   echo "Installing xbot-next to $INSTALL_DIR"
   rm -rf "$INSTALL_DIR"
-  run_git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  run_git_network clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
 
 cd "$INSTALL_DIR"

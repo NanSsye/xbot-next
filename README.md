@@ -106,6 +106,8 @@ Windows PowerShell：
 iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
 ```
 
+安装目录如果出现本地改动或本地提交与远端分叉，升级器会先创建 `xbot-local-backup-时间戳` 备份分支，再把安装目录代码对齐到远端版本；`.env` 和未跟踪的运行数据不会被删除。
+
 可选环境变量：
 
 ```text

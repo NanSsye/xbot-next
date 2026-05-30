@@ -43,6 +43,13 @@ function Invoke-Git {
     param(
         [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
     )
+    Invoke-Native git @Arguments
+}
+
+function Invoke-GitNetwork {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+    )
     try {
         Invoke-Native git @Arguments
     } catch {
@@ -55,6 +62,28 @@ function Invoke-Git {
     }
 }
 
+function Update-InstallRepo {
+    Write-Host "Updating xbot-next in $InstallDir"
+    Invoke-GitNetwork -C $InstallDir fetch --depth 1 origin $Branch
+
+    $RemoteRef = "origin/$Branch"
+    $LocalHead = (& git -C $InstallDir rev-parse HEAD).Trim()
+    $RemoteHead = (& git -C $InstallDir rev-parse $RemoteRef).Trim()
+    $Status = (& git -C $InstallDir status --porcelain)
+
+    if (($LocalHead -ne $RemoteHead) -or $Status) {
+        $BackupBranch = "xbot-local-backup-$(Get-Date -Format 'yyyyMMddHHmmss')"
+        Invoke-Git -C $InstallDir branch $BackupBranch HEAD
+        Write-Warning "安装目录存在本地改动或分叉提交，已备份到分支 $BackupBranch，然后按远端 $RemoteRef 升级。"
+        if ($Status) {
+            Invoke-Git -C $InstallDir stash push -m "xbot install backup before upgrade"
+        }
+        Invoke-Git -C $InstallDir reset --hard
+    }
+
+    Invoke-Git -C $InstallDir checkout -B $Branch $RemoteRef
+}
+
 Require-Command git
 $Python = Get-PythonCommand
 $PythonExe = $Python[0]
@@ -65,16 +94,13 @@ Invoke-Native $PythonExe @PythonBaseArgs -c "import sys; raise SystemExit(0 if s
 New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent), $BinDir | Out-Null
 
 if (Test-Path (Join-Path $InstallDir ".git")) {
-    Write-Host "Updating xbot-next in $InstallDir"
-    Invoke-Git -C $InstallDir fetch --depth 1 origin $Branch
-    Invoke-Git -C $InstallDir checkout $Branch
-    Invoke-Git -C $InstallDir pull --ff-only origin $Branch
+    Update-InstallRepo
 } else {
     Write-Host "Installing xbot-next to $InstallDir"
     if (Test-Path $InstallDir) {
         Remove-Item -LiteralPath $InstallDir -Recurse -Force
     }
-    Invoke-Git clone --depth 1 --branch $Branch $RepoUrl $InstallDir
+    Invoke-GitNetwork clone --depth 1 --branch $Branch $RepoUrl $InstallDir
 }
 
 Set-Location $InstallDir
