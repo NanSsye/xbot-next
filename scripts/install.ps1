@@ -5,6 +5,13 @@ $Branch = if ($env:XBOT_BRANCH) { $env:XBOT_BRANCH } else { "main" }
 $InstallDir = if ($env:XBOT_INSTALL_DIR) { $env:XBOT_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".xbot\xbot-next" }
 $BinDir = if ($env:XBOT_BIN_DIR) { $env:XBOT_BIN_DIR } else { Join-Path $env:USERPROFILE ".xbot\bin" }
 
+if ($env:XBOT_PROXY) {
+    $env:HTTP_PROXY = $env:XBOT_PROXY
+    $env:HTTPS_PROXY = $env:XBOT_PROXY
+    $env:ALL_PROXY = $env:XBOT_PROXY
+    Write-Host "Using proxy from XBOT_PROXY: $env:XBOT_PROXY"
+}
+
 function Require-Command($Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Missing required command: $Name"
@@ -32,6 +39,22 @@ function Get-PythonCommand {
     throw "Missing Python 3.11+. Please install Python 3.11 or newer."
 }
 
+function Invoke-Git {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+    )
+    try {
+        Invoke-Native git @Arguments
+    } catch {
+        Write-Host ""
+        Write-Warning "GitHub 连接失败。国内网络通常需要代理。"
+        Write-Host "PowerShell 示例："
+        Write-Host '  $env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)'
+        Write-Host ""
+        throw
+    }
+}
+
 Require-Command git
 $Python = Get-PythonCommand
 $PythonExe = $Python[0]
@@ -43,15 +66,15 @@ New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent), $Bin
 
 if (Test-Path (Join-Path $InstallDir ".git")) {
     Write-Host "Updating xbot-next in $InstallDir"
-    Invoke-Native git -C $InstallDir fetch --depth 1 origin $Branch
-    Invoke-Native git -C $InstallDir checkout $Branch
-    Invoke-Native git -C $InstallDir pull --ff-only origin $Branch
+    Invoke-Git -C $InstallDir fetch --depth 1 origin $Branch
+    Invoke-Git -C $InstallDir checkout $Branch
+    Invoke-Git -C $InstallDir pull --ff-only origin $Branch
 } else {
     Write-Host "Installing xbot-next to $InstallDir"
     if (Test-Path $InstallDir) {
         Remove-Item -LiteralPath $InstallDir -Recurse -Force
     }
-    Invoke-Native git clone --depth 1 --branch $Branch $RepoUrl $InstallDir
+    Invoke-Git clone --depth 1 --branch $Branch $RepoUrl $InstallDir
 }
 
 Set-Location $InstallDir
@@ -104,6 +127,7 @@ Write-Host "xbot installed."
 Write-Host "Install dir: $InstallDir"
 Write-Host "Command: $CmdPath"
 Write-Host "Upgrade: iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)"
+Write-Host "Upgrade with proxy: `$env:XBOT_PROXY=`"http://127.0.0.1:7897`"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Edit $InstallDir\.env if needed"

@@ -4,6 +4,13 @@ set -euo pipefail
 REPO_URL="${XBOT_REPO_URL:-https://github.com/NanSsye/xbot-next.git}"
 BRANCH="${XBOT_BRANCH:-main}"
 
+if [ -n "${XBOT_PROXY:-}" ]; then
+  export HTTP_PROXY="$XBOT_PROXY"
+  export HTTPS_PROXY="$XBOT_PROXY"
+  export ALL_PROXY="$XBOT_PROXY"
+  echo "Using proxy from XBOT_PROXY: $XBOT_PROXY"
+fi
+
 if [ "$(id -u)" -eq 0 ]; then
   INSTALL_DIR="${XBOT_INSTALL_DIR:-/usr/local/lib/xbot-next}"
   BIN_DIR="${XBOT_BIN_DIR:-/usr/local/bin}"
@@ -20,6 +27,16 @@ need_cmd() {
 }
 
 need_cmd git
+
+run_git() {
+  if ! git "$@"; then
+    echo >&2
+    echo "GitHub connection failed. If your network needs a proxy, retry with:" >&2
+    echo '  XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash' >&2
+    echo >&2
+    return 1
+  fi
+}
 
 if command -v python3.11 >/dev/null 2>&1; then
   PYTHON_BIN="$(command -v python3.11)"
@@ -40,13 +57,13 @@ mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "Updating xbot-next in $INSTALL_DIR"
-  git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
-  git -C "$INSTALL_DIR" checkout "$BRANCH"
-  git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
+  run_git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
+  run_git -C "$INSTALL_DIR" checkout "$BRANCH"
+  run_git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
 else
   echo "Installing xbot-next to $INSTALL_DIR"
   rm -rf "$INSTALL_DIR"
-  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  run_git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
 
 cd "$INSTALL_DIR"
@@ -109,6 +126,7 @@ echo "xbot installed."
 echo "Install dir: $INSTALL_DIR"
 echo "Command: $BIN_DIR/xbot"
 echo "Upgrade: curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash"
+echo 'Upgrade with proxy: XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash'
 echo
 echo "Next steps:"
 echo "  1. Edit $INSTALL_DIR/.env if needed"

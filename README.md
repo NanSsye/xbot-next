@@ -51,6 +51,18 @@ Windows PowerShell：
 iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
 ```
 
+如果 GitHub 连接被重置，先给安装器指定代理：
+
+```powershell
+$env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
+```
+
+Linux/macOS/WSL：
+
+```bash
+XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
+```
+
 安装器会把项目安装到用户目录，创建 `.venv`、复制 `.env.example` 为 `.env`，生成全局 `xbot` 命令，并在首次安装完成后自动进入 `xbot setup` 配置向导：
 
 ```bat
@@ -101,6 +113,7 @@ XBOT_INSTALL_DIR    自定义安装目录
 XBOT_BIN_DIR        自定义 xbot 命令目录
 XBOT_REPO_URL       自定义 Git 仓库地址
 XBOT_BRANCH         自定义分支，默认 main
+XBOT_PROXY          安装/升级时使用的 HTTP 代理，例如 http://127.0.0.1:7897
 ```
 
 ### 手动开发安装
