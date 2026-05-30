@@ -2186,6 +2186,43 @@ def test_planner_strips_minimax_tool_call_from_final_output():
     assert "memory.add" not in output
 
 
+def test_planner_strips_reasoning_tags_from_final_output():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        "<think>用户在群里@了我，需要中文回复。</think>\n\n"
+        "哈哈，没关系呀！芯儿这个名字也挺好听的。"
+    )
+
+    assert output == "哈哈，没关系呀！芯儿这个名字也挺好听的。"
+    assert "<think>" not in output
+
+
+def test_planner_strips_reasoning_tags_from_json_final():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        '{"final":"<thinking>先分析用户意图</thinking>\\n已更新。"}'
+    )
+
+    assert output == "已更新。"
+    assert "thinking" not in output
+
+
+def test_planner_strips_reasoning_fences_from_final_output():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        "```reasoning\n"
+        "这里是模型内部推理。\n"
+        "```\n"
+        "可以，我来处理。"
+    )
+
+    assert output == "可以，我来处理。"
+    assert "内部推理" not in output
+
+
 def test_planner_parses_openai_function_call_shape():
     planner = AgentPlanner()
 

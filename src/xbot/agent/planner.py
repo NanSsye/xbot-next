@@ -20,6 +20,15 @@ class AgentPlan(BaseModel):
 
 
 class AgentPlanner:
+    _REASONING_BLOCK_RE = re.compile(
+        r"<\s*(think|thinking|reasoning|analysis)\s*>.*?<\s*/\s*\1\s*>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    _REASONING_FENCE_RE = re.compile(
+        r"```(?:think|thinking|reasoning|analysis)\s+.*?```",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
     def __init__(self) -> None:
         self.tool_parser = ToolCallParser()
 
@@ -72,12 +81,13 @@ class AgentPlanner:
             if isinstance(data, dict) and not (data.get("tool_calls") or data.get("tools")):
                 final = data.get("final") or data.get("answer")
                 if isinstance(final, str) and final.strip():
-                    return final.strip()
+                    return self._strip_reasoning_blocks(final).strip()
         lenient_final = self._extract_lenient_final(text)
         if lenient_final:
-            return lenient_final
+            return self._strip_reasoning_blocks(lenient_final).strip()
 
         stripped = self.tool_parser.strip_blocks(text)
+        stripped = self._strip_reasoning_blocks(stripped)
         if self.contains_tool_call_intent(stripped):
             return ""
         return stripped.strip()
@@ -155,3 +165,8 @@ class AgentPlanner:
             return json.loads(f'"{value}"').strip()
         except json.JSONDecodeError:
             return value.replace('\\"', '"').strip()
+
+    def _strip_reasoning_blocks(self, content: str) -> str:
+        text = self._REASONING_BLOCK_RE.sub("", content)
+        text = self._REASONING_FENCE_RE.sub("", text)
+        return text.strip()
