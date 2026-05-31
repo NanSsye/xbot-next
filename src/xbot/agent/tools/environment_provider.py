@@ -12,7 +12,7 @@ from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
 
 
 COMMON_COMMANDS = ["git", "gh", "node", "npm", "python", "pip", "playwright", "chromium", "chrome"]
-COMMON_PORTS = [8080, 5432, 5433, 6379]
+COMMON_PORTS = [8548, 5432, 5433, 6379]
 SENSITIVE_ENV_TERMS = ("password", "token", "secret", "key")
 
 

@@ -44,7 +44,7 @@ def run_setup(
     updates: dict[str, str] = {
         "XBOT_LOAD_DOTENV": "true",
         "XBOT_SERVER_HOST": values.get("XBOT_SERVER_HOST") or "0.0.0.0",
-        "XBOT_SERVER_PORT": values.get("XBOT_SERVER_PORT") or "8080",
+        "XBOT_SERVER_PORT": values.get("XBOT_SERVER_PORT") or "8548",
         "XBOT_DATABASE_AUTO_BOOTSTRAP": "true",
         "XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP": "true",
     }

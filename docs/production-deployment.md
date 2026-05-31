@@ -6,7 +6,7 @@
 
 ## 基础拓扑
 
-- xbot 后端：`xbot run`，默认 `0.0.0.0:8080`。
+- xbot 后端：`xbot run`，默认 `0.0.0.0:8548`。
 - Control UI：执行 `xbot ui-build` 后由后端同源托管 `/`。
 - 数据库：PostgreSQL，保存会话、消息、Agent 任务、记忆、定时任务和运行事件。
 - 队列：Redis，用于消息队列和后续横向扩展。
@@ -151,13 +151,13 @@ iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrad
 ```powershell
 xbot ui-build
 xbot run
-curl http://127.0.0.1:8080/api/v1/system/status
+curl http://127.0.0.1:8548/api/v1/system/status
 ```
 
 启用 API token 后：
 
 ```powershell
-curl -H "Authorization: Bearer 你的token" http://127.0.0.1:8080/api/v1/system/status
+curl -H "Authorization: Bearer 你的token" http://127.0.0.1:8548/api/v1/system/status
 ```
 
 浏览器访问后端根路径，输入 `XBOT_API_TOKEN`，确认：

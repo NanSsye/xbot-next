@@ -1601,7 +1601,7 @@ environment.runtime
 - Python 版本、虚拟环境路径、pip 可用性。
 - Git、GitHub CLI、Node、npm、Playwright、浏览器安装状态。
 - 代理环境变量和常用网络连通性。
-- 常用端口占用，例如 8080、5432、5433、6379。
+- 常用端口占用，例如 8548、5432、5433、6379。
 - 磁盘剩余空间和 workspace 访问状态。
 
 设计要求：
@@ -2802,7 +2802,7 @@ debug = false
 
 [server]
 host = "0.0.0.0"
-port = 8080
+port = 8548
 
 [storage]
 type = "postgresql"

@@ -231,14 +231,14 @@ python -m xbot.cli.main run
 默认监听：
 
 ```text
-0.0.0.0:8080
+0.0.0.0:8548
 ```
 
 检查状态：
 
 ```bat
-curl http://127.0.0.1:8080/api/v1/system/status
-curl http://127.0.0.1:8080/api/v1/adapters
+curl http://127.0.0.1:8548/api/v1/system/status
+curl http://127.0.0.1:8548/api/v1/adapters
 ```
 
 ### 5. 运行测试

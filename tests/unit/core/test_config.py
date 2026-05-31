@@ -5,6 +5,8 @@ def test_load_default_config(monkeypatch):
     monkeypatch.setenv("XBOT_LOAD_DOTENV", "false")
     settings = load_settings("configs/xbot.toml")
     assert settings.xbot.name == "xbot"
+    assert settings.server.host == "0.0.0.0"
+    assert settings.server.port == 8548
     assert settings.storage.type == "postgresql"
     assert settings.storage.url == "postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot"
     assert settings.storage.auto_bootstrap is True
