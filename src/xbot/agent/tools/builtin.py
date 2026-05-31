@@ -19,25 +19,30 @@ def register_builtin_tools(
     run_skill: SkillRunner,
 ) -> None:
     async def read_file(payload: dict):
-        return await workspace.read_text(str(payload["path"]))
+        path = _required_text(payload, "path", aliases=("file_path", "filename"))
+        return await workspace.read_text(path)
 
     async def write_file(payload: dict):
-        await workspace.write_text(str(payload["path"]), str(payload.get("content", "")))
-        return {"written": payload["path"]}
+        path = _required_text(payload, "path", aliases=("file_path", "filename"))
+        content = _text_value(payload, "content", aliases=("text", "data", "file_content"), default="")
+        await workspace.write_text(path, content)
+        return {"written": path}
 
     async def list_dir(payload: dict):
         return await workspace.list_dir(str(payload.get("path", ".")))
 
     async def delete_path(payload: dict):
+        path = _required_text(payload, "path", aliases=("file_path", "filename"))
         return await workspace.delete_path(
-            str(payload["path"]),
+            path,
             recursive=bool(payload.get("recursive", False)),
         )
 
     async def shell_exec(payload: dict):
+        command = _required_text(payload, "command", aliases=("cmd", "script", "shell", "command_line"))
         return await workspace.run_shell(
-            str(payload["command"]),
-            cwd=payload.get("cwd"),
+            command,
+            cwd=payload.get("cwd") or payload.get("workdir") or payload.get("working_directory"),
             timeout_seconds=int(payload.get("timeout_seconds", 30)),
             max_output_chars=int(payload.get("max_output_chars", 12000)),
         )
@@ -118,6 +123,27 @@ def register_builtin_tools(
         wiki_manage=wiki_manage,
     ):
         registry.register(tool)
+
+
+def _text_value(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    aliases: tuple[str, ...] = (),
+    default: str | None = None,
+) -> str:
+    for candidate in (key, *aliases):
+        value = payload.get(candidate)
+        if value not in (None, ""):
+            return str(value)
+    if default is not None:
+        return default
+    names = ", ".join((key, *aliases))
+    raise XBotError(f"Invalid payload: required field '{key}' is missing. Accepted field names: {names}.")
+
+
+def _required_text(payload: dict[str, Any], key: str, *, aliases: tuple[str, ...] = ()) -> str:
+    return _text_value(payload, key, aliases=aliases, default=None)
 
 
 def _builtin_tool_definitions(**handlers: Callable[[dict[str, Any]], Awaitable[Any]]) -> list[ToolDefinition]:

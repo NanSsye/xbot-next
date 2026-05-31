@@ -12,6 +12,9 @@ def test_load_default_config(monkeypatch):
     assert settings.queue.redis_url == "redis://192.168.6.41:6379/15"
     assert settings.storage.persist_runtime_events is True
     assert settings.queue.dead_letter_queue == "xbot:dead_letters"
+    assert settings.api.auth_enabled is False
+    assert settings.api.token == ""
+    assert settings.api.cors_origins == []
     assert settings.queue.retry.max_attempts == 3
     assert settings.conversation.enabled is True
     assert settings.conversation.context.recent_messages == 0
@@ -25,6 +28,9 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.memory.short_term_summary_max_tokens == 32000
     assert settings.agent.memory.short_term_max_chars == 0
     assert settings.agent.memory.short_term_summary_max_chars == 0
+    assert settings.agent.memory.compaction_reserve_tokens == 16384
+    assert settings.agent.memory.compaction_keep_recent_tokens == 20000
+    assert settings.agent.memory.compaction_llm_enabled is True
     assert settings.agent.wiki.enabled is True
     assert settings.agent.wiki.directory == "data/agent/wiki"
     assert settings.agent.wiki.default_wiki == "xbot"
@@ -58,6 +64,9 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_REDIS_URL", "redis://redis:6379/2")
     monkeypatch.setenv("XBOT_QUEUE_TYPE", "redis")
     monkeypatch.setenv("XBOT_CONVERSATION_STORE", "postgresql")
+    monkeypatch.setenv("XBOT_API_AUTH_ENABLED", "true")
+    monkeypatch.setenv("XBOT_API_TOKEN", "secret-token")
+    monkeypatch.setenv("XBOT_API_CORS_ORIGINS", "https://console.example.com,http://127.0.0.1:5173")
     monkeypatch.setenv("XBOT_LLM_ENABLED", "true")
     monkeypatch.setenv("XBOT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("XBOT_LLM_BASE_URL", "http://llm.local/v1")
@@ -105,6 +114,9 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.queue.redis_url == "redis://redis:6379/2"
     assert settings.queue.type == "redis"
     assert settings.conversation.store == "postgresql"
+    assert settings.api.auth_enabled is True
+    assert settings.api.token == "secret-token"
+    assert settings.api.cors_origins == ["https://console.example.com", "http://127.0.0.1:5173"]
     assert settings.agent.llm.enabled is True
     assert settings.agent.llm.api_key == "test-key"
     assert settings.agent.llm.base_url == "http://llm.local/v1"

@@ -17,16 +17,18 @@ async def list_adapters(ctx: AppContext = Depends(get_context)) -> dict:
 
 @router.post("/{name}/enable")
 async def enable_adapter(name: str, ctx: AppContext = Depends(get_context)) -> dict:
-    if name not in {item["name"] for item in ctx.adapters.list_adapters()}:
+    adapter = await ctx.adapters.enable(name)
+    if adapter is None:
         raise HTTPException(status_code=404, detail=f"Adapter not found: {name}")
-    return {"success": True, "data": {"name": name, "enabled": True}}
+    return {"success": True, "data": ctx.adapters.list_adapters()}
 
 
 @router.post("/{name}/disable")
 async def disable_adapter(name: str, ctx: AppContext = Depends(get_context)) -> dict:
-    if name not in {item["name"] for item in ctx.adapters.list_adapters()}:
+    disabled = await ctx.adapters.disable(name)
+    if not disabled:
         raise HTTPException(status_code=404, detail=f"Adapter not found: {name}")
-    return {"success": True, "data": {"name": name, "enabled": False}}
+    return {"success": True, "data": ctx.adapters.list_adapters()}
 
 
 @router.post("/wechat_ilink/login/qrcode")

@@ -58,6 +58,23 @@ class ConversationRepository:
         record = await self.session.get(ConversationRecord, conversation_id)
         return self._to_conversation(record) if record else None
 
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        record = await self.session.get(ConversationRecord, conversation_id)
+        if record is None:
+            return False
+        for model in (
+            ConversationMessageRecord,
+            ConversationSummaryRecord,
+            ConversationStateRecord,
+        ):
+            result = await self.session.execute(
+                select(model).where(model.conversation_id == conversation_id)
+            )
+            for item in result.scalars().all():
+                await self.session.delete(item)
+        await self.session.delete(record)
+        return True
+
     async def get_messages(self, conversation_id: str, limit: int = 20) -> list[Message]:
         stmt = (
             select(ConversationMessageRecord)

@@ -15,7 +15,7 @@ from xbot.agent.background import BackgroundTaskManager
 from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.cache import TTLCache
 from xbot.agent.compression import MemoryCompressor
-from xbot.agent.llm import LLMMessage, LLMResponse, create_llm_provider
+from xbot.agent.llm import LLMMessage, LLMResponse, LLMToolCall, create_llm_provider
 from xbot.agent.memory import MemoryStore
 from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
@@ -174,6 +174,7 @@ class AgentRuntime:
     async def run_task(self, input_text: str, source: str = "api") -> AgentResult:
         task_id = str(uuid4())
         logger.info("Agent 任务开始: task_id={} source={} input_chars={}", task_id, source, len(input_text))
+        memory_input_text = self._memory_eligible_input_text(input_text)
         if self.repository_provider:
             logger.info("Agent 任务写入存储开始: task_id={}", task_id)
             async with self.repository_provider() as repo:
@@ -182,7 +183,6 @@ class AgentRuntime:
             logger.info("Agent 任务写入存储完成: task_id={}", task_id)
         else:
             await self._add_event(task_id, "task.received", input_text)
-        memory_item = await self.memory.add("episodic", f"Task received from {source}: {input_text}")
         logger.info("Agent 任务进入 LLM: task_id={}", task_id)
         output = await self._run_llm(task_id, input_text, source=source)
         suppress_channel_reply = task_id in self._suppress_channel_reply_task_ids
@@ -197,7 +197,6 @@ class AgentRuntime:
         if self.repository_provider:
             logger.info("Agent 任务结果写入存储开始: task_id={}", task_id)
             async with self.repository_provider() as repo:
-                await repo.save_memory(memory_item, source=source)
                 await repo.finish_task(result)
             await self._add_event(task_id, "task.completed", result.output)
             logger.info("Agent 任务结果写入存储完成: task_id={}", task_id)
@@ -206,7 +205,7 @@ class AgentRuntime:
         self._completed_turns += 1
         self._maybe_start_memory_review(
             parent_task_id=task_id,
-            input_text=input_text,
+            input_text=memory_input_text,
             output_text=result.output,
             source=source,
         )
@@ -671,6 +670,28 @@ class AgentRuntime:
             record = await repo.get_background_task(task_id)
         return BackgroundTaskRecord.from_storage(record) if record else None
 
+    async def list_events(self, task_id: str | None = None, limit: int = 100) -> list[dict]:
+        if not self.repository_provider:
+            return []
+        async with self.repository_provider() as repo:
+            records = await repo.list_events(task_id=task_id, limit=limit)
+        return [
+            {
+                "id": record.id,
+                "task_id": record.task_id,
+                "type": record.type,
+                "content": self._event_content(record.content),
+                "created_at": record.created_at.isoformat(),
+            }
+            for record in records
+        ]
+
+    def _event_content(self, content: str) -> object:
+        try:
+            return json.loads(content)
+        except Exception:
+            return content
+
     async def background_task_overview(self, limit: int = 20) -> dict:
         tasks = await self.list_background_tasks(limit)
         counts: dict[str, int] = {}
@@ -862,6 +883,10 @@ class AgentRuntime:
         return (
             "Review this completed xbot turn for long-term memory value.\n"
             f"source: {source}\n\n"
+            "Memory boundary:\n"
+            "- Save facts only from the current explicitly triggered user request and the assistant output.\n"
+            "- Do not save facts found only in conversation_summaries or recent_conversation_messages.\n"
+            "- For group/channel sources, treat unmentioned room chatter as passive context, not as user memory, unless the triggering user explicitly asks to remember it.\n\n"
             "User/input:\n"
             f"{input_text[:4000]}\n\n"
             "Assistant/output:\n"
@@ -871,6 +896,18 @@ class AgentRuntime:
             "- target=memory: stable environment facts, project conventions, reusable tool quirks.\n"
             "- skill.manage: create or patch reusable agent-owned procedural skills only when a durable workflow emerged.\n"
             "Skip temporary progress, one-off results, and anything sensitive."
+        )
+
+    def _memory_eligible_input_text(self, input_text: str) -> str:
+        return re.sub(
+            r"conversation_summaries:\n.*?\nrecent_conversation_messages:\n.*?\nmessage_attachments:",
+            (
+                "conversation_summaries:\n[passive context omitted from memory]\n"
+                "recent_conversation_messages:\n[passive context omitted from memory]\n"
+                "message_attachments:"
+            ),
+            input_text,
+            flags=re.DOTALL,
         )
 
     def _curator_report_prompt(self) -> str:
@@ -1028,6 +1065,7 @@ class AgentRuntime:
 
     async def _run_llm(self, task_id: str, input_text: str, *, source: str = "api") -> str:
         history_key = self._session_history_key(source)
+        native_tools, native_tool_map = self._native_tools_for_source(source)
         messages = [
             LLMMessage(role="system", content=self._agent_system_prompt(source=source)),
         ]
@@ -1056,6 +1094,7 @@ class AgentRuntime:
                     task_id=task_id,
                     iteration=iteration,
                     source=source,
+                    tools=native_tools,
                 )
             except XBotError as exc:
                 await self._add_event(task_id, "llm.unavailable", {"error": str(exc)})
@@ -1087,7 +1126,7 @@ class AgentRuntime:
                     "iteration": iteration,
                 },
             )
-            plan = self.planner.parse_llm_response(response.content)
+            plan = self._response_plan(response, native_tool_map)
             logger.info(
                 "Agent LLM 解析结果: task_id={} iteration={} tool_calls={} final_chars={}",
                 task_id,
@@ -1097,6 +1136,7 @@ class AgentRuntime:
             )
             if not plan.tool_calls:
                 cleaned = self.planner.clean_final_output(plan.final or response.content)
+                requires_tools = self._source_can_force_tool_use(source) and self._request_requires_tools(input_text)
                 if (
                     (
                         self.planner.contains_tool_call_intent(response.content)
@@ -1105,11 +1145,12 @@ class AgentRuntime:
                     or
                     self.planner.is_empty_final_response(response.content)
                     or not cleaned.strip()
+                    or (requires_tools and iteration == 0)
                 ):
                     if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
                         output = "这个请求需要继续调用工具，但已达到配置的工具循环上限。"
                         if history_key:
-                            self._append_session_turn(history_key, input_text, output)
+                            await self._append_session_turn(history_key, input_text, output, response=response)
                         return output
                     missing_tool_reprompts += 1
                     if missing_tool_reprompts > 3:
@@ -1120,7 +1161,7 @@ class AgentRuntime:
                         )
                         output = "模型连续返回空内容或不完整的工具调用，请换一种更明确的说法再试。"
                         if history_key:
-                            self._append_session_turn(history_key, input_text, output)
+                            await self._append_session_turn(history_key, input_text, output, response=response)
                         return output
                     messages.append(LLMMessage(role="assistant", content=response.content))
                     messages.append(
@@ -1130,6 +1171,7 @@ class AgentRuntime:
                                 "Your previous response was empty, incomplete, or did not call required tools. "
                                 "If the request depends on current project files, directories, plugins, skills, "
                                 "config, logs, or runtime state, you must call tools first. "
+                                "This request appears to need live tool data, so do not answer from memory. "
                                 "Do not say you are checking; actually request tool_calls. "
                                 "If you return tool_calls, the JSON must be valid and complete. "
                                 "Otherwise return JSON with a non-empty final answer."
@@ -1139,7 +1181,7 @@ class AgentRuntime:
                     iteration += 1
                     continue
                 if history_key:
-                    self._append_session_turn(history_key, input_text, cleaned)
+                    await self._append_session_turn(history_key, input_text, cleaned, response=response)
                 return cleaned
             missing_tool_reprompts = 0
             if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
@@ -1147,7 +1189,7 @@ class AgentRuntime:
                     plan.final or "工具调用次数达到上限，任务没有完成。"
                 )
                 if history_key:
-                    self._append_session_turn(history_key, input_text, output)
+                    await self._append_session_turn(history_key, input_text, output, response=response)
                 return output
 
             tool_results = []
@@ -1174,7 +1216,7 @@ class AgentRuntime:
                 self._suppress_channel_reply_task_ids.add(task_id)
                 output = "已发送。"
                 if history_key:
-                    self._append_session_turn(history_key, input_text, output)
+                    await self._append_session_turn(history_key, input_text, output, response=response)
                 return output
             if background_started and (
                 self._should_return_after_background(source)
@@ -1182,24 +1224,28 @@ class AgentRuntime:
             ):
                 output = self._background_started_message(tool_results, plan_final=plan.final)
                 if history_key:
-                    self._append_session_turn(history_key, input_text, output)
+                    await self._append_session_turn(history_key, input_text, output, response=response)
                 return output
-            messages.append(LLMMessage(role="assistant", content=response.content))
-            messages.append(
-                LLMMessage(
-                    role="user",
-                    content=(
-                        "Tool execution results as JSON:\n"
-                        f"{json.dumps(tool_results, ensure_ascii=False)}\n"
-                        "Continue. If no more tools are needed, return JSON with only final."
-                    ),
+            if response.tool_calls:
+                messages.append(self._assistant_tool_call_message(response))
+                messages.extend(self._native_tool_result_messages(response.tool_calls, tool_results))
+            else:
+                messages.append(LLMMessage(role="assistant", content=response.content))
+                messages.append(
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "Tool execution results as JSON:\n"
+                            f"{json.dumps(tool_results, ensure_ascii=False)}\n"
+                            "Continue. If no more tools are needed, return JSON with only final."
+                        ),
+                    )
                 )
-            )
             iteration += 1
         cleaned = self.planner.clean_final_output(last_content)
         output = cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
         if history_key:
-            self._append_session_turn(history_key, input_text, output)
+            await self._append_session_turn(history_key, input_text, output)
         return output
 
     def _session_history_key(self, source: str) -> str:
@@ -1226,7 +1272,14 @@ class AgentRuntime:
         messages.extend(self._session_histories.get(key, []))
         return messages
 
-    def _append_session_turn(self, key: str, user_input: str, assistant_output: str) -> None:
+    async def _append_session_turn(
+        self,
+        key: str,
+        user_input: str,
+        assistant_output: str,
+        *,
+        response: LLMResponse | None = None,
+    ) -> None:
         if not key:
             return
         history = self._session_histories.setdefault(key, [])
@@ -1237,6 +1290,7 @@ class AgentRuntime:
             ]
         )
         self._compress_session_history(key)
+        await self._maybe_compact_session_history_for_context(key, response=response)
 
     def clear_session_history(self, source: str | None = None) -> None:
         if source is None:
@@ -1312,6 +1366,103 @@ class AgentRuntime:
             combined = "[Earlier summary truncated]\n" + combined
         self._session_summaries[key] = combined
 
+    async def _maybe_compact_session_history_for_context(
+        self,
+        key: str,
+        *,
+        response: LLMResponse | None,
+    ) -> None:
+        if not key or not self.config.memory.auto_compress:
+            return
+        context_window = int(self.config.llm.context_window_tokens or 0)
+        if context_window <= 0:
+            return
+        used_tokens = self._usage_context_tokens(response.usage if response else {})
+        if used_tokens <= 0:
+            return
+        reserve = max(0, int(self.config.memory.compaction_reserve_tokens or 0))
+        if used_tokens <= max(0, context_window - reserve):
+            return
+        keep_tokens = max(1000, int(self.config.memory.compaction_keep_recent_tokens or 0))
+        history = self._session_histories.get(key, [])
+        older, recent = self._split_history_for_compaction(history, keep_tokens=keep_tokens)
+        if not older:
+            return
+        summary = await self._summarize_compaction_messages(older)
+        previous = self._session_summaries.get(key, "").strip()
+        marker = (
+            f"Context checkpoint: compressed {len(older)} older messages because "
+            f"context usage reached {used_tokens}/{context_window} tokens."
+        )
+        self._session_summaries[key] = "\n".join(
+            item for item in (previous, marker, summary) if item
+        )
+        self._session_histories[key] = recent
+
+    def _usage_context_tokens(self, usage: dict) -> int:
+        for key in ("total_tokens", "totalTokens", "total"):
+            value = usage.get(key)
+            if isinstance(value, int) and value > 0:
+                return value
+        total = 0
+        for key in ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and value > 0:
+                total += value
+        return total
+
+    def _split_history_for_compaction(
+        self,
+        history: list[LLMMessage],
+        *,
+        keep_tokens: int,
+    ) -> tuple[list[LLMMessage], list[LLMMessage]]:
+        total = 0
+        recent_reversed: list[LLMMessage] = []
+        for message in reversed(history):
+            total += self._short_term_size(message.content or "", token_budget=keep_tokens)
+            if recent_reversed and total > keep_tokens:
+                break
+            recent_reversed.append(message)
+        recent = list(reversed(recent_reversed))
+        older = history[: max(0, len(history) - len(recent))]
+        return older, recent
+
+    async def _summarize_compaction_messages(self, messages: list[LLMMessage]) -> str:
+        fallback = self._summarize_short_term_messages(messages)
+        if not self.config.memory.compaction_llm_enabled:
+            return fallback
+        transcript = "\n".join(
+            f"{message.role}: {' '.join((message.content or '').split())[:1200]}"
+            for message in messages
+        )
+        try:
+            response = await self.llm.complete(
+                [
+                    LLMMessage(
+                        role="system",
+                        content=(
+                            "You are a context compaction assistant. Summarize older xbot conversation "
+                            "history into a compact checkpoint. Preserve durable user requests, decisions, "
+                            "files/tools used, unresolved tasks, and facts needed to continue. Do not add new facts."
+                        ),
+                    ),
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "Summarize these older messages for future context. Keep it concise and structured.\n\n"
+                            f"{transcript[:24000]}"
+                        ),
+                    ),
+                ],
+                tools=None,
+            )
+        except Exception as exc:
+            logger.warning("Agent context compaction LLM summary failed: error={}", exc)
+            return fallback
+        summary = self.planner.clean_final_output(response.content or "").strip()
+        return summary or fallback
+
     def _short_term_size(self, text: str, *, token_budget: int) -> int:
         if token_budget <= 0:
             return len(text)
@@ -1342,6 +1493,118 @@ class AgentRuntime:
             return match.group(1).strip()
         return input_text
 
+    def _request_requires_tools(self, input_text: str) -> bool:
+        text = self._short_term_user_content(input_text).lower()
+        if not text.strip():
+            return False
+        tool_required_patterns = [
+            r"\b(read|open|inspect|list|check|show|find|search|grep|scan|status|log|logs|config|env|database|db|git|test|pytest|npm|pnpm)\b",
+            r"(看一下|看看|检查|读取|打开|列出|搜索|查找|日志|配置|环境|数据库|当前状态|运行状态|文件|目录|插件|skill|技能|前端|后端|代码|报错|错误|测试|提交|上传|同步|生产环境)",
+            r"(为什么.*(失败|报错|没有|不能|不行|没反应))",
+        ]
+        return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in tool_required_patterns)
+
+    def _source_can_force_tool_use(self, source: str) -> bool:
+        return source.startswith("terminal:") or source.startswith("channel:")
+
+    def _response_plan(self, response: LLMResponse, native_tool_map: dict[str, str]):
+        if not response.tool_calls:
+            return self.planner.parse_llm_response(response.content)
+        return self.planner.parse_llm_response(
+            json.dumps(
+                {
+                    "tool_calls": [
+                        {
+                            "tool": native_tool_map.get(call.name, call.name),
+                            "payload": call.arguments,
+                        }
+                        for call in response.tool_calls
+                    ],
+                    "final": response.content or None,
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    def _native_tools_for_source(self, source: str) -> tuple[list[dict], dict[str, str]]:
+        toolsets = toolsets_for_source(self.config, source)
+        context = source_context(source)
+        tools = self.tools.list_tools(
+            toolsets=toolsets,
+            platform=context.get("platform"),
+            scope=context.get("scope"),
+            mode=self.config.mode,
+            include_metadata=False,
+        )
+        native_tools = []
+        native_tool_map: dict[str, str] = {}
+        used_names: set[str] = set()
+        for tool in tools:
+            original_name = str(tool.get("name") or "").strip()
+            if not original_name:
+                continue
+            native_name = self._native_tool_name(original_name, used_names)
+            native_tool_map[native_name] = original_name
+            native_tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": native_name,
+                        "description": f"{tool.get('description') or ''}\nOriginal xbot tool name: {original_name}",
+                        "parameters": tool.get("input_schema") or {"type": "object"},
+                    },
+                }
+            )
+        return native_tools, native_tool_map
+
+    def _native_tool_name(self, name: str, used_names: set[str]) -> str:
+        base = re.sub(r"[^a-zA-Z0-9_-]", "__", name).strip("_") or "tool"
+        base = base[:64]
+        candidate = base
+        index = 2
+        while candidate in used_names:
+            suffix = f"_{index}"
+            candidate = f"{base[: 64 - len(suffix)]}{suffix}"
+            index += 1
+        used_names.add(candidate)
+        return candidate
+
+    def _assistant_tool_call_message(self, response: LLMResponse) -> LLMMessage:
+        return LLMMessage(
+            role="assistant",
+            content=response.content or None,
+            tool_calls=[
+                call.raw
+                if call.raw
+                else {
+                    "id": call.id or f"call_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                    },
+                }
+                for index, call in enumerate(response.tool_calls)
+            ],
+        )
+
+    def _native_tool_result_messages(
+        self,
+        calls: list[LLMToolCall],
+        tool_results: list[dict],
+    ) -> list[LLMMessage]:
+        messages = []
+        for index, result in enumerate(tool_results):
+            call = calls[index] if index < len(calls) else None
+            messages.append(
+                LLMMessage(
+                    role="tool",
+                    tool_call_id=(call.id if call else None) or f"call_{index}",
+                    content=json.dumps(result, ensure_ascii=False),
+                )
+            )
+        return messages
+
     async def _complete_llm(
         self,
         messages: list[LLMMessage],
@@ -1349,10 +1612,11 @@ class AgentRuntime:
         task_id: str,
         iteration: int,
         source: str,
+        tools: list[dict] | None = None,
     ) -> LLMResponse:
         stream = getattr(self.llm, "stream", None)
-        if not source.startswith("terminal:") or stream is None:
-            return await self.llm.complete(messages)
+        if tools or not source.startswith("terminal:") or stream is None:
+            return await self.llm.complete(messages, tools=tools)
 
         collected = ""
         visible_started = False
@@ -1391,7 +1655,7 @@ class AgentRuntime:
                 )
         except Exception:
             if not collected:
-                return await self.llm.complete(messages)
+                return await self.llm.complete(messages, tools=tools)
             raise
 
         if visible_started and visible_buffer:
@@ -1416,6 +1680,7 @@ class AgentRuntime:
         task_id: str,
         iteration: int,
         source: str,
+        tools: list[dict] | None = None,
     ) -> LLMResponse:
         max_attempts = max(1, int(self.config.llm.max_attempts or 1))
         base_delay = max(0.0, float(self.config.llm.retry_backoff_seconds or 0.0))
@@ -1427,6 +1692,7 @@ class AgentRuntime:
                         task_id=task_id,
                         iteration=iteration,
                         source=source,
+                        tools=tools,
                     )
             except XBotError:
                 raise
@@ -1722,7 +1988,8 @@ class AgentRuntime:
             mode=self.config.mode,
         )
         return (
-            "You are xbot's backend agent. You can request tool calls through JSON only.\n"
+            "You are xbot's backend agent. Prefer native structured tool calls when tools are available from the model API. "
+            "If native tool calls are unavailable, use the JSON fallback format exactly.\n"
             "Available tools:\n"
             f"{json.dumps(tools, ensure_ascii=False)}\n"
             f"{skill_instructions}"
@@ -1743,12 +2010,13 @@ class AgentRuntime:
             "- Use memory.replace or memory.remove when a memory becomes outdated or too broad.\n"
             "- Use wiki.manage for structured project knowledge, architecture notes, research notes, design decisions, procedures, and reusable documentation. Query the wiki before answering from knowledge base content.\n"
             "- Do not put user preferences or temporary chat state in the wiki; use memory.* for durable preferences and short-term history for active task context.\n"
+            "- When creating or using skills for channel requests, keep data/query/action logic separate from channel delivery. Skills should return results to the main Agent by default; the main Agent should compose the final answer in its own voice and let the runtime/channel tools handle sending. Do not make a query skill directly send WeChat messages unless the user explicitly asks for a sending skill.\n"
             "- To run a skill script or local command, call shell.exec only when policy allows it.\n"
             "- Browser GUI control and screenshots are not available unless a browser/screenshot skill or tool is listed.\n"
             "- If the user asks for an unavailable capability, explain that it is not currently available instead of waiting or pretending to do it.\n"
-            "When a tool is needed, respond with JSON exactly like:\n"
+            "JSON fallback when native tool calls are unavailable:\n"
             '{"tool_calls":[{"tool":"filesystem.read_file","payload":{"path":"README.md"}}]}\n'
-            "When the task is complete, respond with JSON exactly like:\n"
+            "When the task is complete without more tool calls, respond with JSON exactly like:\n"
             '{"final":"your concise final answer"}\n'
             "Do not expose tool_calls, tools JSON, tool execution logs, or internal planning to the user.\n"
             "Do not invent tool results. Request tools first, then use returned results."

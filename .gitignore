@@ -38,3 +38,7 @@ skills/**/wechat-869.json
 *.log
 *.sqlite
 *.sqlite3
+
+ui/node_modules/
+ui/dist/
+ui/tsconfig.tsbuildinfo

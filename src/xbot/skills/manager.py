@@ -50,16 +50,25 @@ class SkillManager:
         self._revision += 1
 
     def list_skills(self) -> list[dict]:
-        return [
-            {
-                "name": manifest.name,
-                "version": manifest.version,
-                "description": manifest.description,
-                "tools": manifest.tools.required,
-                "enabled": manifest.name not in self._disabled,
-            }
-            for manifest, _ in self._skills.values()
-        ]
+        items: list[dict] = []
+        names = sorted(set(self._paths) | set(self._skills))
+        for name in names:
+            loaded = self._skills.get(name)
+            try:
+                manifest = loaded[0] if loaded else self.loader.load_manifest(self._paths[name])
+            except Exception:
+                continue
+            items.append(
+                {
+                    "name": manifest.name,
+                    "version": manifest.version,
+                    "description": manifest.description,
+                    "tools": manifest.tools.required,
+                    "enabled": manifest.name not in self._disabled and manifest.name in self._skills,
+                    "path": str(self._paths.get(manifest.name) or ""),
+                }
+            )
+        return items
 
     def list_agent_owned_skills(self) -> list[dict]:
         usage = self._load_usage()

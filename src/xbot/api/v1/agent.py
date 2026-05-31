@@ -80,6 +80,17 @@ class BackgroundTaskRequest(BaseModel):
     replayable: bool = True
 
 
+class ScheduledJobCreateRequest(BaseModel):
+    input: str
+    schedule: str
+    name: str | None = None
+    source: str = "api:schedule"
+    reply_policy: str = "none"
+    max_runs: int | None = None
+    timezone: str | None = None
+    metadata: dict = {}
+
+
 @router.get("/tools")
 async def list_tools(
     toolset: str | None = None,
@@ -172,6 +183,15 @@ async def create_task(payload: AgentTaskRequest, ctx: AppContext = Depends(get_c
     return {"success": True, "data": result.model_dump()}
 
 
+@router.get("/events")
+async def list_agent_events(
+    task_id: str | None = None,
+    limit: int = 100,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    return {"success": True, "data": await ctx.agent.list_events(task_id=task_id, limit=limit)}
+
+
 @router.post("/background-tasks")
 async def create_background_task(
     payload: BackgroundTaskRequest, ctx: AppContext = Depends(get_context)
@@ -214,6 +234,80 @@ async def get_background_task(task_id: str, ctx: AppContext = Depends(get_contex
     if record is None:
         raise HTTPException(status_code=404, detail=f"Background task not found: {task_id}")
     return {"success": True, "data": record.model_dump(mode="json")}
+
+
+@router.get("/scheduled-jobs")
+async def list_scheduled_jobs(
+    include_disabled: bool = False,
+    limit: int = 100,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    jobs = await ctx.agent.scheduler.list(include_disabled=include_disabled, limit=limit)
+    return {"success": True, "data": [item.model_dump(mode="json") for item in jobs]}
+
+
+@router.post("/scheduled-jobs")
+async def create_scheduled_job(
+    payload: ScheduledJobCreateRequest,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    try:
+        job = await ctx.agent.scheduler.create(
+            input_text=payload.input,
+            schedule=payload.schedule,
+            name=payload.name,
+            source=payload.source,
+            reply_policy=payload.reply_policy,
+            max_runs=payload.max_runs,
+            timezone_name=payload.timezone,
+            metadata=payload.metadata,
+        )
+    except XBotError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "data": job.model_dump(mode="json")}
+
+
+@router.get("/scheduled-jobs/{job_id}")
+async def get_scheduled_job(job_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    job = await ctx.agent.scheduler.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Scheduled job not found: {job_id}")
+    return {"success": True, "data": job.model_dump(mode="json")}
+
+
+@router.post("/scheduled-jobs/{job_id}/pause")
+async def pause_scheduled_job(job_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    try:
+        job = await ctx.agent.scheduler.pause(job_id)
+    except XBotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"success": True, "data": job.model_dump(mode="json")}
+
+
+@router.post("/scheduled-jobs/{job_id}/resume")
+async def resume_scheduled_job(job_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    try:
+        job = await ctx.agent.scheduler.resume(job_id)
+    except XBotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"success": True, "data": job.model_dump(mode="json")}
+
+
+@router.post("/scheduled-jobs/{job_id}/run")
+async def run_scheduled_job(job_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    try:
+        job = await ctx.agent.scheduler.run_now(job_id)
+    except XBotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"success": True, "data": job.model_dump(mode="json")}
+
+
+@router.delete("/scheduled-jobs/{job_id}")
+async def delete_scheduled_job(job_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    deleted = await ctx.agent.scheduler.delete(job_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Scheduled job not found: {job_id}")
+    return {"success": True, "data": {"id": job_id, "deleted": True}}
 
 
 @router.post("/background-tasks/{task_id}/replay")

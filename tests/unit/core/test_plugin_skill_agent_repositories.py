@@ -7,7 +7,7 @@ import pytest
 from xbot.agent.planner import AgentPlanner
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.background import BackgroundTaskRecord
-from xbot.agent.llm import LLMMessage, LLMResponse
+from xbot.agent.llm import LLMMessage, LLMResponse, LLMToolCall
 from xbot.agent.tools.skill_provider import SkillToolProvider
 from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import (
@@ -101,11 +101,15 @@ class FakeAgentRepository:
 class FakeLLMProvider:
     def __init__(self, responses=None):
         self.messages = []
+        self.tools = []
         self.responses = list(responses or ["LLM accepted the task."])
 
-    async def complete(self, messages):
+    async def complete(self, messages, *, tools=None):
         self.messages.append(messages)
+        self.tools.append(tools or [])
         content = self.responses.pop(0)
+        if isinstance(content, LLMResponse):
+            return content
         return LLMResponse(
             content=content,
             model="fake-model",
@@ -141,8 +145,9 @@ class FakeFlakyLLMProvider(FakeLLMProvider):
         super().__init__(responses=[])
         self.outcomes = list(outcomes)
 
-    async def complete(self, messages):
+    async def complete(self, messages, *, tools=None):
         self.messages.append(messages)
+        self.tools.append(tools or [])
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -356,6 +361,8 @@ async def test_skill_manager_persists_manifest_and_enabled_state():
 
     await manager.disable("code_assistant")
     assert repo.enabled["code_assistant"] is False
+    disabled = {item["name"]: item for item in manager.list_skills()}
+    assert disabled["code_assistant"]["enabled"] is False
 
     await manager.enable("code_assistant")
     assert repo.enabled["code_assistant"] is True
@@ -585,7 +592,7 @@ async def test_agent_runtime_curator_report_uses_llm_suggestions(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_agent_runtime_persists_task_event_and_memory():
+async def test_agent_runtime_persists_task_and_events_without_operational_memory():
     repo = FakeAgentRepository()
 
     @asynccontextmanager
@@ -606,7 +613,7 @@ async def test_agent_runtime_persists_task_event_and_memory():
     assert repo.finished[0].task_id == result.task_id
     assert result.output == "LLM accepted the task."
     assert llm.messages
-    assert repo.memories
+    assert repo.memories == []
     assert any(event[1] == "llm.completed" for event in repo.events)
     assert any(event[1] == "task.completed" for event in repo.events)
 
@@ -646,6 +653,47 @@ async def test_agent_runtime_short_term_history_is_scoped_by_source(tmp_path):
     second_messages = llm.messages[1]
     assert [message.role for message in second_messages] == ["system", "user"]
     assert second_messages[1].content == "我叫什么？"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_reprompts_when_live_tool_request_gets_direct_answer(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"当前有 3 个插件。"}',
+            '{"tool_calls":[{"tool":"filesystem.list_dir","payload":{"path":"plugins"}}]}',
+            '{"final":"我已经查看 plugins 目录。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("看一下 plugins 目录有哪些插件", source="terminal:local:test")
+
+    assert result.output == "我已经查看 plugins 目录。"
+    assert len(llm.messages) == 3
+    assert any(
+        "must call tools first" in (message.content or "")
+        for message in llm.messages[1]
+    )
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_allows_plain_chat_without_tool_reprompt(tmp_path):
+    llm = FakeLLMProvider(responses=['{"final":"你好。"}'])
+    runtime = AgentRuntime(
+        AgentConfig(workspace_root=str(tmp_path), workspace=AgentWorkspaceConfig(roots=[str(tmp_path)])),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    result = await runtime.run_task("你好", source="terminal:local:test")
+
+    assert result.output == "你好。"
+    assert len(llm.messages) == 1
 
 
 @pytest.mark.anyio
@@ -690,6 +738,39 @@ async def test_agent_runtime_compresses_short_term_history_by_token_budget(tmp_p
     assert third_messages[1].role == "system"
     assert "Compressed earlier turns" in third_messages[1].content
     assert third_messages[-1].content == "第三轮"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_auto_compacts_when_context_usage_nears_window(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            LLMResponse(
+                content='{"final":"第一轮完成。"}',
+                model="fake-model",
+                provider="fake",
+                usage={"total_tokens": 95},
+            ),
+            '{"final":"压缩摘要：保留第一轮关键信息。"}',
+            '{"final":"第二轮完成。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.llm.context_window_tokens = 100
+    config.memory.compaction_reserve_tokens = 10
+    config.memory.compaction_keep_recent_tokens = 1
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:compact"
+
+    await runtime.run_task("第一轮需要很长的上下文" + ("很长" * 600), source=source)
+    await runtime.run_task("第二轮", source=source)
+
+    second_messages = llm.messages[-1]
+    assert second_messages[1].role == "system"
+    assert "Context checkpoint" in second_messages[1].content
+    assert "压缩摘要" in second_messages[1].content
 
 
 @pytest.mark.anyio
@@ -829,6 +910,77 @@ async def test_agent_runtime_starts_background_memory_review(tmp_path):
         encoding="utf-8"
     )
     assert reviews[0].result["results"][0]["tool"] == "memory.add"
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_does_not_store_channel_input_as_episodic_memory(tmp_path):
+    repo = FakeAgentRepository()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    runtime = AgentRuntime(
+        AgentConfig(),
+        plugins=None,
+        skills=None,
+        repository_provider=provider,
+        llm_provider=FakeLLMProvider(responses=['{"final":"收到。"}']),
+    )
+    input_text = (
+        "Channel message received.\n"
+        "scope: group\n"
+        "current_trigger_message:\n@小小x 记住我叫老夏\n"
+        "conversation_summaries:\n其他群友说自己叫张三。\n"
+        "recent_conversation_messages:\n- sender=other content=其他群友喜欢吃辣。\n"
+        "message_attachments:\n- none\n"
+        "content: @小小x 记住我叫老夏\n"
+    )
+
+    await runtime.run_task(input_text, source="channel:wechat:wechat869:group-1")
+
+    assert repo.memories == []
+    assert await runtime.memory.list() == []
+
+
+@pytest.mark.anyio
+async def test_memory_review_receives_only_triggered_channel_input(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"收到。"}',
+            '{"final":"Nothing to save."}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(tmp_path / "memories")
+    config.memory.review_interval = 1
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    input_text = (
+        "Channel message received.\n"
+        "scope: group\n"
+        "current_trigger_message:\n@小小x 以后叫我老夏\n"
+        "conversation_summaries:\n未唤醒群聊：A 的公司是秘密项目。\n"
+        "recent_conversation_messages:\n- sender=a content=不要把这句话记进AI记忆。\n"
+        "message_attachments:\n- none\n"
+        "content: @小小x 以后叫我老夏\n"
+    )
+
+    await runtime.run_task(input_text, source="channel:wechat:wechat869:group-1")
+
+    for _ in range(50):
+        reviews = [item for item in runtime.background.list() if item.kind == "memory_review"]
+        if reviews and reviews[0].status == "completed":
+            break
+        await anyio.sleep(0.02)
+
+    review_prompt = llm.messages[1][1].content
+    assert "以后叫我老夏" in review_prompt
+    assert "A 的公司是秘密项目" not in review_prompt
+    assert "不要把这句话记进AI记忆" not in review_prompt
+    assert "unmentioned room chatter as passive context" in review_prompt
 
 
 @pytest.mark.anyio
@@ -989,6 +1141,46 @@ async def test_agent_runtime_executes_filesystem_tool_and_audits(tmp_path):
     assert read_result.output == "hello agent"
     assert any(event[1] == "tool.started" for event in repo.events)
     assert any(event[1] == "tool.completed" for event in repo.events)
+
+
+@pytest.mark.anyio
+async def test_filesystem_write_file_accepts_common_payload_aliases(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        allow_file_write=True,
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    write_result = await runtime.execute_tool(
+        "filesystem.write_file",
+        {"file_path": "alias.txt", "text": "alias content"},
+    )
+    read_result = await runtime.execute_tool("filesystem.read_file", {"path": "alias.txt"})
+
+    assert write_result.status == "completed"
+    assert read_result.output == "alias content"
+
+
+@pytest.mark.anyio
+async def test_builtin_tools_return_invalid_payload_for_missing_required_fields(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        allow_file_write=True,
+        allow_shell=True,
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    write_result = await runtime.execute_tool("filesystem.write_file", {"content": "missing path"})
+    shell_result = await runtime.execute_tool("shell.exec", {"cwd": "."})
+
+    assert write_result.status == "failed"
+    assert write_result.error_type == "invalid_payload"
+    assert "required field 'path'" in (write_result.error or "")
+    assert shell_result.status == "failed"
+    assert shell_result.error_type == "invalid_payload"
+    assert "required field 'command'" in (shell_result.error or "")
 
 
 @pytest.mark.anyio
@@ -1504,6 +1696,53 @@ async def test_agent_runtime_plans_tool_calls_and_returns_final_answer(tmp_path)
     assert len(llm.messages) == 2
     assert any(event[1] == "tool.completed" for event in repo.events)
     assert any(event[1] == "llm.completed" for event in repo.events)
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_executes_native_structured_tool_calls(tmp_path):
+    target = tmp_path / "project.txt"
+    target.write_text("native tools work", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            LLMResponse(
+                content="",
+                model="fake-model",
+                provider="fake",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call_1",
+                        name="filesystem__read_file",
+                        arguments={"path": "project.txt"},
+                        raw={
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "filesystem__read_file",
+                                "arguments": '{"path":"project.txt"}',
+                            },
+                        },
+                    )
+                ],
+            ),
+            '{"final":"文件内容是 native tools work"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("读取 project.txt", source="test")
+
+    assert result.output == "文件内容是 native tools work"
+    assert llm.tools[0]
+    tool_names = [item["function"]["name"] for item in llm.tools[0]]
+    assert "filesystem__read_file" in tool_names
+    assert llm.messages[1][-2].role == "assistant"
+    assert llm.messages[1][-2].tool_calls
+    assert llm.messages[1][-1].role == "tool"
+    assert llm.messages[1][-1].tool_call_id == "call_1"
 
 
 @pytest.mark.anyio

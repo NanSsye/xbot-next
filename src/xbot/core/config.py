@@ -19,6 +19,12 @@ class ServerConfig(BaseModel):
     port: int = 8080
 
 
+class ApiConfig(BaseModel):
+    auth_enabled: bool = False
+    token: str = ""
+    cors_origins: list[str] = Field(default_factory=list)
+
+
 class StorageConfig(BaseModel):
     type: Literal["postgresql", "sqlite"] = "postgresql"
     url: str = "postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot"
@@ -145,6 +151,9 @@ class AgentMemoryConfig(BaseModel):
     short_term_max_chars: int = 0
     short_term_summary_max_chars: int = 0
     auto_compress: bool = True
+    compaction_reserve_tokens: int = 16384
+    compaction_keep_recent_tokens: int = 20000
+    compaction_llm_enabled: bool = True
     max_working_events: int = 50
     max_tool_output_chars: int = 12000
     semantic_memory: bool = True
@@ -371,6 +380,7 @@ class AdapterConfig(BaseModel):
 class Settings(BaseModel):
     xbot: XBotConfig = Field(default_factory=XBotConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     queue: QueueSettings = Field(default_factory=QueueSettings)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
@@ -446,6 +456,12 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("storage", {})["auto_bootstrap"] = _env_bool(auto_bootstrap)
     if run_migrations := env.get("XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP"):
         data.setdefault("storage", {})["run_migrations_on_startup"] = _env_bool(run_migrations)
+    if api_auth_enabled := env.get("XBOT_API_AUTH_ENABLED"):
+        data.setdefault("api", {})["auth_enabled"] = _env_bool(api_auth_enabled)
+    if api_token := env.get("XBOT_API_TOKEN"):
+        data.setdefault("api", {})["token"] = api_token
+    if cors_origins := env.get("XBOT_API_CORS_ORIGINS"):
+        data.setdefault("api", {})["cors_origins"] = _env_list(cors_origins)
     if redis_url := env.get("XBOT_REDIS_URL"):
         data.setdefault("queue", {})["redis_url"] = redis_url
     if queue_type := env.get("XBOT_QUEUE_TYPE"):
@@ -470,6 +486,18 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         )
     if llm_enabled := env.get("XBOT_LLM_ENABLED"):
         data.setdefault("agent", {}).setdefault("llm", {})["enabled"] = _env_bool(llm_enabled)
+    if memory_compaction_reserve := env.get("XBOT_AGENT_MEMORY_COMPACTION_RESERVE_TOKENS"):
+        data.setdefault("agent", {}).setdefault("memory", {})["compaction_reserve_tokens"] = _env_int(
+            memory_compaction_reserve
+        )
+    if memory_compaction_keep := env.get("XBOT_AGENT_MEMORY_COMPACTION_KEEP_RECENT_TOKENS"):
+        data.setdefault("agent", {}).setdefault("memory", {})["compaction_keep_recent_tokens"] = _env_int(
+            memory_compaction_keep
+        )
+    if memory_compaction_llm := env.get("XBOT_AGENT_MEMORY_COMPACTION_LLM_ENABLED"):
+        data.setdefault("agent", {}).setdefault("memory", {})["compaction_llm_enabled"] = _env_bool(
+            memory_compaction_llm
+        )
     if agent_mode := env.get("XBOT_AGENT_MODE"):
         data.setdefault("agent", {})["mode"] = agent_mode
     if agent_admin_allowed := env.get("XBOT_AGENT_ADMIN_MODE_ALLOWED"):

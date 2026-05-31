@@ -57,6 +57,16 @@ class ConversationManager:
                 return await repo.get_conversation(conversation_id)
         return await self.store.get_conversation(conversation_id)
 
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        self.store.conversations.pop(conversation_id, None)
+        self.store.messages.pop(conversation_id, None)
+        self.store.summaries.pop(conversation_id, None)
+        self.store.states.pop(conversation_id, None)
+        if self.repository_provider:
+            async with self.repository_provider() as repo:
+                return await repo.delete_conversation(conversation_id)
+        return True
+
     async def get_messages(self, conversation_id: str, limit: int = 20) -> list[Message]:
         if self.repository_provider:
             async with self.repository_provider() as repo:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from xbot.api.v1 import adapters, agent, bot, config, conversations, messages, plugins, skills, system
+from xbot.api.v1 import adapters, agent, bot, config, conversations, events, messages, plugins, skills, system
 
 router = APIRouter()
 router.include_router(system.router, prefix="/system", tags=["system"])
@@ -14,3 +14,4 @@ router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(messages.router, prefix="/messages", tags=["messages"])
 router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
 router.include_router(config.router, prefix="/config", tags=["config"])
+router.include_router(events.router, prefix="/events", tags=["events"])

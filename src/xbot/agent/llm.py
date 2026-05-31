@@ -13,7 +13,20 @@ from xbot.core.exceptions import XBotError
 
 class LLMMessage(BaseModel):
     role: str
-    content: str
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
+
+    def to_openai_message(self) -> dict[str, Any]:
+        return self.model_dump(exclude_none=True)
+
+
+class LLMToolCall(BaseModel):
+    id: str | None = None
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class LLMResponse(BaseModel):
@@ -22,10 +35,16 @@ class LLMResponse(BaseModel):
     provider: str
     usage: dict[str, Any] = Field(default_factory=dict)
     raw_id: str | None = None
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
 
 
 class LLMProvider(Protocol):
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
         ...
 
     def status(self) -> dict:
@@ -36,7 +55,12 @@ class DisabledLLMProvider:
     def __init__(self, reason: str = "LLM provider is disabled.") -> None:
         self.reason = reason
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
         raise XBotError(self.reason)
 
     def status(self) -> dict:
@@ -49,14 +73,22 @@ class OpenAICompatibleLLMProvider:
             raise XBotError("LLM provider is enabled but XBOT_LLM_API_KEY is not configured.")
         self.config = config
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
         url = self.config.base_url.rstrip("/") + "/chat/completions"
         payload = {
             "model": self.config.model,
-            "messages": [message.model_dump() for message in messages],
+            "messages": [message.to_openai_message() for message in messages],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(url, json=payload, headers=headers)
@@ -65,20 +97,49 @@ class OpenAICompatibleLLMProvider:
         choices = data.get("choices") or []
         if not choices:
             raise XBotError("LLM response did not include choices.")
-        content = choices[0].get("message", {}).get("content") or ""
+        message = choices[0].get("message", {}) or {}
+        content = message.get("content") or ""
         return LLMResponse(
             content=content,
             model=data.get("model") or self.config.model,
             provider="openai_compatible",
             usage=data.get("usage") or {},
             raw_id=data.get("id"),
+            tool_calls=self._parse_tool_calls(message.get("tool_calls") or []),
         )
+
+    def _parse_tool_calls(self, raw_calls: list[dict[str, Any]]) -> list[LLMToolCall]:
+        calls = []
+        for raw in raw_calls:
+            if not isinstance(raw, dict):
+                continue
+            function = raw.get("function") if isinstance(raw.get("function"), dict) else {}
+            name = str(function.get("name") or raw.get("name") or "").strip()
+            if not name:
+                continue
+            arguments = function.get("arguments") or raw.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments) if arguments.strip() else {}
+                except ValueError:
+                    arguments = {"_raw_arguments": arguments}
+            if not isinstance(arguments, dict):
+                arguments = {"value": arguments}
+            calls.append(
+                LLMToolCall(
+                    id=str(raw.get("id") or "") or None,
+                    name=name,
+                    arguments=arguments,
+                    raw=raw,
+                )
+            )
+        return calls
 
     async def stream(self, messages: list[LLMMessage]) -> AsyncIterator[str]:
         url = self.config.base_url.rstrip("/") + "/chat/completions"
         payload = {
             "model": self.config.model,
-            "messages": [message.model_dump() for message in messages],
+            "messages": [message.to_openai_message() for message in messages],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
             "stream": True,

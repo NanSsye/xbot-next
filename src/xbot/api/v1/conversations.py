@@ -30,6 +30,14 @@ async def get_conversation_messages(
     return {"success": True, "data": [item.model_dump(mode="json") for item in messages]}
 
 
+@router.delete("/{conversation_id}")
+async def delete_conversation(conversation_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    deleted = await ctx.conversations.delete_conversation(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+    return {"success": True, "data": {"id": conversation_id, "deleted": True}}
+
+
 @router.get("/{conversation_id}/state/{namespace}")
 async def get_conversation_state(
     conversation_id: str, namespace: str, ctx: AppContext = Depends(get_context)

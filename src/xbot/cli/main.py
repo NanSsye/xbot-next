@@ -53,6 +53,27 @@ def status() -> None:
     typer.echo(f"storage: {settings.storage.type} {settings.storage.url}")
 
 
+@app.command("ui-build")
+def ui_build(
+    install: bool = typer.Option(True, "--install/--no-install", help="Install frontend dependencies before building."),
+) -> None:
+    """Build the Web Control UI into ui/dist for backend static serving."""
+
+    root = Path(__file__).resolve().parents[3]
+    ui_dir = root / "ui"
+    package_lock = ui_dir / "package-lock.json"
+    if not (ui_dir / "package.json").exists():
+        raise typer.BadParameter(f"ui package not found: {ui_dir}")
+    npm = "npm.cmd" if platform.system().lower().startswith("windows") else "npm"
+    if install:
+        install_cmd = [npm, "ci" if package_lock.exists() else "install"]
+        raise_code = subprocess.call(install_cmd, cwd=ui_dir, env=os.environ.copy())
+        if raise_code != 0:
+            raise typer.Exit(raise_code)
+    build_code = subprocess.call([npm, "run", "build"], cwd=ui_dir, env=os.environ.copy())
+    raise typer.Exit(build_code)
+
+
 @schedule_app.command("list")
 def schedule_list(
     include_disabled: bool = typer.Option(False, "--all", help="Include disabled jobs."),

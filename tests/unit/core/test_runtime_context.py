@@ -2,9 +2,21 @@ import pytest
 from contextlib import asynccontextmanager
 
 from xbot.core.config import load_settings
+from xbot.adapters.registry import AdapterRegistry
 from xbot.messaging.message_store import InMemoryMessageStore
 from xbot.messaging.models import Message, MessageEnvelope, Reply
 from xbot.runtime.context import build_context
+
+
+class FakeAdapterRepository:
+    def __init__(self) -> None:
+        self.states: dict[str, dict] = {}
+
+    async def get_state(self, adapter: str) -> dict:
+        return dict(self.states.get(adapter, {}))
+
+    async def set_state(self, adapter: str, state: dict) -> None:
+        self.states[adapter] = dict(state)
 
 
 @pytest.mark.anyio
@@ -187,6 +199,33 @@ async def test_plugin_and_skill_enable_disable():
     finally:
         await ctx.engine.stop()
         await ctx.storage.close()
+
+
+@pytest.mark.anyio
+async def test_adapter_enabled_state_persists_across_registry_restart():
+    settings = load_settings("configs/xbot.toml")
+    repo = FakeAdapterRepository()
+    repo.states["web"] = {"enabled": False}
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    registry = AdapterRegistry(settings.adapters, repository_provider=provider)
+    await registry.start_enabled()
+    assert registry.get("web") is None
+    assert any(item["name"] == "web" and item["persistent_enabled"] is False for item in registry.list_adapters())
+
+    adapter = await registry.enable("web")
+    assert adapter is not None
+    assert repo.states["web"]["enabled"] is True
+    await registry.stop_all()
+
+    restarted = AdapterRegistry(settings.adapters, repository_provider=provider)
+    await restarted.start_enabled()
+    assert restarted.get("web") is not None
+    assert restarted.get("web").started is True
+    await restarted.stop_all()
 
 
 @pytest.mark.anyio

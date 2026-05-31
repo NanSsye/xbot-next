@@ -62,6 +62,13 @@ class AgentRepository:
             )
         )
 
+    async def list_events(self, task_id: str | None = None, limit: int = 100) -> list[AgentEventRecord]:
+        stmt = select(AgentEventRecord).order_by(AgentEventRecord.created_at.desc()).limit(limit)
+        if task_id:
+            stmt = stmt.where(AgentEventRecord.task_id == task_id)
+        result = await self.session.execute(stmt)
+        return list(reversed(result.scalars().all()))
+
     async def upsert_background_task(self, item) -> None:
         result_json = json.dumps(item.result, ensure_ascii=False, default=str) if item.result is not None else None
         metadata_json = json.dumps(item.metadata or {}, ensure_ascii=False, default=str)
