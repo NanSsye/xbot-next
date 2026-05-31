@@ -102,6 +102,45 @@ async def test_wechat869_normalizes_group_text_and_mentions() -> None:
 
 
 @pytest.mark.anyio
+async def test_wechat869_uses_msg_source_atuserlist_for_mentions() -> None:
+    adapter = Wechat869Adapter(Wechat869AdapterConfig())
+
+    message = await adapter.normalize(
+        {
+            "MsgId": 457,
+            "MsgType": 1,
+            "FromUserName": {"str": "123@chatroom"},
+            "ToUserName": {"str": "wxid_bot"},
+            "Content": {"str": "member_wxid:\n@小小x 你好"},
+            "MsgSource": "<msgsource><atuserlist>wxid_bot</atuserlist></msgsource>",
+        }
+    )
+
+    assert message.raw["bot_wxid"] == "wxid_bot"
+    assert message.raw["at_user_list"] == ["wxid_bot"]
+    assert message.raw["mentions_bot"] is True
+
+
+@pytest.mark.anyio
+async def test_wechat869_does_not_fallback_to_nickname_when_atuserlist_targets_other_user() -> None:
+    adapter = Wechat869Adapter(Wechat869AdapterConfig(bot_nickname="小小x"))
+
+    message = await adapter.normalize(
+        {
+            "MsgId": 458,
+            "MsgType": 1,
+            "FromUserName": {"str": "123@chatroom"},
+            "ToUserName": {"str": "wxid_bot"},
+            "Content": {"str": "member_wxid:\n@别人 小小x 你看看"},
+            "MsgSource": "<msgsource><atuserlist>wxid_other</atuserlist></msgsource>",
+        }
+    )
+
+    assert message.raw["at_user_list"] == ["wxid_other"]
+    assert message.raw["mentions_bot"] is False
+
+
+@pytest.mark.anyio
 async def test_wechat869_send_text_reply_uses_raw_conversation_id() -> None:
     client = FakeClient869()
     adapter = Wechat869Adapter(
@@ -136,6 +175,36 @@ async def test_wechat869_ignores_self_system_messages() -> None:
         '"from_user_name": {"str": "wxid_bot"}, '
         '"to_user_name": {"str": "wxid_bot"}, '
         '"content": {"str": "<msg><op id=\\"11\\"></op></msg>"}}}'
+    )
+
+    assert queue.items == []
+
+
+@pytest.mark.anyio
+async def test_wechat869_ignores_official_account_messages() -> None:
+    queue = FakeQueue()
+    adapter = Wechat869Adapter(Wechat869AdapterConfig(), queue=queue)
+
+    await adapter._handle_ws_text(
+        '{"message":{"msg_id": "gh-1", "msg_type": 1, '
+        '"from_user_name": {"str": "gh_official"}, '
+        '"to_user_name": {"str": "wxid_bot"}, '
+        '"content": {"str": "公众号消息"}}}'
+    )
+
+    assert queue.items == []
+
+
+@pytest.mark.anyio
+async def test_wechat869_ignores_builtin_system_conversations() -> None:
+    queue = FakeQueue()
+    adapter = Wechat869Adapter(Wechat869AdapterConfig(), queue=queue)
+
+    await adapter._handle_ws_text(
+        '{"message":{"msg_id": "news-1", "msg_type": 1, '
+        '"from_user_name": {"str": "newsapp"}, '
+        '"to_user_name": {"str": "wxid_bot"}, '
+        '"content": {"str": "新闻消息"}}}'
     )
 
     assert queue.items == []

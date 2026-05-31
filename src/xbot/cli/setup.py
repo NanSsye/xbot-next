@@ -218,10 +218,14 @@ def _wechat_updates(values: dict[str, str], *, wechat: str, yes: bool) -> dict[s
                     "869 token key", values.get("XBOT_WECHAT869_TOKEN_KEY") or "", yes=yes
                 ),
                 "XBOT_WECHAT869_BOT_WXID": _ask(
-                    "869 机器人 wxid", values.get("XBOT_WECHAT869_BOT_WXID") or "", yes=yes
+                    "869 机器人 wxid（可选，群 @ 优先从 WS atuserlist 自动识别）",
+                    values.get("XBOT_WECHAT869_BOT_WXID") or "",
+                    yes=yes,
                 ),
                 "XBOT_WECHAT869_BOT_NICKNAME": _ask(
-                    "869 机器人昵称", values.get("XBOT_WECHAT869_BOT_NICKNAME") or "xbot", yes=yes
+                    "869 机器人昵称（可选，仅作无 atuserlist 时兜底）",
+                    values.get("XBOT_WECHAT869_BOT_NICKNAME") or "",
+                    yes=yes,
                 ),
                 "XBOT_WECHAT869_MEDIA_ENABLED": "true",
             }

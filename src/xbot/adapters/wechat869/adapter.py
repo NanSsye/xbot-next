@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from xbot.adapters.base import BaseAdapter
@@ -26,7 +27,9 @@ SENDER_KEYS = (
 TO_KEYS = ("ToUserName", "to_user_name", "ToWxid", "to_wxid")
 MSG_ID_KEYS = ("MsgId", "msg_id", "NewMsgId", "new_msg_id", "message_id", "id")
 MSG_TYPE_KEYS = ("MsgType", "msg_type", "msgType", "type")
+MSG_SOURCE_KEYS = ("MsgSource", "msg_source", "msgSource", "message_source")
 GROUP_SENDER_KEYS = ("ActualSender", "actual_sender", "SenderWxid", "sender_wxid", "ChatUser")
+AT_USER_KEYS = ("beAtUser", "BeAtUser", "atUser", "AtUser", "at_user", "AtWxidList", "at_wxid_list")
 DISPLAY_NAME_KEYS = (
     "NickName",
     "nick_name",
@@ -39,6 +42,18 @@ DISPLAY_NAME_KEYS = (
     "PushContent",
     "push_content",
 )
+SYSTEM_CONVERSATION_IDS = {
+    "newsapp",
+    "fmessage",
+    "weixin",
+    "medianote",
+    "floatbottle",
+    "qqmail",
+    "notifymessage",
+    "notification_messages",
+    "officialaccounts",
+    "feedsapp",
+}
 
 
 class Wechat869Adapter(BaseAdapter):
@@ -111,8 +126,9 @@ class Wechat869Adapter(BaseAdapter):
         raw["private_wxid"] = sender_id if raw_scope == "private" else ""
         raw["group_wxid"] = conversation_id if raw_scope == "group" else ""
         raw["group_member_wxid"] = sender_id if raw_scope == "group" else ""
-        raw["mentions_bot"] = self._mentions_bot(clean_content)
-        raw["bot_wxid"] = self.config.bot_wxid
+        raw["at_user_list"] = self._extract_at_user_list(message)
+        raw["mentions_bot"] = self._mentions_bot(message, clean_content, to_wxid=to_wxid)
+        raw["bot_wxid"] = self.config.bot_wxid or to_wxid
         raw["bot_nickname"] = self.config.bot_nickname
         media = self.media or Wechat869MediaResolver(self.config, self.client or self._create_client())
         media_info = await media.enrich(
@@ -217,11 +233,30 @@ class Wechat869Adapter(BaseAdapter):
         bot_wxid = self.config.bot_wxid or getattr(self.client, "wxid", "")
         if bot_wxid and message.sender_id == bot_wxid:
             return True
+        if self._is_ignored_conversation(message):
+            return True
         raw_type = self._pick_int(message.raw, MSG_TYPE_KEYS, default=1)
         if message.raw.get("scope") == "private" and message.sender_id == message.conversation_id and message.sender_id == bot_wxid:
             return True
         if raw_type in {51, 10000, 10002}:
             return True
+        return False
+
+    def _is_ignored_conversation(self, message: Message) -> bool:
+        ids = {
+            str(message.sender_id or ""),
+            str(message.conversation_id or ""),
+            str(message.raw.get("conversation_wxid") or ""),
+            str(message.raw.get("private_wxid") or ""),
+            str(message.raw.get("sender_wxid") or ""),
+        }
+        for value in ids:
+            if not value:
+                continue
+            if value.startswith("gh_"):
+                return True
+            if value in SYSTEM_CONVERSATION_IDS:
+                return True
         return False
 
     def _loads_json(self, payload: Any) -> Any:
@@ -383,9 +418,46 @@ class Wechat869Adapter(BaseAdapter):
             return content.split(":\n", 1)[1]
         return content
 
-    def _mentions_bot(self, content: str) -> bool:
-        candidates = [self.config.bot_wxid, self.config.bot_nickname]
+    def _mentions_bot(self, raw: dict, content: str, *, to_wxid: str = "") -> bool:
+        at_users = self._extract_at_user_list(raw)
+        if at_users:
+            candidates = {item for item in (self.config.bot_wxid, to_wxid) if item}
+            return bool(candidates.intersection(at_users))
+        candidates = [self.config.bot_wxid or to_wxid, self.config.bot_nickname]
         return any(candidate and candidate in content for candidate in candidates)
+
+    def _extract_at_user_list(self, raw: dict) -> list[str]:
+        values: list[str] = []
+        for key in AT_USER_KEYS:
+            value = raw.get(key)
+            values.extend(self._split_wxid_list(value))
+        source = self._pick_text(raw, MSG_SOURCE_KEYS)
+        if source:
+            for match in re.findall(r"<atuserlist>(.*?)</atuserlist>", source, flags=re.IGNORECASE | re.DOTALL):
+                values.extend(self._split_wxid_list(match))
+        seen = set()
+        result = []
+        for value in values:
+            if value and value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
+
+    def _split_wxid_list(self, value: Any) -> list[str]:
+        if value in (None, ""):
+            return []
+        if isinstance(value, dict):
+            items = []
+            for nested_key in ("str", "Str", "string", "String", "value", "Value", "text", "Text"):
+                items.extend(self._split_wxid_list(value.get(nested_key)))
+            return items
+        if isinstance(value, (list, tuple, set)):
+            items = []
+            for item in value:
+                items.extend(self._split_wxid_list(item))
+            return items
+        text = str(value)
+        return [item.strip() for item in re.split(r"[,;，；\s]+", text) if item.strip()]
 
     def _is_group_message(self, raw: dict, sender: str) -> bool:
         if sender.endswith("@chatroom"):
