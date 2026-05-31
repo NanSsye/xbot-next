@@ -51,9 +51,7 @@ class XBotEngine:
         if self._adapters:
             await self._adapters.start_enabled()
         if self._consumer and self._queue and self._consumer_task is None:
-            self._consumer_task = asyncio.create_task(
-                self._consumer.run(self._queue), name="xbot-message-consumer"
-            )
+            self._start_consumer_task()
         self._status.state = "running"
         self._status.started_at = datetime.utcnow()
         self._refresh_counts()
@@ -103,6 +101,32 @@ class XBotEngine:
     def status(self) -> RuntimeStatus:
         self._refresh_counts()
         return self._status
+
+    def _start_consumer_task(self) -> None:
+        if not self._consumer or not self._queue:
+            return
+        self._consumer_task = asyncio.create_task(
+            self._consumer.run(self._queue),
+            name="xbot-message-consumer",
+        )
+        self._consumer_task.add_done_callback(self._on_consumer_done)
+
+    def _on_consumer_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error("MessageConsumer 任务异常退出，将自动重启: {}", exc)
+        else:
+            logger.warning("MessageConsumer 任务已退出，将自动重启")
+        self._consumer_task = None
+        if self._status.state == "running":
+            asyncio.create_task(self._restart_consumer_after_delay(), name="xbot-message-consumer-restart")
+
+    async def _restart_consumer_after_delay(self) -> None:
+        await asyncio.sleep(1)
+        if self._status.state == "running" and self._consumer_task is None:
+            self._start_consumer_task()
 
     def _refresh_counts(self) -> None:
         self._status.plugin_count = len(self._plugins.list_plugins()) if self._plugins else 0

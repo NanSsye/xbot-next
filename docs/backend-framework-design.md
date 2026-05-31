@@ -58,7 +58,7 @@
 
 ## 4. 当前实现进度
 
-更新时间：2026-05-30
+更新时间：2026-05-31
 
 已完成：
 
@@ -186,17 +186,32 @@
 - [x] 一键安装入口第一版完成：新增 `scripts/install.sh` 和 `scripts/install.ps1`，默认安装到用户目录、创建 venv、复制 `.env`、生成全局 `xbot` / `xbot-upgrade` 命令并加入 PATH；裸 `xbot` 进入终端 TUI，`xbot run` 启动后端服务。
 - [x] 首次配置向导第一版完成：新增 `xbot setup`，中文 Rich 面板引导用户选择简易版 SQLite + memory queue 或生产版 PostgreSQL + Redis，并可选择不开微信、iLink 扫码、869、双通道；新增 `.env.local.example`，简易版同样支持微信通道和自动迁移；安装器默认在首次安装后进入向导，`XBOT_SKIP_SETUP=1` 可跳过。
 - [x] 独立升级入口完成：新增 `scripts/upgrade.sh` / `scripts/upgrade.ps1` 和 `xbot upgrade` / `xbot-upgrade`，升级只更新代码和依赖，不初始化配置、不覆盖 `.env`、不删除 `data/`、`logs/`、本地数据库、上传文件和运行期生成 skill；遇到本地分叉会创建 `xbot-local-backup-*` 分支并 stash 未提交改动。
-- [x] 添加基础测试，当前 `python -m pytest -q` 通过，最近结果为 `196 passed`。
+- [x] Control UI 第一版落地：Vite + React + TypeScript 控制台已接入后端 API，支持总览、对话、Agent、通道、扩展、后台任务、定时任务、活动流和设置。
+- [x] Control UI 通道页升级完成：所有 adapter 统一叫“通道”，每个通道一张卡片，显示配置启用、页面覆盖、实际启用、运行中、登录支持和运行参数。
+- [x] 插件 / Skill 从通道页拆出：新增独立“扩展”页面，插件和 Skill 启停状态写入持久化仓储，不再混入通道卡片。
+- [x] 通道开关持久化完成：Control UI 的通道启停写入 `adapter_states.state_json.enabled`，服务重启后恢复页面覆盖值；`.env` / `configs/xbot.toml` 仍作为默认配置。
+- [x] Wechat869 登录流程第一版完成：Control UI 支持获取二维码、检查登录、展示 admin key/token key/auth key/poll key/bot wxid/bot nickname；`.env` 固定 token key 优先，数据库保存运行态 key 和 profile。
+- [x] Wechat869 登录态恢复完成：重启后会从 `.env` 和 `adapter_states` 恢复 token/poll/auth key，并调用 869 status/profile 接口刷新 bot wxid 和昵称；兼容 `/user/GetProfile` 返回 `Code=200`、`Success=false` 但 `Data.userInfo` 有效的情况。
+- [x] Wechat869 群聊 @ 识别增强完成：按 `msg_source.atuserlist` 判断是否 @ 当前 bot wxid，兼容普通 XML 文本和 CDATA 格式，避免手机端/电脑端 @ 表现不一致。
+- [x] Wechat869 非聊天消息过滤增强完成：公众号、服务号、文件助手类非目标消息不会触发 Agent；群聊未 @ bot 的消息只进入会话记录/插件过滤，不进入 Agent 回复。
+- [x] Redis 队列生产稳定性修复完成：MessageConsumer 捕获 `queue.consume()` 异常并重试，Engine 监控 consumer task 并自动重启，Redis Streams 支持 `XAUTOCLAIM` 恢复未 ack pending 消息。
+- [x] Redis 阻塞读超时修复完成：`RedisMessageQueue` 的 `socket_timeout` 自动大于 `XREADGROUP block` 等待窗口，避免空队列阻塞时持续出现 `Timeout reading from <redis-host>:6379`。
+- [x] Agent 结构化工具调用升级完成：工具定义、解析、执行和错误返回统一为结构化模型，减少模型把工具参数写错后只返回自然语言、不执行工具的问题。
+- [x] OpenClaw 风格上下文压缩落地：当上下文接近窗口上限时，按配置保留近期上下文并使用 LLM 压缩旧会话摘要，避免会话历史无限膨胀。
+- [x] 长期记忆写入范围收敛：未唤醒 bot、未进入 Agent 的普通群聊消息不应进入长期记忆；记忆更偏向用户偏好、稳定事实、纠正和项目约定。
+- [x] 定时任务工具第一版完成：Agent 可通过 schedule 工具创建、查看、暂停、恢复、删除和立即运行定时任务；任务按 source 保存通道上下文，触发时回到原会话/通道。
+- [x] 添加基础测试，核心消息、队列、Wechat869、插件/Skill/Agent 仓储和 UI build 均有覆盖；每次更新按改动范围执行对应测试。
 
 进行中：
 
+- [ ] Control UI 商业落地完善：补全更多运行状态、错误提示、空状态、批量操作、审计视图和更细的权限提示。
+- [ ] 869 登录后续增强：补完整扫码轮询状态、登录过期恢复、profile 定期刷新、二维码过期提示和 869 登录流程异常分类。
 - [ ] Hermes 生态下一阶段：补 memory / curator 的前端管理页或独立控制台视图，能查看 `USER.md`、`MEMORY.md`、agent-owned skill usage、stale/archive 状态和手动操作入口。
 - [ ] Hermes 自进化增强二阶段：把 curator report 的 merge 建议升级为更强的内容合并 diff、人工审批 UI 和回滚入口。
 - [ ] Wiki Knowledge Base 第三阶段：补 LLM 辅助页面合并 diff、人工审批 apply、双向链接质量评分、冲突解决状态和可选真正 embedding provider。
 - [ ] Agent 记忆外部化：预留 memory provider 接口，后续支持数据库、向量检索或外部知识库，但默认仍保持文件化 curated memory 简单可靠。
 - [ ] Toolset 二阶段：当前已按 API/私聊/群聊控制可见范围，admin 默认全部可见；下一步细化到具体 adapter、用户身份、群管理员和会话状态。
 - [ ] MCP 二阶段：当前已有 include/exclude、status、reload 和失败状态记录；下一步补自动重连退避、周期健康检查、失败工具降级和连接池隔离。
-- [ ] Wechat869 生产稳定性验证：当前已完成 WS 收消息、回复链路、消息消费并发、生产 `logs/xbot.log` 落盘和媒体/引用附件解析；下一步重启生产后验证日志实际写入、图片引用下载、文件 metadata、长连接重连、群聊高频消息和异常消息格式。
 - [ ] 微信 iLink 第二通道生产验证：开启 `XBOT_WECHAT_ILINK_ENABLED=true` 并执行 migration 后验证扫码登录、登录态重启恢复、长轮询收消息、cursor 更新、文本/图片/文件回发、引用媒体下载、和 869 双通道同时启用时的独立会话隔离；后续再补 token 加密和 token 过期恢复。
 - [ ] Agent 工具 provider 四阶段：浏览器会话生命周期接入 runtime stop、数据库更多方言边界验证、GitHub 写操作审批细化、插件工具权限持久化开关和前端 UI。
 - [ ] Agent 工具体验对齐 Codex 五阶段：真正前端后台任务页面、后台任务失败原因聚合、按工具/平台配置自动后台策略。
@@ -204,7 +219,6 @@
 
 尚未开始：
 
-- [ ] 前端管理界面。
 - [ ] 旧插件兼容层。
 
 ## 5. 总体架构

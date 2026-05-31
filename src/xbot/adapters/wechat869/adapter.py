@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import re
 from typing import Any
+from urllib.parse import quote
 
 from xbot.adapters.base import BaseAdapter
 from xbot.adapters.wechat869.client import Wechat869Client
@@ -65,18 +68,25 @@ class Wechat869Adapter(BaseAdapter):
         config: Wechat869AdapterConfig,
         queue: MessageQueue | None = None,
         client_factory=None,
+        repository_provider=None,
     ) -> None:
         self.config = config
         self.queue = queue
         self.client_factory = client_factory
+        self.repository_provider = repository_provider
         self.client = None
         self.media = None
         self.started = False
         self._task: asyncio.Task | None = None
+        self._login_qrcode: str = ""
+        self._login_qr_url: str = ""
+        self._login_status: str = ""
 
     async def start(self) -> None:
         self.started = True
+        await self._restore_state()
         self.client = self.client or self._create_client()
+        await self._restore_client_state(self.client)
         if self.config.token_key:
             self.client.token_key = self.config.token_key
         if self.config.bot_wxid:
@@ -104,6 +114,92 @@ class Wechat869Adapter(BaseAdapter):
         client = self.client or self._create_client()
         conversation_id = self._raw_conversation_id(reply.conversation_id)
         await client.send_text_message(conversation_id, reply.content)
+
+    def public_status(self) -> dict[str, Any]:
+        return {
+            "adapter": self.name,
+            "platform": self.platform,
+            "started": self.started,
+            "host": self.config.host,
+            "port": self.config.port,
+            "ws_url": self._ws_url(),
+            "admin_key_configured": bool(self.config.admin_key),
+            "admin_key": self.config.admin_key,
+            "token_key_configured": bool(self.config.token_key),
+            "token_key": self.config.token_key,
+            "auth_key": getattr(self.client, "auth_key", ""),
+            "poll_key": getattr(self.client, "poll_key", ""),
+            "display_uuid": getattr(self.client, "display_uuid", ""),
+            "login_tx_id": getattr(self.client, "login_tx_id", ""),
+            "device_id": getattr(self.client, "device_id", ""),
+            "device_type": getattr(self.client, "device_type", ""),
+            "data62_set": bool(getattr(self.client, "data62", "")),
+            "ticket_set": bool(getattr(self.client, "ticket", "")),
+            "login_status": self._login_status,
+            "login_qrcode_cached": bool(self._login_qrcode or self._login_qr_url),
+            "bot_wxid": self.config.bot_wxid,
+            "bot_nickname": self.config.bot_nickname,
+            "media_enabled": self.config.media_enabled,
+            "text_only": self.config.text_only,
+            "login_supported": True,
+        }
+
+    async def refreshed_public_status(self) -> dict[str, Any]:
+        client = self.client or self._create_client()
+        self.client = client
+        await self._restore_client_state(client)
+        if self.config.token_key and not getattr(client, "token_key", ""):
+            client.token_key = self.config.token_key
+        status: dict[str, Any] = {}
+        if getattr(client, "token_key", "") or getattr(client, "poll_key", "") or getattr(client, "auth_key", ""):
+            status = await client.get_login_status()
+            self._apply_client_login_state(client)
+            self._login_status = str(status.get("status") or self._login_status)
+            if status.get("logged_in"):
+                await self._persist_state()
+        return {**self.public_status(), **status}
+
+    async def start_login(self, *, device_type: str = "ipad", proxy: str = "") -> dict[str, Any]:
+        client = self.client or self._create_client()
+        self.client = client
+        await self._restore_client_state(client)
+        if await client.try_wakeup_login():
+            self._apply_client_login_state(client)
+            self._login_status = "online"
+            await self._persist_state()
+            return {**self.public_status(), "logged_in": True, "status": "online", "message": "已从现有 key 恢复登录。"}
+        payload = await client.get_login_qrcode(
+            device_type=device_type,
+            device_id=getattr(client, "device_id", "") or "",
+            proxy=proxy,
+        )
+        self._apply_client_login_state(client)
+        self._login_qrcode = str(payload.get("qrcode") or payload.get("uuid") or "")
+        self._login_qr_url = str(payload.get("qr_url") or "")
+        self._login_status = "waiting_login"
+        await self._persist_state()
+        return {
+            **self.public_status(),
+            **payload,
+            "logged_in": False,
+            "qr_image_url": self._qr_data_url(self._login_qr_url or self._login_qrcode),
+            "message": "869 登录二维码已生成，请用微信扫码。",
+        }
+
+    async def poll_login_status(self) -> dict[str, Any]:
+        client = self.client or self._create_client()
+        self.client = client
+        await self._restore_client_state(client)
+        payload = await client.poll_login_status()
+        self._apply_client_login_state(client)
+        if payload.get("logged_in"):
+            self._login_status = "online"
+            self._login_qrcode = ""
+            self._login_qr_url = ""
+        else:
+            self._login_status = str(payload.get("status") or "waiting_login")
+        await self._persist_state()
+        return {**self.public_status(), **payload}
 
     async def normalize(self, raw: dict) -> Message:
         message = self._unwrap_message(raw)
@@ -304,7 +400,7 @@ class Wechat869Adapter(BaseAdapter):
     def _create_client(self):
         if self.client_factory:
             return self.client_factory()
-        return Wechat869Client(
+        client = Wechat869Client(
             host=self.config.host,
             port=self.config.port,
             admin_key=self.config.admin_key,
@@ -312,10 +408,103 @@ class Wechat869Adapter(BaseAdapter):
             ws_url=self.config.ws_url,
             timeout_seconds=self.config.connect_timeout_seconds,
         )
+        return client
+
+    async def _restore_state(self) -> None:
+        if not self.repository_provider:
+            return
+        async with self.repository_provider() as repo:
+            state = await repo.get_state(self.name)
+        if not state:
+            return
+        self.config.token_key = str(self.config.token_key or state.get("token_key") or "")
+        self.config.bot_wxid = str(state.get("bot_wxid") or self.config.bot_wxid)
+        self.config.bot_nickname = str(state.get("bot_nickname") or self.config.bot_nickname)
+        self._login_qrcode = str(state.get("qrcode") or "")
+        self._login_qr_url = str(state.get("qr_url") or "")
+        self._login_status = str(state.get("login_status") or self._login_status)
+
+    async def _restore_client_state(self, client: Any) -> None:
+        if not self.repository_provider:
+            return
+        async with self.repository_provider() as repo:
+            state = await repo.get_state(self.name)
+        if not state:
+            return
+        client.token_key = str(self.config.token_key or client.token_key or state.get("token_key") or "")
+        client.auth_key = str(state.get("auth_key") or getattr(client, "auth_key", ""))
+        auth_keys = state.get("auth_keys") or []
+        client.auth_keys = [str(item).strip() for item in auth_keys if str(item).strip()] if isinstance(auth_keys, list) else []
+        client.poll_key = str(state.get("poll_key") or getattr(client, "poll_key", ""))
+        client.display_uuid = str(state.get("display_uuid") or getattr(client, "display_uuid", ""))
+        client.login_tx_id = str(state.get("login_tx_id") or getattr(client, "login_tx_id", ""))
+        client.data62 = str(state.get("data62") or getattr(client, "data62", ""))
+        client.ticket = str(state.get("ticket") or getattr(client, "ticket", ""))
+        client.device_id = str(state.get("device_id") or getattr(client, "device_id", ""))
+        client.device_type = str(state.get("device_type") or getattr(client, "device_type", "ipad") or "ipad")
+        client.wxid = str(state.get("bot_wxid") or client.wxid or self.config.bot_wxid)
+        client.nickname = str(state.get("bot_nickname") or client.nickname or self.config.bot_nickname)
+
+    def _apply_client_login_state(self, client: Any) -> None:
+        self.config.token_key = str(getattr(client, "token_key", "") or self.config.token_key)
+        self.config.bot_wxid = str(getattr(client, "wxid", "") or self.config.bot_wxid)
+        self.config.bot_nickname = str(getattr(client, "nickname", "") or self.config.bot_nickname)
+
+    async def _persist_state(self) -> None:
+        if not self.repository_provider:
+            return
+        client = self.client
+        state = {
+            "token_key": self.config.token_key,
+            "bot_wxid": self.config.bot_wxid,
+            "bot_nickname": self.config.bot_nickname,
+            "qrcode": self._login_qrcode,
+            "qr_url": self._login_qr_url,
+            "login_status": self._login_status,
+        }
+        if client is not None:
+            state.update(
+                {
+                    "auth_key": str(getattr(client, "auth_key", "") or ""),
+                    "auth_keys": list(getattr(client, "auth_keys", []) or []),
+                    "poll_key": str(getattr(client, "poll_key", "") or ""),
+                    "display_uuid": str(getattr(client, "display_uuid", "") or ""),
+                    "login_tx_id": str(getattr(client, "login_tx_id", "") or ""),
+                    "data62": str(getattr(client, "data62", "") or ""),
+                    "ticket": str(getattr(client, "ticket", "") or ""),
+                    "device_id": str(getattr(client, "device_id", "") or ""),
+                    "device_type": str(getattr(client, "device_type", "") or ""),
+                }
+            )
+        async with self.repository_provider() as repo:
+            previous = await repo.get_state(self.name)
+            previous.update(state)
+            await repo.set_state(self.name, previous)
+
+    def _qr_data_url(self, value: str) -> str:
+        if not value:
+            return ""
+        try:
+            import qrcode
+
+            image = qrcode.make(value)
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+            return f"data:image/png;base64,{encoded}"
+        except Exception as exc:
+            logger.warning("Wechat869Adapter 生成二维码图片失败: {}", exc)
+            return f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={quote(value, safe='')}"
 
     def _ws_url(self) -> str:
         ws_url = self.config.ws_url or f"ws://{self.config.host}:{self.config.port}/ws/GetSyncMsg"
-        key = self.config.token_key or self.config.admin_key
+        key = (
+            str(getattr(self.client, "token_key", "") or "")
+            or str(getattr(self.client, "poll_key", "") or "")
+            or str(getattr(self.client, "auth_key", "") or "")
+            or self.config.token_key
+            or self.config.admin_key
+        )
         if self.client and hasattr(self.client, "append_key_to_ws_url"):
             return self.client.append_key_to_ws_url(ws_url, key)
         if key and "key=" not in ws_url:

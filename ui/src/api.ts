@@ -1,5 +1,6 @@
 import type {
   AdapterInfo,
+  AdapterStatus,
   AgentEvent,
   AgentMemoryInfo,
   AgentTask,
@@ -12,6 +13,7 @@ import type {
   ScheduledJob,
   SkillInfo,
   SystemStatus,
+  IlinkQrCode,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_XBOT_API_BASE ?? "/api/v1";
@@ -64,6 +66,18 @@ export const api = {
   adapters: () => request<AdapterInfo[]>("/adapters"),
   enableAdapter: (name: string) => request<AdapterInfo[]>(`/adapters/${encodeURIComponent(name)}/enable`, { method: "POST" }),
   disableAdapter: (name: string) => request<AdapterInfo[]>(`/adapters/${encodeURIComponent(name)}/disable`, { method: "POST" }),
+  adapterStatus: (name: string) => request<AdapterStatus>(`/adapters/${encodeURIComponent(name)}/status`),
+  wechatIlinkQrcode: () => request<IlinkQrCode>("/adapters/wechat_ilink/login/qrcode", { method: "POST" }),
+  wechatIlinkLoginStatus: (qrcode?: string) => {
+    const query = qrcode ? `?qrcode=${encodeURIComponent(qrcode)}` : "";
+    return request<AdapterStatus>(`/adapters/wechat_ilink/login/status${query}`);
+  },
+  wechat869LoginStart: (payload?: { device_type?: string; proxy?: string }) =>
+    request<AdapterStatus>("/adapters/wechat869/login/start", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  wechat869LoginStatus: () => request<AdapterStatus>("/adapters/wechat869/login/status"),
   plugins: () => request<PluginInfo[]>("/plugins"),
   reloadPlugins: () => request<PluginInfo[]>("/plugins/reload", { method: "POST" }),
   enablePlugin: (name: string) => request(`/plugins/${encodeURIComponent(name)}/enable`, { method: "POST" }),

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import asyncio
+import uuid
 import time
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -9,6 +11,19 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 SEND_CLIENT_MSG_ID_KEYS = ("ClientMsgid", "ClientMsgId", "clientMsgId", "client_msg_id")
 SEND_CREATE_TIME_KEYS = ("Createtime", "CreateTime", "createTime", "create_time")
 SEND_NEW_MSG_ID_KEYS = ("NewMsgId", "newMsgId", "new_msg_id")
+AUTH_KEY_KEYS = ("AuthKey", "auth_key", "Key", "key")
+TOKEN_KEY_KEYS = ("TokenKey", "token_key", "tokenKey")
+POLL_KEY_KEYS = ("PollKey", "poll_key", "Uuid", "uuid")
+UUID_KEYS = ("Uuid", "uuid", "UUID")
+DISPLAY_UUID_KEYS = ("DisplayUuid", "display_uuid", "DisplayUUID")
+LOGIN_TX_ID_KEYS = ("LoginTxId", "login_tx_id")
+QR_URL_KEYS = ("QrCodeUrl", "qrcode_url", "QRCodeUrl", "Url", "url")
+WXID_KEYS = ("Wxid", "wxid", "UserName", "userName", "user_name", "UserNameStr", "FromUserName")
+NICKNAME_KEYS = ("NickName", "nickName", "nickname")
+ALIAS_KEYS = ("Alias", "alias", "Wechat", "wechat")
+STATUS_KEYS = ("Status", "status", "LoginStatus", "login_status", "state", "State")
+DATA62_KEYS = ("Data62", "data62")
+TICKET_KEYS = ("Ticket", "ticket")
 
 
 class Wechat869Client:
@@ -30,6 +45,16 @@ class Wechat869Client:
         self.timeout_seconds = timeout_seconds
         self.wxid = ""
         self.nickname = ""
+        self.alias = ""
+        self.auth_key = ""
+        self.auth_keys: list[str] = []
+        self.poll_key = ""
+        self.display_uuid = ""
+        self.login_tx_id = ""
+        self.data62 = ""
+        self.ticket = ""
+        self.device_id = ""
+        self.device_type = "ipad"
 
     @property
     def base_url(self) -> str:
@@ -81,6 +106,245 @@ class Wechat869Client:
         if isinstance(payload, dict) and "Data" in payload:
             return payload.get("Data")
         return payload
+
+    async def ensure_auth_key(self) -> str:
+        if self.auth_key:
+            return self.auth_key
+        self.auth_keys = [str(item).strip() for item in self.auth_keys if str(item).strip()]
+        if self.auth_keys:
+            self.auth_key = self.auth_keys[0]
+            return self.auth_key
+        if self.token_key:
+            self.auth_key = self.token_key
+            return self.auth_key
+        if not self.admin_key:
+            raise RuntimeError("缺少 admin_key，无法生成 869 AuthKey")
+
+        try:
+            payload = await self.request("/admin/GetActiveLicenseKeys", method="GET", key=self.admin_key)
+            for value in self._extract_auth_keys(payload):
+                if value not in self.auth_keys:
+                    self.auth_keys.append(value)
+        except Exception:
+            pass
+
+        if not self.auth_keys:
+            payload = await self.request("/admin/GenAuthKey2", method="GET", key=self.admin_key)
+            for value in self._extract_auth_keys(payload):
+                if value not in self.auth_keys:
+                    self.auth_keys.append(value)
+
+        if not self.auth_keys:
+            raise RuntimeError("生成 869 AuthKey 失败")
+        self.auth_key = self.auth_keys[0]
+        return self.auth_key
+
+    async def get_login_qrcode(
+        self,
+        *,
+        device_type: str = "ipad",
+        device_id: str = "",
+        proxy: str = "",
+    ) -> dict[str, Any]:
+        auth_key = await self.ensure_auth_key()
+        login_device = "mac" if str(device_type or "").strip().lower() == "mac" else "ipad"
+        payload: dict[str, Any] = {"IpadOrmac": login_device, "Check": False}
+        if proxy:
+            payload["Proxy"] = proxy
+        response = await self.request_with_fallback(
+            "/login/GetLoginQrCodeNewDirect",
+            body=payload,
+            method="POST",
+            key=auth_key,
+        )
+        data = response.get("Data") if isinstance(response, dict) else {}
+        if not isinstance(data, dict):
+            data = response if isinstance(response, dict) else {}
+        data62 = self._pick(data, DATA62_KEYS) or self._pick(response, DATA62_KEYS)
+        if data62:
+            self.data62 = str(data62)
+        ticket = self._pick(data, TICKET_KEYS) or self._pick(response, TICKET_KEYS)
+        if ticket:
+            self.ticket = str(ticket)
+        token_key = self._pick(data, TOKEN_KEY_KEYS) or self._pick(response, TOKEN_KEY_KEYS)
+        if token_key:
+            self.token_key = str(token_key)
+        poll_key = self._pick(data, POLL_KEY_KEYS) or self._pick(response, POLL_KEY_KEYS)
+        self.poll_key = str(poll_key or self.poll_key or self.auth_key)
+        auth_key_from_data = self._pick(data, AUTH_KEY_KEYS) or self._pick(response, AUTH_KEY_KEYS)
+        if auth_key_from_data:
+            self.auth_key = str(auth_key_from_data)
+        display_uuid = self._pick(data, DISPLAY_UUID_KEYS)
+        login_tx_id = self._pick(data, LOGIN_TX_ID_KEYS)
+        qr_url = str(self._pick(data, QR_URL_KEYS) or "")
+        login_uuid = str(self._pick(data, UUID_KEYS) or self._extract_uuid_from_qr_url(qr_url) or "")
+        if not qr_url and login_uuid:
+            qr_url = f"http://weixin.qq.com/x/{login_uuid}"
+        self.display_uuid = str(display_uuid or login_uuid or self.display_uuid)
+        self.login_tx_id = str(login_tx_id or self.login_tx_id)
+        self.device_type = login_device
+        self.device_id = device_id or self.device_id or self.create_device_id()
+        self._sync_key_from_url(qr_url)
+        return {
+            "status": "waiting_login",
+            "qrcode": login_uuid or self.display_uuid,
+            "uuid": login_uuid,
+            "qr_url": qr_url,
+            "expires_in": 240,
+            "login_mode": login_device,
+            "device_id": self.device_id,
+            "token_key": self.token_key,
+            "poll_key": self.poll_key,
+            "auth_key": self.auth_key,
+            "display_uuid": self.display_uuid,
+            "login_tx_id": self.login_tx_id,
+            "data62": self.data62,
+            "ticket": self.ticket,
+        }
+
+    async def poll_login_status(self, key: str = "") -> dict[str, Any]:
+        active_key = key or self.token_key or self.poll_key or self.auth_key
+        if not active_key:
+            return {"logged_in": False, "status": "missing_key", "message": "缺少登录 Key"}
+        try:
+            response = await self.request("/login/CheckLoginStatus", method="GET", key=active_key)
+        except Exception as exc:
+            return {"logged_in": False, "status": "error", "message": str(exc)}
+        data = response.get("Data") if isinstance(response, dict) else {}
+        if not isinstance(data, dict):
+            data = response if isinstance(response, dict) else {}
+        ticket = self._pick(data, TICKET_KEYS) or self._pick(response, TICKET_KEYS)
+        if ticket:
+            self.ticket = str(ticket)
+        data62 = self._pick(data, DATA62_KEYS) or self._pick(response, DATA62_KEYS)
+        if data62:
+            self.data62 = str(data62)
+        token_key = self._pick(data, TOKEN_KEY_KEYS) or self._pick(response, TOKEN_KEY_KEYS)
+        if token_key:
+            self.token_key = str(token_key)
+        wxid = self._pick(data, WXID_KEYS) or self._pick(response, WXID_KEYS)
+        if wxid:
+            self.wxid = str(wxid)
+        status_code = self._safe_int(self._pick(data, STATUS_KEYS) or self._pick(response, STATUS_KEYS), 0)
+        logged_in = bool(wxid) or status_code in {1, 2, 200, 201}
+        if logged_in:
+            await self.refresh_profile()
+        return {
+            "logged_in": logged_in,
+            "status": "online" if logged_in else "waiting_login",
+            "bot_wxid": self.wxid,
+            "bot_nickname": self.nickname,
+            "bot_alias": self.alias,
+            "token_key": self.token_key,
+            "poll_key": self.poll_key,
+            "auth_key": self.auth_key,
+            "display_uuid": self.display_uuid,
+            "login_tx_id": self.login_tx_id,
+            "data62": self.data62,
+            "ticket": self.ticket,
+            "raw": data or response,
+        }
+
+    async def get_login_status(self) -> dict[str, Any]:
+        active_key = self.token_key or self.poll_key or self.auth_key
+        if not active_key:
+            return {"logged_in": False, "status": "missing_key"}
+        try:
+            response = await self.request("/login/GetLoginStatus", method="GET", key=active_key)
+        except Exception as exc:
+            return {"logged_in": False, "status": "error", "message": str(exc)}
+        data = response.get("Data") if isinstance(response, dict) else {}
+        if not isinstance(data, dict):
+            data = response if isinstance(response, dict) else {}
+        wxid = self._pick(data, WXID_KEYS) or self._pick(response, WXID_KEYS)
+        if wxid:
+            self.wxid = str(wxid)
+        status_code = self._safe_int(self._pick(data, STATUS_KEYS) or self._pick(response, STATUS_KEYS), 0)
+        status_bool = self._pick(data, ("IsLogin", "is_login", "LoggedIn", "logged_in"))
+        logged_in = bool(wxid) or self._truthy_login_value(status_bool) or status_code in {1, 2, 200, 201}
+        profile = await self.refresh_profile()
+        if self.wxid:
+            logged_in = True
+        return {
+            "logged_in": logged_in,
+            "status": "online" if logged_in else "offline",
+            "bot_wxid": self.wxid,
+            "bot_nickname": self.nickname,
+            "bot_alias": self.alias,
+            "profile_loaded": bool(profile),
+            "raw": data or response,
+        }
+
+    async def refresh_profile(self) -> dict[str, Any]:
+        try:
+            data = await self.call_path("/user/GetProfile", method="GET")
+        except Exception:
+            return {}
+        profile = data if isinstance(data, dict) else {}
+        user_info = profile.get("userInfo") if isinstance(profile.get("userInfo"), dict) else profile
+        wxid = self._pick_nested(user_info, WXID_KEYS)
+        nickname = self._pick_nested(user_info, NICKNAME_KEYS)
+        alias = self._pick_nested(user_info, ALIAS_KEYS)
+        if wxid:
+            self.wxid = str(wxid)
+        if nickname:
+            self.nickname = str(nickname)
+        if alias:
+            self.alias = str(alias)
+        return profile
+
+    async def try_wakeup_login(self) -> bool:
+        active_key = self.token_key or self.poll_key or self.auth_key or self.admin_key
+        if not active_key:
+            return False
+        login_device = "mac" if self.device_type == "mac" else "ipad"
+        try:
+            payload = await self.request(
+                "/login/WakeUpLogin",
+                body={"IpadOrmac": login_device, "Check": False},
+                method="POST",
+                key=active_key,
+            )
+            data = payload.get("Data") if isinstance(payload, dict) else {}
+            if not isinstance(data, dict):
+                data = payload if isinstance(payload, dict) else {}
+            token_key = self._pick(data, TOKEN_KEY_KEYS) or self._pick(payload, TOKEN_KEY_KEYS)
+            poll_key = self._pick(data, POLL_KEY_KEYS) or self._pick(payload, POLL_KEY_KEYS)
+            if token_key:
+                self.token_key = str(token_key)
+            if poll_key:
+                self.poll_key = str(poll_key)
+        except Exception:
+            return False
+        for _ in range(3):
+            status = await self.get_login_status()
+            if status.get("logged_in"):
+                return True
+            await asyncio.sleep(0.2)
+        return False
+
+    async def request_with_fallback(
+        self,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        method: str = "POST",
+        key: str | None = None,
+    ) -> Any:
+        candidates = {
+            "/login/GetLoginQrCodeNewDirect": [
+                "/login/GetLoginQrCodeNewDirect",
+                "/login/GetLoginQrCodeNew",
+                "/login/GetLoginQrCodeNewX",
+            ],
+        }.get(path, [path])
+        last_error: Exception | None = None
+        for candidate in candidates:
+            try:
+                return await self.request(candidate, body=body, method=method, key=key)
+            except Exception as exc:
+                last_error = exc
+        raise last_error or RuntimeError(f"869 request failed: {path}")
 
     async def send_cdn_download(self, aes_key: str, file_url: str, file_type: int) -> str:
         if not aes_key or not file_url:
@@ -179,6 +443,86 @@ class Wechat869Client:
             if code is None and payload.get("Success") is False:
                 raise RuntimeError(self._extract_error(payload) or "869 request failed")
         return payload
+
+    @staticmethod
+    def create_device_id(seed: str = "") -> str:
+        if seed:
+            return uuid.uuid5(uuid.NAMESPACE_DNS, seed).hex
+        return uuid.uuid4().hex
+
+    @staticmethod
+    def _pick(data: Any, keys: tuple[str, ...], default: Any = "") -> Any:
+        if not isinstance(data, dict):
+            return default
+        for key in keys:
+            value = data.get(key)
+            if value not in (None, ""):
+                return value
+        return default
+
+    @classmethod
+    def _pick_nested(cls, data: Any, keys: tuple[str, ...], default: Any = "") -> Any:
+        value = cls._pick(data, keys, default)
+        if isinstance(value, dict):
+            nested = cls._pick(value, ("str", "Str", "string", "String", "value", "Value", "text", "Text"), default)
+            return nested
+        return value
+
+    @classmethod
+    def _extract_auth_keys(cls, payload: Any) -> list[str]:
+        values: list[str] = []
+        if isinstance(payload, dict):
+            for key in (*AUTH_KEY_KEYS, "AuthKeys", "auth_keys", "Keys", "keys", "Data"):
+                value = payload.get(key)
+                if isinstance(value, (list, tuple)):
+                    values.extend(str(item).strip() for item in value if str(item).strip())
+                elif isinstance(value, dict):
+                    values.extend(cls._extract_auth_keys(value))
+                elif value not in (None, ""):
+                    values.append(str(value).strip())
+        elif isinstance(payload, list):
+            for item in payload:
+                values.extend(cls._extract_auth_keys(item))
+        elif payload not in (None, ""):
+            values.append(str(payload).strip())
+        seen = set()
+        result = []
+        for value in values:
+            if value and value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
+
+    @staticmethod
+    def _extract_uuid_from_qr_url(qr_url: str) -> str:
+        if not qr_url:
+            return ""
+        parsed = urlparse(qr_url)
+        parts = [part for part in parsed.path.split("/") if part]
+        return parts[-1] if parts else ""
+
+    def _sync_key_from_url(self, qr_url: str) -> None:
+        parsed = urlparse(qr_url or "")
+        query = parse_qs(parsed.query)
+        key = (query.get("key") or [""])[-1]
+        if key and not self.token_key:
+            self.token_key = key
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _truthy_login_value(cls, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return int(value) in {1, 2, 200, 201}
+        text = str(value or "").strip().lower()
+        return text in {"true", "yes", "online", "logged_in", "1", "2", "200", "201", "在线"}
 
     def _extract_send_tuple(self, data: Any) -> tuple[int, int, int]:
         now = int(time.time())

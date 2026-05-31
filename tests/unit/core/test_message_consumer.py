@@ -39,6 +39,18 @@ class BlockingEngine:
         self.processed.append(f"done:{message.id}")
 
 
+class FlakyConsumeQueue(MemoryMessageQueue):
+    def __init__(self):
+        super().__init__()
+        self.fail_once = True
+
+    async def consume(self):
+        if self.fail_once:
+            self.fail_once = False
+            raise RuntimeError("temporary queue failure")
+        return await super().consume()
+
+
 def _message(message_id: str, conversation_id: str) -> Message:
     return Message(
         id=message_id,
@@ -100,6 +112,34 @@ async def test_message_consumer_serializes_same_conversation_by_default():
         assert "start:second" not in engine.processed
     finally:
         engine.release_first.set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.anyio
+async def test_message_consumer_recovers_after_queue_consume_error(monkeypatch):
+    original_sleep = asyncio.sleep
+
+    async def fast_sleep(_seconds):
+        await original_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+    queue = FlakyConsumeQueue()
+    engine = BlockingEngine()
+    consumer = MessageConsumer(
+        dedupe=FakeDedupe(),
+        pipeline=FakePipeline(),
+        conversations=FakeConversations(),
+        engine=engine,
+        max_message_tasks=1,
+        per_conversation_serial=True,
+    )
+    task = asyncio.create_task(consumer.run(queue))
+    try:
+        await queue.publish(MessageEnvelope.from_message(_message("after-error", "room-a")))
+        await asyncio.wait_for(_until(lambda: "done:after-error" in engine.processed), timeout=1)
+    finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

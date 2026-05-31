@@ -446,6 +446,10 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         else _load_dotenv(path.parent.parent / ".env")
     )
     env = {**dotenv_values, **os.environ}
+    if server_host := env.get("XBOT_SERVER_HOST") or env.get("XBOT_HOST"):
+        data.setdefault("server", {})["host"] = server_host
+    if server_port := env.get("XBOT_SERVER_PORT") or env.get("XBOT_PORT"):
+        data.setdefault("server", {})["port"] = _env_int(server_port)
     if storage_type := env.get("XBOT_STORAGE_TYPE"):
         data.setdefault("storage", {})["type"] = storage_type
     if database_url := env.get("XBOT_DATABASE_URL"):

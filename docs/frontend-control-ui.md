@@ -2,6 +2,8 @@
 
 `xbot-next` 的 Web Control UI 是给本地或服务器运行实例使用的控制台，不是营销站点。第一版目标是把通道、会话、Agent 运行、工具调用、后台任务和定时任务放到一个实时界面里。
 
+更新时间：2026-05-31
+
 ## 目标
 
 - 统一管理“通道”，不把概念限定为微信。869、iLink、Web、飞书、钉钉等后续都作为 adapter 接入。
@@ -14,7 +16,7 @@
 ## 技术栈
 
 - Vite + React + TypeScript。
-- 原生 CSS variables 作为第一版设计系统，避免过早引入复杂 UI 框架。
+- shadcn 默认风格方向 + 原生 CSS variables 作为第一版设计系统。
 - lucide-react 用于控制台常用图标。
 - REST 用于状态、列表、CRUD 和一次性查询。
 - WebSocket 用于实时事件流。
@@ -77,17 +79,88 @@
 
 第一版仍然保持保守：页面本身不直接调用 adapter 发送消息，避免绕过 Agent 工具审计。
 
-## 页面规划
+## 已落地页面
 
 - 对话：选择通道会话、查看历史消息、页面内和 Agent 对话、查看当前活动。
 - 总览：后端状态、通道数量、后台任务数量、定时任务数量。
 - Agent：查看 LLM/MCP 状态、重载 MCP、搜索工具、添加/删除/压缩长期记忆。
-- 通道：展示 adapter 平台、启用状态和运行状态；页面开关写入数据库，重启后继续生效。
-- 插件 / Skills：启用、停用和重载；状态写入数据库。
+- 通道：每个 adapter 一张卡片，展示配置启用、页面覆盖、实际启用、运行中、登录支持和运行参数。
+- 扩展：插件和 Skill 单独管理，不混在通道页；支持启用、停用、重载和状态查看。
 - 后台任务：查看后台任务状态、来源、结果和错误；支持取消运行中任务和重放可重放任务。
 - 定时任务：创建任务，查看计划、时区、下次运行、启用状态；支持暂停、恢复、立即运行和删除。
 - 活动流：集中展示 Agent 事件、工具调用和 WebSocket 实时事件。
 - 设置：管理浏览器本地保存的 API Token，查看 REST 和 WebSocket 端点。
+
+## 通道页
+
+通道页不使用“微信通道”作为一级概念，统一叫“通道”。微信 869、微信 iLink、Web、飞书、钉钉等都只是不同 adapter。
+
+每张通道卡片包含：
+
+- adapter 名称、平台、运行状态。
+- 配置启用：来自 `.env` / `configs/xbot.toml` 的默认启用状态。
+- 页面覆盖：Control UI 写入数据库后的覆盖状态。
+- 实际启用：运行时最终采用的启用状态。
+- 运行中：adapter 是否已经启动。
+- 登录支持：当前 adapter 是否提供登录流程。
+- 操作：启用/停用通道、获取二维码、检查登录。
+
+### 869 登录展示
+
+869 通道卡片显示：
+
+- Host / Port。
+- WebSocket URL。
+- Admin Key。
+- Token Key。
+- Auth Key。
+- Poll Key。
+- Bot wxid。
+- Bot 昵称。
+- 设备类型。
+- 设备 ID。
+- 媒体开关。
+- 仅文本开关。
+- 登录状态。
+
+这些字段允许直接显示，不做掩码，方便本地部署排查。生产公网部署时必须用 API Token、HTTPS 和反向代理访问控制保护 Control UI。
+
+869 登录流程：
+
+1. 如果 `.env` 已配置 `XBOT_WECHAT869_TOKEN_KEY`，优先使用固定 token key。
+2. 如果没有 token key，但有持久化的 DB token/poll/auth key，则从数据库恢复。
+3. 如果还没有可用 token，则用 admin key 获取或生成 auth key。
+4. 点击“获取二维码”后，用 auth/token key 请求 869 登录二维码。
+5. 扫码后点击“检查登录”，前端会刷新登录状态、token、poll key、Bot wxid 和 Bot 昵称。
+6. 服务重启后会自动读取 `.env` 和数据库状态，并通过 869 profile/status 接口刷新资料；已经登录的场景不需要重复扫码。
+
+当前 869 profile 兼容 `Code=200` 且 `Success=false` 但 `Data.userInfo` 有效的返回。Bot wxid 从 `Data.userInfo.userName.str` 解析，昵称从 `Data.userInfo.nickName.str` 解析。
+
+### iLink 登录展示
+
+iLink 通道卡片也保留登录入口和二维码展示。后续如果协议提供更多登录态字段，需要按相同卡片结构补充，而不是把配置散落到其他页面。
+
+## 扩展页
+
+插件和 Skill 单独放在“扩展”页面：
+
+- 插件：展示名称、版本、启用状态、描述和来源。
+- Skill：展示名称、启用状态、描述和来源。
+- 页面开关写入数据库，重启后保留。
+- 插件和 Skill 的安装、升级、删除后续可以继续在这里扩展。
+
+通道页只负责 adapter；扩展页只负责插件和 Skill。不要再把两类概念混在同一张通道卡片里。
+
+## 配置持久化
+
+Control UI 的开关不是只存在浏览器里：
+
+- 通道启用状态写入 `adapter_states.state_json.enabled`。
+- 插件启用状态写入插件仓储。
+- Skill 启用状态写入 Skill 仓储。
+- 登录态、运行态 token、poll key、bot wxid、bot nickname 写入 adapter state。
+
+`.env` 仍然是敏感固定配置的首选来源，例如数据库、Redis、模型密钥、869 admin key 和固定 token key。数据库状态不能覆盖 `.env` 里的固定 token key。
 
 ## 本地开发
 

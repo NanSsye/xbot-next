@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
@@ -17,17 +15,27 @@ class RedisMessageQueue(MessageQueue):
         group_name: str = "xbot",
         consumer_name: str = "worker-1",
         block_ms: int = 5000,
+        pending_idle_ms: int = 30000,
     ) -> None:
         self.redis_url = redis_url
         self.queue_name = queue_name
         self.group_name = group_name
         self.consumer_name = consumer_name
         self.block_ms = block_ms
-        self._redis = Redis.from_url(redis_url, decode_responses=True)
+        self.pending_idle_ms = pending_idle_ms
+        read_timeout = max((block_ms / 1000) + 10, 10)
+        self._redis = Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=read_timeout,
+            health_check_interval=30,
+        )
         self._groups_ready = False
         self._pending_ids: dict[str, str] = {}
 
     async def publish(self, envelope: MessageEnvelope) -> None:
+        await self._ensure_group()
         await self._redis.xadd(
             self.queue_name,
             {
@@ -39,6 +47,9 @@ class RedisMessageQueue(MessageQueue):
     async def consume(self) -> MessageEnvelope:
         await self._ensure_group()
         while True:
+            envelope = await self._claim_pending()
+            if envelope is not None:
+                return envelope
             result = await self._redis.xreadgroup(
                 groupname=self.group_name,
                 consumername=self.consumer_name,
@@ -76,3 +87,24 @@ class RedisMessageQueue(MessageQueue):
             if "BUSYGROUP" not in str(exc):
                 raise
         self._groups_ready = True
+
+    async def _claim_pending(self) -> MessageEnvelope | None:
+        claimed = await self._redis.xautoclaim(
+            name=self.queue_name,
+            groupname=self.group_name,
+            consumername=self.consumer_name,
+            min_idle_time=self.pending_idle_ms,
+            start_id="0-0",
+            count=1,
+        )
+        messages = claimed[1] if isinstance(claimed, (list, tuple)) and len(claimed) > 1 else []
+        if not messages:
+            return None
+        active_local_ids = set(self._pending_ids.values())
+        for redis_id, fields in messages:
+            if redis_id in active_local_ids:
+                continue
+            envelope = MessageEnvelope.model_validate_json(fields["payload"])
+            self._pending_ids[envelope.id] = redis_id
+            return envelope
+        return None

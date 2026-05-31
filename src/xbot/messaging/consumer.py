@@ -50,7 +50,16 @@ class MessageConsumer:
         try:
             while True:
                 await self._semaphore.acquire()
-                envelope = await queue.consume()
+                try:
+                    envelope = await queue.consume()
+                except asyncio.CancelledError:
+                    self._semaphore.release()
+                    raise
+                except Exception as exc:
+                    self._semaphore.release()
+                    logger.exception("MessageConsumer 消费队列失败，1 秒后重试: {}", exc)
+                    await asyncio.sleep(1)
+                    continue
                 task = asyncio.create_task(
                     self._handle_and_ack(queue, envelope),
                     name=f"xbot-message-{envelope.message.id}",

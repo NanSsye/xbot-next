@@ -18,7 +18,13 @@ class AdapterRegistry:
         if config.web.enabled:
             self.register(WebAdapter())
         if config.wechat869.enabled:
-            self.register(Wechat869Adapter(config.wechat869, queue=queue))
+            self.register(
+                Wechat869Adapter(
+                    config.wechat869,
+                    queue=queue,
+                    repository_provider=repository_provider,
+                )
+            )
         if config.wechat_ilink.enabled:
             self.register(
                 WechatIlinkAdapter(
@@ -102,7 +108,11 @@ class AdapterRegistry:
         if name == "web":
             return WebAdapter()
         if name == "wechat869":
-            return Wechat869Adapter(self.config.wechat869, queue=self.queue)
+            return Wechat869Adapter(
+                self.config.wechat869,
+                queue=self.queue,
+                repository_provider=self.repository_provider,
+            )
         if name == "wechat_ilink":
             return WechatIlinkAdapter(
                 self.config.wechat_ilink,

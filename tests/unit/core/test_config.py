@@ -56,6 +56,8 @@ def test_load_default_config(monkeypatch):
 
 def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_LOAD_DOTENV", "false")
+    monkeypatch.setenv("XBOT_SERVER_HOST", "0.0.0.0")
+    monkeypatch.setenv("XBOT_SERVER_PORT", "18080")
     monkeypatch.setenv("XBOT_DATABASE_URL", "postgresql+asyncpg://u:p@db:5432/app")
     monkeypatch.setenv("XBOT_STORAGE_TYPE", "postgresql")
     monkeypatch.setenv("XBOT_ADMIN_DATABASE_URL", "postgresql://postgres:admin@db:5432/postgres")
@@ -106,6 +108,8 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_WECHAT_ILINK_MAX_IMAGE_BYTES", "456")
     monkeypatch.setenv("XBOT_WECHAT_ILINK_MAX_FILE_BYTES", "789")
     settings = load_settings("configs/xbot.toml")
+    assert settings.server.host == "0.0.0.0"
+    assert settings.server.port == 18080
     assert settings.storage.url == "postgresql+asyncpg://u:p@db:5432/app"
     assert settings.storage.type == "postgresql"
     assert settings.storage.admin_url == "postgresql://postgres:admin@db:5432/postgres"

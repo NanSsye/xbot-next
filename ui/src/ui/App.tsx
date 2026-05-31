@@ -6,15 +6,21 @@ import {
   Circle,
   Clock3,
   KeyRound,
+  LogIn,
+  Monitor,
   MessagesSquare,
+  Moon,
   Network,
+  Package,
   Pause,
   Play,
+  QrCode,
   RefreshCw,
   RotateCcw,
   Search,
   Send,
   Settings,
+  Sun,
   Trash2,
   XCircle,
 } from "lucide-react";
@@ -22,11 +28,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiBase, clearApiToken, getApiToken, setApiToken, wsUrl } from "../api";
 import type {
   AdapterInfo,
+  AdapterStatus,
   AgentEvent,
   AgentMemoryInfo,
   AgentToolInfo,
   BackgroundTask,
   Conversation,
+  IlinkQrCode,
   Message,
   PluginInfo,
   ScheduledJob,
@@ -35,8 +43,9 @@ import type {
   UiEvent,
 } from "../types";
 
-type View = "chat" | "overview" | "agent" | "channels" | "background" | "schedules" | "logs" | "settings";
+type View = "chat" | "overview" | "agent" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
 type DeliveryMode = "console" | "channel";
+type ThemeMode = "system" | "light" | "dark";
 type ConsoleMessage = {
   id: string;
   role: "user" | "assistant";
@@ -49,16 +58,29 @@ const navItems: Array<{ id: View; label: string; icon: typeof MessagesSquare }> 
   { id: "overview", label: "总览", icon: Activity },
   { id: "agent", label: "Agent", icon: Bot },
   { id: "channels", label: "通道", icon: Network },
+  { id: "extensions", label: "扩展", icon: Package },
   { id: "background", label: "后台任务", icon: Clock3 },
   { id: "schedules", label: "定时任务", icon: CalendarClock },
   { id: "logs", label: "活动流", icon: Bot },
   { id: "settings", label: "设置", icon: Settings },
 ];
 
+const THEME_STORAGE_KEY = "xbot.control.theme";
+
+function readThemeMode(): ThemeMode {
+  const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return value === "light" || value === "dark" || value === "system" ? value : "system";
+}
+
 export function App() {
   const [view, setView] = useState<View>("chat");
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
+  const [adapterStatuses, setAdapterStatuses] = useState<Record<string, AdapterStatus>>({});
+  const [ilinkQr, setIlinkQr] = useState<IlinkQrCode | null>(null);
+  const [wechat869Qr, setWechat869Qr] = useState<AdapterStatus | null>(null);
+  const [channelBusy, setChannelBusy] = useState("");
+  const [channelMessage, setChannelMessage] = useState("");
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -85,6 +107,7 @@ export function App() {
   const [scheduleTimezone, setScheduleTimezone] = useState("Asia/Shanghai");
   const [scheduleMaxRuns, setScheduleMaxRuns] = useState("");
   const [apiToken, setApiTokenState] = useState(getApiToken());
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readThemeMode);
   const [wsRevision, setWsRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -156,6 +179,25 @@ export function App() {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const resolved = themeMode === "system" ? (media.matches ? "dark" : "light") : themeMode;
+      document.documentElement.dataset.theme = resolved;
+      document.documentElement.style.colorScheme = resolved;
+      window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    };
+    applyTheme();
+    if (themeMode !== "system") return;
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (view !== "channels" || adapters.length === 0) return;
+    void Promise.all(adapters.map((adapter) => refreshAdapterStatus(adapter.name)));
+  }, [view, adapters]);
 
   useEffect(() => {
     if (!selectedConversationId) {
@@ -271,8 +313,91 @@ export function App() {
     try {
       const next = enabled ? await api.disableAdapter(name) : await api.enableAdapter(name);
       setAdapters(next);
+      await refreshAdapterStatus(name);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function refreshAdapterStatus(name: string) {
+    try {
+      const next = await api.adapterStatus(name);
+      setAdapterStatuses((current) => ({ ...current, [name]: next }));
+    } catch (err) {
+      setAdapterStatuses((current) => ({
+        ...current,
+        [name]: {
+          adapter: name,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      }));
+    }
+  }
+
+  async function startIlinkLogin() {
+    setChannelBusy("wechat_ilink");
+    setChannelMessage("");
+    setError("");
+    try {
+      const nextQr = await api.wechatIlinkQrcode();
+      setIlinkQr(nextQr);
+      setChannelMessage("iLink 登录二维码已生成，请用微信扫码。");
+      await refreshAdapterStatus("wechat_ilink");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelBusy("");
+    }
+  }
+
+  async function pollIlinkLogin() {
+    setChannelBusy("wechat_ilink");
+    setChannelMessage("");
+    setError("");
+    try {
+      const next = await api.wechatIlinkLoginStatus(ilinkQr?.qrcode);
+      setAdapterStatuses((current) => ({ ...current, wechat_ilink: next }));
+      setChannelMessage(next.logged_in ? "iLink 已登录。" : "尚未确认登录，请扫码后再检查。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelBusy("");
+    }
+  }
+
+  async function startWechat869Login() {
+    setChannelBusy("wechat869");
+    setChannelMessage("");
+    setError("");
+    try {
+      const next = await api.wechat869LoginStart();
+      setAdapterStatuses((current) => ({ ...current, wechat869: next }));
+      if (next.qr_url || next.qr_image_url || next.qrcode || next.uuid) {
+        setWechat869Qr(next);
+      }
+      setChannelMessage(String(next.message ?? "869 登录流程待接入，当前仅显示配置与运行状态。"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelBusy("");
+    }
+  }
+
+  async function pollWechat869Login() {
+    setChannelBusy("wechat869");
+    setChannelMessage("");
+    setError("");
+    try {
+      const next = await api.wechat869LoginStatus();
+      setAdapterStatuses((current) => ({ ...current, wechat869: next }));
+      if (next.logged_in) {
+        setWechat869Qr(null);
+      }
+      setChannelMessage(next.logged_in ? "869 已登录。" : "尚未确认登录，请扫码后再检查。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelBusy("");
     }
   }
 
@@ -445,6 +570,7 @@ export function App() {
         <div className="topbar__actions">
           <StatusPill label={status?.engine.state ?? "unknown"} tone={status?.engine.state === "running" ? "ok" : "warn"} />
           <StatusPill label={`${adapters.length} adapters`} tone="neutral" />
+          <ThemeToggle value={themeMode} onChange={setThemeMode} />
           <button className="icon-button" onClick={() => void loadAll()} title="刷新">
             <RefreshCw size={16} />
           </button>
@@ -511,9 +637,23 @@ export function App() {
         {view === "channels" && (
           <Channels
             adapters={adapters}
+            adapterStatuses={adapterStatuses}
+            ilinkQr={ilinkQr}
+            wechat869Qr={wechat869Qr}
+            channelBusy={channelBusy}
+            channelMessage={channelMessage}
+            toggleAdapter={toggleAdapter}
+            refreshAdapterStatus={refreshAdapterStatus}
+            startIlinkLogin={startIlinkLogin}
+            pollIlinkLogin={pollIlinkLogin}
+            startWechat869Login={startWechat869Login}
+            pollWechat869Login={pollWechat869Login}
+          />
+        )}
+        {view === "extensions" && (
+          <Extensions
             plugins={plugins}
             skills={skills}
-            toggleAdapter={toggleAdapter}
             togglePlugin={togglePlugin}
             toggleSkill={toggleSkill}
             reloadPlugins={async () => setPlugins(await api.reloadPlugins())}
@@ -551,6 +691,8 @@ export function App() {
           <SettingsView
             token={apiToken}
             setToken={setApiTokenState}
+            themeMode={themeMode}
+            setThemeMode={setThemeMode}
             saveToken={() => {
               setApiToken(apiToken);
               setWsRevision((value) => value + 1);
@@ -565,6 +707,17 @@ export function App() {
         )}
       </main>
     </div>
+  );
+}
+
+function ThemeToggle({ value, onChange }: { value: ThemeMode; onChange: (value: ThemeMode) => void }) {
+  const next = value === "system" ? "light" : value === "light" ? "dark" : "system";
+  const Icon = value === "system" ? Monitor : value === "light" ? Sun : Moon;
+  const label = value === "system" ? "跟随系统" : value === "light" ? "日间模式" : "夜间模式";
+  return (
+    <button className="icon-button" onClick={() => onChange(next)} title={`主题：${label}`}>
+      <Icon size={16} />
+    </button>
   );
 }
 
@@ -943,64 +1096,150 @@ function StatusBlock({
 
 function Channels({
   adapters,
+  adapterStatuses,
+  ilinkQr,
+  wechat869Qr,
+  channelBusy,
+  channelMessage,
+  toggleAdapter,
+  refreshAdapterStatus,
+  startIlinkLogin,
+  pollIlinkLogin,
+  startWechat869Login,
+  pollWechat869Login,
+}: {
+  adapters: AdapterInfo[];
+  adapterStatuses: Record<string, AdapterStatus>;
+  ilinkQr: IlinkQrCode | null;
+  wechat869Qr: AdapterStatus | null;
+  channelBusy: string;
+  channelMessage: string;
+  toggleAdapter: (name: string, enabled: boolean) => void;
+  refreshAdapterStatus: (name: string) => Promise<void>;
+  startIlinkLogin: () => Promise<void>;
+  pollIlinkLogin: () => Promise<void>;
+  startWechat869Login: () => Promise<void>;
+  pollWechat869Login: () => Promise<void>;
+}) {
+  return (
+    <section className="channels-grid">
+      <div className="panel channel-panel">
+        <div className="panel-title panel-title--with-action">
+          <div>
+            <span>通道</span>
+            <small>页面开关会写入数据库，重启后继续生效；登录密钥仍由后端安全保存。</small>
+          </div>
+        </div>
+        <div className="channel-card-grid">
+          {adapters.map((item) => {
+            const status = adapterStatuses[item.name] ?? {};
+            const isIlink = item.name === "wechat_ilink";
+            const is869 = item.name === "wechat869";
+            return (
+              <article key={item.name} className="channel-card">
+                <div className="channel-card__head">
+                  <div className="channel-card__title">
+                    <Network size={18} />
+                    <div>
+                      <span>{channelDisplayName(item.name)}</span>
+                      <small>{item.name} · {item.platform}</small>
+                    </div>
+                  </div>
+                  <StatusPill label={item.status || "unknown"} tone={item.started ? "ok" : item.enabled ? "warn" : "neutral"} />
+                </div>
+
+                <div className="channel-card__actions">
+                  <button className="ghost-button" onClick={() => toggleAdapter(item.name, item.enabled)}>
+                    {item.enabled ? "停用通道" : "启用通道"}
+                  </button>
+                  <button className="icon-button" title="刷新状态" onClick={() => void refreshAdapterStatus(item.name)}>
+                    <RefreshCw size={14} />
+                  </button>
+                  {isIlink ? (
+                    <>
+                      <button className="primary-button" disabled={channelBusy === item.name} onClick={() => void startIlinkLogin()}>
+                        <QrCode size={15} />
+                        获取二维码
+                      </button>
+                      <button className="ghost-button" disabled={channelBusy === item.name} onClick={() => void pollIlinkLogin()}>
+                        <LogIn size={15} />
+                        检查登录
+                      </button>
+                    </>
+                  ) : null}
+                  {is869 ? (
+                    <>
+                      <button className="primary-button" disabled={channelBusy === item.name} onClick={() => void startWechat869Login()}>
+                        <QrCode size={15} />
+                        获取二维码
+                      </button>
+                      <button className="ghost-button" disabled={channelBusy === item.name} onClick={() => void pollWechat869Login()}>
+                        <LogIn size={15} />
+                        检查登录
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+
+                <div className="channel-card__details">
+                  <KeyValue label="配置启用" value={item.configured_enabled ? "是" : "否"} />
+                  <KeyValue label="页面覆盖" value={item.persistent_enabled === undefined || item.persistent_enabled === null ? "默认" : item.persistent_enabled ? "启用" : "停用"} />
+                  <KeyValue label="实际启用" value={item.enabled ? "是" : "否"} />
+                  <KeyValue label="运行中" value={item.started ? "是" : "否"} />
+                </div>
+
+                {isIlink && ilinkQr ? (
+                  <div className="qr-box">
+                    {isImageUrl(ilinkQr.qr_url) ? <img src={ilinkQr.qr_url} alt="iLink 登录二维码" /> : <pre>{ilinkQr.qrcode}</pre>}
+                    <small>扫码后点击“检查登录”。</small>
+                  </div>
+                ) : null}
+
+                {is869 && wechat869Qr ? (
+                  <div className="qr-box">
+                    {isImageUrl(formatStatusValue(wechat869Qr.qr_image_url)) ? (
+                      <img src={formatStatusValue(wechat869Qr.qr_image_url)} alt="869 登录二维码" />
+                    ) : (
+                      <pre>{formatStatusValue(wechat869Qr.qr_url || wechat869Qr.qrcode || wechat869Qr.uuid)}</pre>
+                    )}
+                    <small>{formatStatusValue(wechat869Qr.qr_url || wechat869Qr.qrcode || wechat869Qr.uuid)}</small>
+                  </div>
+                ) : null}
+
+                <div className="channel-keys">
+                  {channelStatusEntries(item.name, status).map(([label, value]) => (
+                    <KeyValue key={label} label={label} value={formatStatusValue(value)} />
+                  ))}
+                </div>
+
+                {status.error ? <div className="channel-card__error">{formatStatusValue(status.error)}</div> : null}
+              </article>
+            );
+          })}
+        </div>
+        {channelMessage ? <div className="channel-message">{channelMessage}</div> : null}
+      </div>
+    </section>
+  );
+}
+
+function Extensions({
   plugins,
   skills,
-  toggleAdapter,
   togglePlugin,
   toggleSkill,
   reloadPlugins,
   reloadSkills,
 }: {
-  adapters: AdapterInfo[];
   plugins: PluginInfo[];
   skills: SkillInfo[];
-  toggleAdapter: (name: string, enabled: boolean) => void;
   togglePlugin: (name: string, enabled: boolean) => void;
   toggleSkill: (name: string, enabled: boolean) => void;
   reloadPlugins: () => Promise<void>;
   reloadSkills: () => Promise<void>;
 }) {
   return (
-    <section className="management-grid">
-      <div className="panel table-panel">
-        <div className="panel-title panel-title--with-action">
-          <span>通道</span>
-          <small>页面开关会写入数据库，重启后继续生效；.env 作为默认值</small>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>平台</th>
-                <th>配置启用</th>
-                <th>页面覆盖</th>
-                <th>运行状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {adapters.map((item) => (
-                <tr key={item.name}>
-                  <td>{item.name}</td>
-                  <td>{item.platform}</td>
-                  <td>{item.configured_enabled ? "是" : "否"}</td>
-                  <td>{item.persistent_enabled === undefined || item.persistent_enabled === null ? "默认" : item.persistent_enabled ? "启用" : "停用"}</td>
-                  <td>
-                    <StatusPill label={item.status || "unknown"} tone={item.started ? "ok" : item.enabled ? "warn" : "neutral"} />
-                  </td>
-                  <td>
-                    <button className="ghost-button" onClick={() => toggleAdapter(item.name, item.enabled)}>
-                      {item.enabled ? "停用" : "启用"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
+    <section className="extensions-grid">
       <ManageList
         title="插件"
         subtitle="控制插件是否参与消息分发和工具注册"
@@ -1018,6 +1257,71 @@ function Channels({
       />
     </section>
   );
+}
+
+function KeyValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="key-value">
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
+    </div>
+  );
+}
+
+function channelDisplayName(name: string): string {
+  if (name === "wechat_ilink") return "iLink 通道";
+  if (name === "wechat869") return "869 通道";
+  return name;
+}
+
+function channelStatusEntries(name: string, status: AdapterStatus): Array<[string, unknown]> {
+  if (name === "wechat_ilink") {
+    return [
+      ["登录状态", status.logged_in],
+      ["Token", status.token_configured],
+      ["Base URL", status.base_url],
+      ["Bot wxid", status.bot_wxid],
+      ["Bot 昵称", status.bot_nickname],
+      ["Cursor", status.cursor_set],
+      ["轮询", status.polling],
+      ["二维码缓存", status.login_qrcode_cached],
+    ];
+  }
+  if (name === "wechat869") {
+    return [
+      ["登录支持", status.login_supported],
+      ["登录状态", status.logged_in ?? status.login_status],
+      ["Host", status.host],
+      ["Port", status.port],
+      ["WebSocket", status.ws_url],
+      ["Admin Key", status.admin_key || status.admin_key_configured],
+      ["Token Key", status.token_key || status.token_key_configured],
+      ["Auth Key", status.auth_key],
+      ["Poll Key", status.poll_key],
+      ["Bot wxid", status.bot_wxid],
+      ["Bot 昵称", status.bot_nickname],
+      ["设备类型", status.device_type],
+      ["设备 ID", status.device_id],
+      ["媒体", status.media_enabled],
+      ["仅文本", status.text_only],
+    ];
+  }
+  return Object.entries(status)
+    .filter(([key]) => !["adapter", "platform", "error"].includes(key))
+    .slice(0, 12)
+    .map(([key, value]) => [key, value]);
+}
+
+function formatStatusValue(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "-";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return JSON.stringify(value);
+}
+
+function isImageUrl(value?: string): boolean {
+  if (!value) return false;
+  return value.startsWith("data:image/") || /^https?:\/\//i.test(value);
 }
 
 function ManageList<T extends { name: string; version: string; description: string; enabled: boolean }>({
@@ -1272,11 +1576,15 @@ function Schedules({
 function SettingsView({
   token,
   setToken,
+  themeMode,
+  setThemeMode,
   saveToken,
   clearToken,
 }: {
   token: string;
   setToken: (value: string) => void;
+  themeMode: ThemeMode;
+  setThemeMode: (value: ThemeMode) => void;
   saveToken: () => void;
   clearToken: () => void;
 }) {
@@ -1312,6 +1620,23 @@ function SettingsView({
               清除
             </button>
           </div>
+        </div>
+      </div>
+      <div className="panel settings-panel">
+        <div className="panel-title">界面偏好</div>
+        <div className="settings-form">
+          <label>
+            <span>主题</span>
+            <Segmented
+              value={themeMode}
+              onChange={setThemeMode}
+              options={[
+                ["system", "跟随系统"],
+                ["light", "日间"],
+                ["dark", "夜间"],
+              ]}
+            />
+          </label>
         </div>
       </div>
       <div className="panel settings-panel">

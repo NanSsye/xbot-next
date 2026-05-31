@@ -143,6 +143,21 @@ class WechatIlinkAdapter(BaseAdapter):
             "base_url": self._login_base_url,
         }
 
+    def public_status(self) -> dict[str, Any]:
+        return {
+            "adapter": self.name,
+            "platform": self.platform,
+            "started": self.started,
+            "logged_in": bool(self.config.token),
+            "token_configured": bool(self.config.token),
+            "base_url": self.config.base_url,
+            "bot_wxid": self.config.bot_wxid,
+            "bot_nickname": self.config.bot_nickname,
+            "cursor_set": bool(self.cursor),
+            "login_qrcode_cached": bool(self._login_qrcode),
+            "polling": bool(self._task and not self._task.done()),
+        }
+
     async def poll_login_status(self, qrcode: str | None = None) -> dict[str, Any]:
         ticket = qrcode or self._login_qrcode
         if not ticket:
@@ -165,6 +180,9 @@ class WechatIlinkAdapter(BaseAdapter):
             "logged_in": bool(token),
             "account_id": payload.get("ilink_bot_id"),
             "ilink_user_id": payload.get("ilink_user_id"),
+            "bot_wxid": self.config.bot_wxid,
+            "bot_nickname": self.config.bot_nickname,
+            "token_configured": bool(self.config.token),
             "base_url": payload.get("baseurl") or self.config.base_url,
         }
 

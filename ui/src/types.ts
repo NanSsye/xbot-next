@@ -29,6 +29,20 @@ export type AdapterInfo = {
   status?: string;
 };
 
+export type AdapterStatus = Record<string, unknown> & {
+  adapter?: string;
+  platform?: string;
+  started?: boolean;
+  logged_in?: boolean;
+  login_supported?: boolean;
+};
+
+export type IlinkQrCode = {
+  qrcode: string;
+  qr_url: string;
+  base_url: string;
+};
+
 export type PluginInfo = {
   name: string;
   version: string;

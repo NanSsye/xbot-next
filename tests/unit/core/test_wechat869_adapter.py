@@ -38,6 +38,94 @@ class FakeClient869:
         return b"attach-bytes"
 
 
+class FakeLoginClient869(FakeClient869):
+    def __init__(self) -> None:
+        super().__init__()
+        self.admin_key = "admin"
+        self.auth_key = "auth"
+        self.auth_keys = ["auth"]
+        self.poll_key = ""
+        self.display_uuid = ""
+        self.login_tx_id = ""
+        self.data62 = ""
+        self.ticket = ""
+        self.device_id = ""
+        self.device_type = "ipad"
+        self.wakeup_ok = False
+        self.poll_logged_in = False
+        self.profile_refreshed = False
+
+    async def try_wakeup_login(self):
+        return self.wakeup_ok
+
+    async def get_login_qrcode(self, *, device_type="ipad", device_id="", proxy=""):
+        self.device_type = device_type
+        self.device_id = device_id or "device-1"
+        self.token_key = "token-1"
+        self.poll_key = "poll-1"
+        self.display_uuid = "display-1"
+        self.login_tx_id = "tx-1"
+        self.data62 = "data62"
+        return {
+            "qrcode": "uuid-1",
+            "uuid": "uuid-1",
+            "qr_url": "http://weixin.qq.com/x/uuid-1",
+            "token_key": self.token_key,
+            "poll_key": self.poll_key,
+            "display_uuid": self.display_uuid,
+            "login_tx_id": self.login_tx_id,
+            "data62": self.data62,
+            "device_id": self.device_id,
+            "login_mode": self.device_type,
+        }
+
+    async def poll_login_status(self):
+        if self.poll_logged_in:
+            self.wxid = "wxid_bot"
+            self.nickname = "小小x"
+            self.token_key = "token-final"
+            return {
+                "logged_in": True,
+                "status": "online",
+                "bot_wxid": self.wxid,
+                "bot_nickname": self.nickname,
+                "token_key": self.token_key,
+            }
+        return {"logged_in": False, "status": "waiting_login"}
+
+    async def get_login_status(self):
+        await self.refresh_profile()
+        return {
+            "logged_in": True,
+            "status": "online",
+            "bot_wxid": self.wxid,
+            "bot_nickname": self.nickname,
+        }
+
+    async def refresh_profile(self):
+        self.profile_refreshed = True
+        self.wxid = self.wxid or "wxid_bot"
+        self.nickname = self.nickname or "小小x"
+        return {"userInfo": {"UserName": self.wxid, "NickName": {"string": self.nickname}}}
+
+
+class FakeAdapterRepo:
+    def __init__(self, state):
+        self.state = state
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_state(self, adapter):
+        return self.state.get(adapter, {})
+
+    async def set_state(self, adapter, value):
+        self.state[adapter] = value
+
+
 class FakeQueue:
     def __init__(self) -> None:
         self.items = []
@@ -272,6 +360,35 @@ def test_wechat869_internal_client_extracts_short_base64_payload() -> None:
     assert client._extract_base64_from_payload({"FileData": base64.b64encode(b"short").decode("ascii")})
 
 
+@pytest.mark.anyio
+async def test_wechat869_client_status_loads_profile_when_login_status_has_no_wxid(monkeypatch) -> None:
+    async def fake_request(self, path, *, body=None, method="POST", key=None):
+        if path == "/login/GetLoginStatus":
+            return {"Code": 0, "Data": {"Status": 0}}
+        if path == "/user/GetProfile":
+            return {
+                "Code": 200,
+                "Data": {
+                    "userInfo": {
+                        "userName": {"str": "wxid_profile"},
+                        "nickName": {"str": "小小x"},
+                    }
+                },
+                "Success": False,
+            }
+        return {"Code": 0}
+
+    monkeypatch.setattr(Wechat869Client, "request", fake_request)
+    client = Wechat869Client("127.0.0.1", 5253, token_key="token")
+
+    status = await client.get_login_status()
+
+    assert status["logged_in"] is True
+    assert status["bot_wxid"] == "wxid_profile"
+    assert status["bot_nickname"] == "小小x"
+    assert status["profile_loaded"] is True
+
+
 def test_wechat869_extracts_nested_json_string_message() -> None:
     adapter = Wechat869Adapter(Wechat869AdapterConfig())
 
@@ -447,3 +564,84 @@ async def test_wechat869_parses_group_prefixed_file_xml_metadata(tmp_path) -> No
     assert attachment["size"] == 18
     assert attachment["download_status"] == "download_empty"
     assert "测试.txt" in (message.content or "")
+
+
+@pytest.mark.anyio
+async def test_wechat869_login_start_persists_qrcode_state() -> None:
+    state = {}
+    client = FakeLoginClient869()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(enabled=True, admin_key="admin"),
+        client_factory=lambda: client,
+        repository_provider=lambda: FakeAdapterRepo(state),
+    )
+
+    result = await adapter.start_login()
+
+    assert result["logged_in"] is False
+    assert result["qr_url"] == "http://weixin.qq.com/x/uuid-1"
+    assert result["qr_image_url"].startswith(("data:image/png;base64,", "https://api.qrserver.com/"))
+    assert state["wechat869"]["token_key"] == "token-1"
+    assert state["wechat869"]["poll_key"] == "poll-1"
+    assert state["wechat869"]["qrcode"] == "uuid-1"
+
+
+@pytest.mark.anyio
+async def test_wechat869_login_poll_persists_success_state() -> None:
+    state = {"wechat869": {"token_key": "token-1", "poll_key": "poll-1", "qrcode": "uuid-1"}}
+    client = FakeLoginClient869()
+    client.poll_logged_in = True
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(enabled=True, admin_key="admin"),
+        client_factory=lambda: client,
+        repository_provider=lambda: FakeAdapterRepo(state),
+    )
+
+    result = await adapter.poll_login_status()
+
+    assert result["logged_in"] is True
+    assert result["bot_wxid"] == "wxid_bot"
+    assert result["bot_nickname"] == "小小x"
+    assert state["wechat869"]["token_key"] == "token-final"
+    assert state["wechat869"]["bot_wxid"] == "wxid_bot"
+    assert state["wechat869"]["bot_nickname"] == "小小x"
+    assert state["wechat869"]["qrcode"] == ""
+
+
+@pytest.mark.anyio
+async def test_wechat869_env_token_key_takes_priority_over_persisted_state() -> None:
+    state = {"wechat869": {"token_key": "persisted-token", "poll_key": "persisted-poll"}}
+    client = FakeLoginClient869()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(enabled=True, admin_key="admin", token_key="env-token"),
+        client_factory=lambda: client,
+        repository_provider=lambda: FakeAdapterRepo(state),
+    )
+
+    await adapter.start()
+    await adapter.stop()
+
+    assert adapter.config.token_key == "env-token"
+    assert client.token_key == "env-token"
+
+
+@pytest.mark.anyio
+async def test_wechat869_refreshed_public_status_fetches_profile_from_env_token() -> None:
+    state = {}
+    client = FakeLoginClient869()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(enabled=True, admin_key="admin", token_key="env-token"),
+        client_factory=lambda: client,
+        repository_provider=lambda: FakeAdapterRepo(state),
+    )
+    await adapter.start()
+
+    status = await adapter.refreshed_public_status()
+    await adapter.stop()
+
+    assert status["logged_in"] is True
+    assert status["login_status"] == "online"
+    assert status["bot_wxid"] == "wxid_bot"
+    assert status["bot_nickname"] == "小小x"
+    assert state["wechat869"]["bot_wxid"] == "wxid_bot"
+    assert state["wechat869"]["bot_nickname"] == "小小x"

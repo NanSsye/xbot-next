@@ -2,6 +2,8 @@
 
 这份清单面向长期运行的 xbot 实例。个人电脑试用可以使用 SQLite + memory queue；面向真实用户或团队时建议按下面方式部署。
 
+更新时间：2026-05-31
+
 ## 基础拓扑
 
 - xbot 后端：`xbot run`，默认 `0.0.0.0:8080`。
@@ -60,6 +62,31 @@ XBOT_API_CORS_ORIGINS=https://console.example.com
 
 生产环境需要把 `data/` 纳入备份。
 
+## 869 通道
+
+869 通道生产建议：
+
+```env
+XBOT_WECHAT869_ENABLED=true
+XBOT_WECHAT869_HOST=192.168.6.19
+XBOT_WECHAT869_PORT=5253
+XBOT_WECHAT869_ADMIN_KEY=你的admin key
+XBOT_WECHAT869_TOKEN_KEY=固定token key
+XBOT_WECHAT869_DEVICE_TYPE=ipad
+XBOT_WECHAT869_MEDIA_ENABLED=true
+XBOT_WECHAT869_TEXT_ONLY=false
+```
+
+规则：
+
+- `.env` 中的 `XBOT_WECHAT869_TOKEN_KEY` 优先级最高，数据库里的运行态 token 不覆盖它。
+- 如果 `.env` 没有 token key，系统可以使用数据库中保存的 token/poll/auth key 恢复登录态。
+- 如果没有 token key，但配置了 admin key，前端可以用 admin key 获取或生成 auth key，再获取二维码。
+- 重启后会调用 869 登录状态和 profile 接口刷新 Bot wxid / Bot 昵称。
+- 869 的 `/user/GetProfile` 可能返回 `Code=200`、`Success=false`，但 `Data.userInfo` 仍然有效，系统按 `Code=200 + Data.userInfo` 解析。
+
+前端通道卡片会显示 Host、Port、WebSocket、Admin Key、Token Key、Auth Key、Poll Key、Bot wxid、Bot 昵称、设备类型和登录状态。生产公网环境必须保护 Control UI，不要裸露这些字段。
+
 ## 页面配置持久化
 
 Control UI 中的开关分两类：
@@ -68,6 +95,29 @@ Control UI 中的开关分两类：
 - 插件和 Skill 开关：写入 `plugins.enabled` / `skills.enabled`，重启和升级后继续生效。
 
 页面开关只保存启用状态。通道 host、token、模型 key、数据库连接等敏感配置仍建议放在 `.env` 或后续专门的密钥管理里，不直接写入前端可见配置。
+
+## Redis 队列稳定性
+
+生产环境使用 Redis Streams：
+
+- 发布消息时会确保 consumer group 存在。
+- 消费端使用 consumer group + ack。
+- 消费协程异常后不会直接退出，会记录日志并重试。
+- Runtime 会监控 MessageConsumer 任务，如果任务异常退出，会自动重启。
+- 未 ack 的 pending 消息会在空闲一段时间后通过 `XAUTOCLAIM` 重新领取，避免“消息进 Redis 但必须重启才处理”。
+
+Redis 连接的读超时必须大于 `XREADGROUP block` 等待时间。当前实现会按 `block_ms + 10 秒` 设置 `socket_timeout`，避免空队列等待被误判为：
+
+```text
+Timeout reading from <redis-host>:6379
+```
+
+如果仍然持续出现 Redis timeout，优先检查：
+
+- Redis 服务是否稳定。
+- xbot 到 Redis 的网络是否丢包。
+- Redis 是否被防火墙或代理中断长连接。
+- 是否多个实例使用了相同 consumer name 导致 pending 行为混乱。
 
 ## 升级
 

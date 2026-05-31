@@ -43,6 +43,8 @@ def run_setup(
 
     updates: dict[str, str] = {
         "XBOT_LOAD_DOTENV": "true",
+        "XBOT_SERVER_HOST": values.get("XBOT_SERVER_HOST") or "0.0.0.0",
+        "XBOT_SERVER_PORT": values.get("XBOT_SERVER_PORT") or "8080",
         "XBOT_DATABASE_AUTO_BOOTSTRAP": "true",
         "XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP": "true",
     }
@@ -256,6 +258,8 @@ def _write_env(path: Path, values: dict[str, str], updates: dict[str, str]) -> N
     merged = {**values, **updates}
     ordered_keys = [
         "XBOT_LOAD_DOTENV",
+        "XBOT_SERVER_HOST",
+        "XBOT_SERVER_PORT",
         "XBOT_STORAGE_TYPE",
         "XBOT_DATABASE_URL",
         "XBOT_ADMIN_DATABASE_URL",
