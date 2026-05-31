@@ -434,7 +434,7 @@ class Wechat869Adapter(BaseAdapter):
         source = self._pick_text(raw, MSG_SOURCE_KEYS)
         if source:
             for match in re.findall(r"<atuserlist>(.*?)</atuserlist>", source, flags=re.IGNORECASE | re.DOTALL):
-                values.extend(self._split_wxid_list(match))
+                values.extend(self._split_wxid_list(self._strip_xml_cdata(match)))
         seen = set()
         result = []
         for value in values:
@@ -457,7 +457,13 @@ class Wechat869Adapter(BaseAdapter):
                 items.extend(self._split_wxid_list(item))
             return items
         text = str(value)
+        text = self._strip_xml_cdata(text)
         return [item.strip() for item in re.split(r"[,;，；\s]+", text) if item.strip()]
+
+    def _strip_xml_cdata(self, value: str) -> str:
+        text = str(value or "").strip()
+        match = re.fullmatch(r"<!\[CDATA\[(.*?)\]\]>", text, flags=re.DOTALL)
+        return match.group(1).strip() if match else text
 
     def _is_group_message(self, raw: dict, sender: str) -> bool:
         if sender.endswith("@chatroom"):

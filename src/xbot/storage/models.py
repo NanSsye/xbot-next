@@ -74,6 +74,31 @@ class AgentBackgroundTaskRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AgentScheduledJobRecord(Base):
+    __tablename__ = "agent_scheduled_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    schedule_type: Mapped[str] = mapped_column(String(32), index=True)
+    schedule_expr: Mapped[str] = mapped_column(Text)
+    schedule_display: Mapped[str] = mapped_column(String(256), default="")
+    timezone: Mapped[str] = mapped_column(String(128), default="Asia/Shanghai")
+    input: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(256), index=True)
+    reply_policy: Mapped[str] = mapped_column(String(64), default="parent_agent")
+    max_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    run_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    last_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class AdapterStateRecord(Base):
     __tablename__ = "adapter_states"
 

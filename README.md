@@ -338,10 +338,22 @@ modes = ["developer", "admin"]
 - 循环直到模型返回 `final`。
 - 工具调用过程不会发送给微信用户，只发送最终回答。
 - 长任务可以通过 `task.start` 后台执行；如果带有通道通知信息，完成后会主动回发原会话。
+- 定时任务可以通过 `schedule.create` 创建；支持 `30m`、`every 2h`、`daily 09:00`、ISO 时间和 5 段 cron。通道来源创建的任务会保存原平台、adapter、会话和引用消息，后续结果按原通道路由。
 - 工具失败会返回结构化 `error_type` 和 `fallback`，只读 fallback 会自动尝试一次安全降级。
 - 浏览器、GitHub Actions logs、`skill.run` 等长任务工具会在 metadata 中标记 `background_candidate`。
 - 服务重启后会恢复后台任务记录；未完成且可重放的只读后台任务会安全重放一次。
 - 通道来源中调用 `background_candidate` 工具时，Agent 会自动改为后台任务并在完成后回发。
+
+定时任务 CLI：
+
+```powershell
+xbot schedule list
+xbot schedule add "every 2h" "检查项目状态并总结"
+xbot schedule pause JOB_ID
+xbot schedule resume JOB_ID
+xbot schedule run JOB_ID
+xbot schedule delete JOB_ID
+```
 
 ## 权限配置
 

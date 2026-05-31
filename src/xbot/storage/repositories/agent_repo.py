@@ -10,6 +10,7 @@ from xbot.storage.models import (
     AgentBackgroundTaskRecord,
     AgentEventRecord,
     AgentMemoryRecord,
+    AgentScheduledJobRecord,
     AgentTaskRecord,
 )
 
@@ -91,6 +92,70 @@ class AgentRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def upsert_scheduled_job(self, item) -> None:
+        metadata_json = json.dumps(item.metadata or {}, ensure_ascii=False, default=str)
+        record = AgentScheduledJobRecord(
+            id=item.id,
+            name=item.name,
+            enabled=item.enabled,
+            schedule_type=item.schedule_type,
+            schedule_expr=item.schedule_expr,
+            schedule_display=item.schedule_display,
+            timezone=item.timezone,
+            input=item.input,
+            source=item.source,
+            reply_policy=item.reply_policy,
+            max_runs=item.max_runs,
+            run_count=item.run_count,
+            next_run_at=item.next_run_at,
+            last_run_at=item.last_run_at,
+            last_status=item.last_status,
+            last_task_id=item.last_task_id,
+            last_error=item.last_error,
+            metadata_json=metadata_json,
+            created_at=item.created_at,
+            updated_at=datetime.utcnow(),
+        )
+        await self.session.merge(record)
+
+    async def get_scheduled_job(self, job_id: str) -> AgentScheduledJobRecord | None:
+        return await self.session.get(AgentScheduledJobRecord, job_id)
+
+    async def list_scheduled_jobs(
+        self,
+        *,
+        include_disabled: bool = False,
+        limit: int = 100,
+    ) -> list[AgentScheduledJobRecord]:
+        stmt = select(AgentScheduledJobRecord).order_by(AgentScheduledJobRecord.created_at.desc()).limit(limit)
+        if not include_disabled:
+            stmt = stmt.where(AgentScheduledJobRecord.enabled.is_(True))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_due_scheduled_jobs(
+        self,
+        *,
+        now: datetime,
+        limit: int = 20,
+    ) -> list[AgentScheduledJobRecord]:
+        result = await self.session.execute(
+            select(AgentScheduledJobRecord)
+            .where(AgentScheduledJobRecord.enabled.is_(True))
+            .where(AgentScheduledJobRecord.next_run_at.is_not(None))
+            .where(AgentScheduledJobRecord.next_run_at <= now)
+            .order_by(AgentScheduledJobRecord.next_run_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def delete_scheduled_job(self, job_id: str) -> bool:
+        record = await self.session.get(AgentScheduledJobRecord, job_id)
+        if record is None:
+            return False
+        await self.session.delete(record)
+        return True
 
     async def save_memory(
         self,

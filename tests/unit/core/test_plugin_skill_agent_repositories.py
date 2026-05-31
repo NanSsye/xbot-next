@@ -52,6 +52,7 @@ class FakeAgentRepository:
         self.events = []
         self.memories = []
         self.background_tasks = {}
+        self.scheduled_jobs = {}
 
     async def create_task(self, task_id, source, input_text):
         self.tasks.append((task_id, source, input_text))
@@ -73,6 +74,28 @@ class FakeAgentRepository:
 
     async def list_background_tasks(self, limit=50):
         return list(self.background_tasks.values())[-limit:]
+
+    async def upsert_scheduled_job(self, item):
+        self.scheduled_jobs[item.id] = item.model_copy(deep=True)
+
+    async def get_scheduled_job(self, job_id):
+        return self.scheduled_jobs.get(job_id)
+
+    async def list_scheduled_jobs(self, include_disabled=False, limit=100):
+        jobs = list(self.scheduled_jobs.values())
+        if not include_disabled:
+            jobs = [job for job in jobs if job.enabled]
+        return jobs[-limit:]
+
+    async def list_due_scheduled_jobs(self, now, limit=20):
+        return [
+            job
+            for job in self.scheduled_jobs.values()
+            if job.enabled and job.next_run_at and job.next_run_at <= now
+        ][:limit]
+
+    async def delete_scheduled_job(self, job_id):
+        return self.scheduled_jobs.pop(job_id, None) is not None
 
 
 class FakeLLMProvider:
@@ -1900,6 +1923,100 @@ async def test_channel_task_start_auto_injects_notification_target(tmp_path):
     assert replies[0].conversation_id == "conversation-1"
     assert replies[0].quote_message_id == "msg-1"
     assert replies[0].content == "channel notify ok"
+
+
+@pytest.mark.anyio
+async def test_schedule_create_injects_channel_route_and_persists(tmp_path):
+    repo = FakeAgentRepository()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"schedule.create","payload":{"input":"明天提醒用户喝水","schedule":"every 1h","name":"喝水提醒"}}]}',
+            '{"final":"已设置每小时提醒。"}',
+        ]
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider, llm_provider=llm)
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: msg-9\ncontent: 每小时提醒我喝水",
+        source="channel:wechat:wechat_ilink:ilink:u1",
+    )
+
+    assert result.output == "已设置每小时提醒。"
+    persisted = next(iter(repo.scheduled_jobs.values()))
+
+    assert persisted.name == "喝水提醒"
+    assert persisted.schedule_type == "interval"
+    assert persisted.source == "channel:wechat:wechat_ilink:ilink:u1"
+    assert persisted.metadata["notify"]["adapter"] == "wechat_ilink"
+    assert persisted.metadata["notify"]["conversation_id"] == "ilink:u1"
+    assert persisted.metadata["notify"]["quote_message_id"] == "msg-9"
+
+
+@pytest.mark.anyio
+async def test_scheduler_tick_starts_due_agent_job_and_updates_status(tmp_path):
+    repo = FakeAgentRepository()
+    replies = []
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"定时任务完成。"}',
+            '{"final":"我已经把定时任务结果整理好了。"}',
+        ]
+    )
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider, llm_provider=llm)
+    runtime.attach_reply_sender(send_reply)
+
+    job = await runtime.scheduler.create(
+        input_text="执行一次定时任务",
+        schedule="1d",
+        source="channel:wechat:wechat_ilink:ilink:u1",
+        metadata={
+            "notify": {
+                "platform": "wechat",
+                "adapter": "wechat_ilink",
+                "conversation_id": "ilink:u1",
+                "quote_message_id": "msg-10",
+            }
+        },
+    )
+    job.next_run_at = datetime.utcnow() - timedelta(seconds=1)
+    await runtime.scheduler._save(job)
+
+    started = await runtime.scheduler.tick()
+    assert started == 1
+
+    for _ in range(50):
+        current = await runtime.scheduler.get(job.id)
+        if current and current.last_status == "completed" and replies:
+            break
+        await anyio.sleep(0.02)
+
+    current = await runtime.scheduler.get(job.id)
+    assert current.enabled is False
+    assert current.run_count == 1
+    assert current.last_status == "completed"
+    assert replies[0].conversation_id == "ilink:u1"
+    assert replies[0].content == "我已经把定时任务结果整理好了。"
 
 
 @pytest.mark.anyio

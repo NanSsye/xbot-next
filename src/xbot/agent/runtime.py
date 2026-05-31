@@ -20,6 +20,7 @@ from xbot.agent.memory import MemoryStore
 from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
 from xbot.agent.policy import PolicyEngine
+from xbot.agent.scheduler import ScheduledJobManager
 from xbot.agent.tool_executor import ToolExecutor
 from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
 from xbot.agent.tools import register_builtin_tools
@@ -29,6 +30,7 @@ from xbot.agent.tools.environment_provider import register_environment_tools
 from xbot.agent.tools.fallback_policy import ToolError, ToolFallbackPolicy
 from xbot.agent.tools.git_provider import register_git_tools
 from xbot.agent.tools.plugin_provider import register_plugin_tools
+from xbot.agent.tools.schedule_provider import register_schedule_tools
 from xbot.agent.tools.skill_provider import SkillToolProvider
 from xbot.agent.tools.task_provider import register_task_tools
 from xbot.agent.tools.toolsets import source_context, toolsets_for_source
@@ -89,6 +91,14 @@ class AgentRuntime:
         self.executor = ToolExecutor(self.tools)
         self.mcp = MCPClientManager(config.mcp, self.tools)
         self.background = BackgroundTaskManager(repository_provider=repository_provider)
+        self.scheduler = ScheduledJobManager(
+            background=self.background,
+            run_agent=self._run_agent_for_task,
+            repository_provider=repository_provider,
+            timezone_name=config.timezone,
+            tick_seconds=config.schedule.tick_seconds,
+            max_due_per_tick=config.schedule.max_due_per_tick,
+        )
         self.memory = MemoryStore(
             config.memory.directory,
             memory_char_limit=config.memory.memory_char_limit,
@@ -133,16 +143,20 @@ class AgentRuntime:
             execute_tool=self._execute_tool_for_task,
             run_agent=self._run_agent_for_task,
         )
+        register_schedule_tools(self.tools, scheduler=self.scheduler)
         self._register_wechat_send_tools()
 
     async def start(self) -> None:
         register_plugin_tools(self.tools, self.plugins)
         self._static_prompt_cache = None
         await self._restore_background_tasks()
+        if self.config.schedule.enabled:
+            await self.scheduler.start()
         await self.mcp.start()
 
     async def stop(self) -> None:
         await self.flush_memory(reason="runtime stop")
+        await self.scheduler.stop()
         await self.background.stop()
         await self.mcp.stop()
 
@@ -1518,6 +1532,16 @@ class AgentRuntime:
         input_text: str,
     ) -> tuple[str, dict]:
         tool_name = self._canonical_tool_name(tool_name)
+        if tool_name == "schedule.create":
+            enriched = dict(payload)
+            enriched.setdefault("_source", source)
+            if "source" not in enriched:
+                enriched["source"] = source if source.startswith("channel:") else "schedule"
+            if not isinstance(enriched.get("notify"), dict):
+                notify = self._notification_target(source, input_text, include_wechat=True)
+                if notify:
+                    enriched["notify"] = notify
+            return tool_name, enriched
         if tool_name.startswith("wechat.send_"):
             enriched = dict(payload)
             enriched["_source"] = source
@@ -1712,6 +1736,7 @@ class AgentRuntime:
             "- Tools marked with metadata.background_candidate are good candidates for task.start when the request may take time or the user does not need an immediate result.\n"
             "- For long-running screenshots, browser interactions, downloads, GitHub Actions logs, or skill execution, prefer task.start so the request can run in the background.\n"
             "- For longer multi-step work where the user can receive an immediate acknowledgement and a later result, prefer task.agent_start to delegate a full child Agent task in the background. When using task.agent_start, include an ack/message in your own voice for the user; do not rely on a system-generated task-id notice.\n"
+            "- For reminders, recurring checks, daily summaries, scheduled follow-ups, or any task that should run later/periodically, use schedule.create. For channel-origin schedules, keep the current channel source and notification target so future results return to the same user or group.\n"
             "- If a tool result contains fallback guidance or suggested_tool, use that guidance before retrying.\n"
             "- Use memory.add proactively for durable user preferences, corrections, stable environment facts, and project conventions. Keep entries compact. Do not save temporary task progress.\n"
             "- If the user changes your name, identity, persona, or 'soul', save it to memory target=memory, not target=user. target=user is only for facts about the user.\n"

@@ -202,6 +202,12 @@ class AgentCacheConfig(BaseModel):
     skills: bool = True
 
 
+class AgentScheduleConfig(BaseModel):
+    enabled: bool = True
+    tick_seconds: float = 30.0
+    max_due_per_tick: int = 10
+
+
 class AgentToolsetConfig(BaseModel):
     api: list[str] = Field(
         default_factory=lambda: [
@@ -216,6 +222,7 @@ class AgentToolsetConfig(BaseModel):
             "mcp",
             "environment",
             "task",
+            "schedule",
             "browser",
             "database",
             "git",
@@ -223,10 +230,34 @@ class AgentToolsetConfig(BaseModel):
         ]
     )
     private: list[str] = Field(
-        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "wechat", "mcp", "environment", "task", "plugin"]
+        default_factory=lambda: [
+            "core",
+            "memory",
+            "wiki",
+            "filesystem",
+            "skill",
+            "wechat",
+            "mcp",
+            "environment",
+            "task",
+            "schedule",
+            "plugin",
+        ]
     )
     group: list[str] = Field(
-        default_factory=lambda: ["core", "memory", "wiki", "filesystem", "skill", "wechat", "mcp", "environment", "task", "plugin"]
+        default_factory=lambda: [
+            "core",
+            "memory",
+            "wiki",
+            "filesystem",
+            "skill",
+            "wechat",
+            "mcp",
+            "environment",
+            "task",
+            "schedule",
+            "plugin",
+        ]
     )
     terminal: list[str] = Field(
         default_factory=lambda: [
@@ -240,6 +271,7 @@ class AgentToolsetConfig(BaseModel):
             "mcp",
             "environment",
             "task",
+            "schedule",
             "browser",
             "database",
             "git",
@@ -259,6 +291,7 @@ class AgentToolsetConfig(BaseModel):
             "mcp",
             "environment",
             "task",
+            "schedule",
             "browser",
             "database",
             "git",
@@ -283,6 +316,7 @@ class AgentConfig(BaseModel):
     llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig)
     mcp: AgentMCPConfig = Field(default_factory=AgentMCPConfig)
     cache: AgentCacheConfig = Field(default_factory=AgentCacheConfig)
+    schedule: AgentScheduleConfig = Field(default_factory=AgentScheduleConfig)
     toolsets: AgentToolsetConfig = Field(default_factory=AgentToolsetConfig)
 
 
@@ -477,6 +511,18 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if agent_cache_skills := env.get("XBOT_AGENT_CACHE_SKILLS"):
         data.setdefault("agent", {}).setdefault("cache", {})["skills"] = _env_bool(
             agent_cache_skills
+        )
+    if agent_schedule_enabled := env.get("XBOT_AGENT_SCHEDULE_ENABLED"):
+        data.setdefault("agent", {}).setdefault("schedule", {})["enabled"] = _env_bool(
+            agent_schedule_enabled
+        )
+    if agent_schedule_tick := env.get("XBOT_AGENT_SCHEDULE_TICK_SECONDS"):
+        data.setdefault("agent", {}).setdefault("schedule", {})["tick_seconds"] = float(
+            agent_schedule_tick
+        )
+    if agent_schedule_max_due := env.get("XBOT_AGENT_SCHEDULE_MAX_DUE_PER_TICK"):
+        data.setdefault("agent", {}).setdefault("schedule", {})["max_due_per_tick"] = _env_int(
+            agent_schedule_max_due
         )
     if agent_wiki_enabled := env.get("XBOT_AGENT_WIKI_ENABLED"):
         data.setdefault("agent", {}).setdefault("wiki", {})["enabled"] = _env_bool(agent_wiki_enabled)

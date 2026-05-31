@@ -40,8 +40,11 @@ def test_load_default_config(monkeypatch):
         "mcp",
         "environment",
         "task",
+        "schedule",
         "plugin",
     ]
+    assert settings.agent.schedule.enabled is True
+    assert settings.agent.schedule.tick_seconds == 30.0
     assert settings.adapters.wechat869.enabled is False
 
 
@@ -68,6 +71,9 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ROOTS", "C:/tmp;D:/project")
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ALLOW_ALL_FILESYSTEM", "true")
     monkeypatch.setenv("XBOT_AGENT_CACHE_TOOL_RESULT_TTL_SECONDS", "90")
+    monkeypatch.setenv("XBOT_AGENT_SCHEDULE_ENABLED", "false")
+    monkeypatch.setenv("XBOT_AGENT_SCHEDULE_TICK_SECONDS", "15")
+    monkeypatch.setenv("XBOT_AGENT_SCHEDULE_MAX_DUE_PER_TICK", "3")
     monkeypatch.setenv("XBOT_AGENT_WIKI_DIRECTORY", "data/custom-wiki")
     monkeypatch.setenv("XBOT_AGENT_WIKI_DEFAULT", "project")
     monkeypatch.setenv("XBOT_AGENT_WIKI_QUERY_MAX_CHARS", "4096")
@@ -113,6 +119,9 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.workspace.allow_all_filesystem is True
     assert settings.agent.cache.enabled is True
     assert settings.agent.cache.tool_result_ttl_seconds == 90
+    assert settings.agent.schedule.enabled is False
+    assert settings.agent.schedule.tick_seconds == 15
+    assert settings.agent.schedule.max_due_per_tick == 3
     assert settings.agent.wiki.directory == "data/custom-wiki"
     assert settings.agent.wiki.default_wiki == "project"
     assert settings.agent.wiki.query_max_chars == 4096

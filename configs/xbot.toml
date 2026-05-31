@@ -132,6 +132,11 @@ static_prompt = true
 tool_results = true
 skills = true
 
+[agent.schedule]
+enabled = true
+tick_seconds = 30
+max_due_per_tick = 10
+
 [adapters.web]
 enabled = true
 
