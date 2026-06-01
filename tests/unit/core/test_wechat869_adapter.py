@@ -292,6 +292,24 @@ async def test_wechat869_ignores_self_system_messages() -> None:
 
 
 @pytest.mark.anyio
+async def test_wechat869_ignores_self_group_text_from_to_user_fallback() -> None:
+    queue = FakeQueue()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(bot_nickname="小小x"),
+        queue=queue,
+    )
+
+    await adapter._handle_ws_text(
+        '{"message":{"msg_id": "self-1", "msg_type": 1, '
+        '"from_user_name": {"str": "123@chatroom"}, '
+        '"to_user_name": {"str": "wxid_bot"}, '
+        '"content": {"str": "wxid_bot:\\n学姐 我刚刚回复的内容"}}}'
+    )
+
+    assert queue.items == []
+
+
+@pytest.mark.anyio
 async def test_wechat869_ignores_official_account_messages() -> None:
     queue = FakeQueue()
     adapter = Wechat869Adapter(Wechat869AdapterConfig(), queue=queue)

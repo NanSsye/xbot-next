@@ -235,6 +235,34 @@ async def test_wechat_ilink_poll_publishes_messages_and_updates_cursor():
 
 
 @pytest.mark.anyio
+async def test_wechat_ilink_poll_ignores_self_messages():
+    queue = FakeQueue()
+    client = FakeClient()
+    client.payload = {
+        "get_updates_buf": "cursor-next",
+        "msgs": [
+            {
+                "msg_id": "self1",
+                "message_type": 1,
+                "from_user_id": "bot-1",
+                "context_token": "ctx1",
+                "item_list": [{"type": 1, "text_item": {"text": "学姐 自己发的消息"}}],
+            }
+        ],
+    }
+    adapter = WechatIlinkAdapter(
+        WechatIlinkAdapterConfig(token="token", bot_wxid="bot-1"),
+        queue=queue,
+        client_factory=lambda: client,
+    )
+    adapter.client = client
+
+    await adapter._poll_once()
+
+    assert queue.items == []
+
+
+@pytest.mark.anyio
 async def test_wechat_ilink_defers_unquoted_file_messages():
     queue = FakeQueue()
     client = FakeClient()

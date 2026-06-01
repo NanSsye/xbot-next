@@ -326,7 +326,11 @@ class Wechat869Adapter(BaseAdapter):
             await self.queue.publish(MessageEnvelope.from_message(message))
 
     def _should_ignore_message(self, message: Message) -> bool:
-        bot_wxid = self.config.bot_wxid or getattr(self.client, "wxid", "")
+        bot_wxid = (
+            self.config.bot_wxid
+            or str(message.raw.get("bot_wxid") or "")
+            or getattr(self.client, "wxid", "")
+        )
         if bot_wxid and message.sender_id == bot_wxid:
             return True
         if self._is_ignored_conversation(message):

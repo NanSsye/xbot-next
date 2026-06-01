@@ -220,6 +220,14 @@ class WechatIlinkAdapter(BaseAdapter):
             if raw.get("message_type") != 1:
                 continue
             message = await self.normalize(raw)
+            if self._should_ignore_message(message):
+                logger.info(
+                    "WechatIlinkAdapter 丢弃自身消息: id={} sender={} content={}",
+                    message.id,
+                    message.sender_id,
+                    self._preview(message.content),
+                )
+                continue
             if not message.content:
                 continue
             if self._should_defer_media_message(message):
@@ -397,6 +405,14 @@ class WechatIlinkAdapter(BaseAdapter):
         if message.adapter != self.name or message.type not in {"image", "file"}:
             return False
         return not isinstance(message.raw.get("quote"), dict)
+
+    def _should_ignore_message(self, message: Message) -> bool:
+        bot_wxid = str(self.config.bot_wxid or message.raw.get("bot_wxid") or "")
+        if bot_wxid and message.sender_id == bot_wxid:
+            return True
+        sender_name = str(message.sender_name or message.raw.get("sender_name") or "").strip()
+        bot_nickname = str(self.config.bot_nickname or message.raw.get("bot_nickname") or "").strip()
+        return bool(sender_name and bot_nickname and sender_name == bot_nickname)
 
     async def _quote_from_item(self, item: dict, *, conversation_id: str) -> dict | None:
         ref = item.get("ref_msg")

@@ -39,6 +39,14 @@ class OpenClawBridgePlugin(PluginBase):
             return False
         if message.type not in {"text", "image", "file"}:
             return False
+        if self._is_self_message(message):
+            logger.info(
+                "OpenClawBridgePlugin 跳过机器人自身消息: id={} sender={} content={}",
+                message.id,
+                message.sender_id,
+                (message.content or "")[:80],
+            )
+            return False
         if self._is_message_processed(message):
             return True
         self._mark_processed(message)
@@ -235,6 +243,27 @@ class OpenClawBridgePlugin(PluginBase):
 
     def _mark_processed(self, message: Message) -> None:
         self._processed_messages[message.id] = time.time()
+
+    def _is_self_message(self, message: Message) -> bool:
+        raw = message.raw if isinstance(message.raw, dict) else {}
+        sender_candidates = {
+            str(message.sender_id or ""),
+            str(raw.get("sender_wxid") or ""),
+            str(raw.get("group_member_wxid") or ""),
+            str(raw.get("private_wxid") or ""),
+        }
+        bot_candidates = {
+            str(raw.get("bot_wxid") or ""),
+            str(raw.get("self_wxid") or ""),
+        }
+        sender_candidates.discard("")
+        bot_candidates.discard("")
+        if sender_candidates.intersection(bot_candidates):
+            return True
+
+        sender_name = str(message.sender_name or raw.get("sender_name") or "").strip()
+        bot_nickname = str(raw.get("bot_nickname") or "").strip()
+        return bool(sender_name and bot_nickname and sender_name == bot_nickname)
 
     def _safe_filename(self, filename: str, *, ext: str = "", fallback: str = "file") -> str:
         name = Path(filename or fallback).name

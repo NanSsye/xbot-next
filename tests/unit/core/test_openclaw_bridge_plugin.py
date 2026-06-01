@@ -107,3 +107,34 @@ async def test_openclaw_bridge_group_untriggered_stores_context(monkeypatch, tmp
     assert result is True
     assert FakeAsyncClient.calls[0]["url"] == "http://bridge.local/store_message"
     assert FakeAsyncClient.calls[0]["json"]["session_id"] == "group:room@chatroom:user:wxid_user"
+
+
+@pytest.mark.anyio
+async def test_openclaw_bridge_ignores_self_message_before_bridge_call(monkeypatch, tmp_path):
+    FakeAsyncClient.calls = []
+    FakeAsyncClient.responses = [FakeResponse({"accepted": True})]
+    monkeypatch.setattr("plugins.openclaw_bridge.main.httpx.AsyncClient", FakeAsyncClient)
+
+    plugin = OpenClawBridgePlugin()
+    message = Message(
+        id="self1",
+        platform="wechat",
+        adapter="wechat869",
+        conversation_id="room@chatroom",
+        sender_id="wxid_bot",
+        sender_name="小小x",
+        content="学姐 自己发的消息",
+        raw={
+            "scope": "group",
+            "sender_wxid": "wxid_bot",
+            "group_member_wxid": "wxid_bot",
+            "group_wxid": "room@chatroom",
+            "bot_wxid": "wxid_bot",
+            "bot_nickname": "小小x",
+        },
+    )
+
+    result = await plugin.on_message(message, _ctx(tmp_path))
+
+    assert result is False
+    assert FakeAsyncClient.calls == []
