@@ -323,6 +323,9 @@ class AgentConfig(BaseModel):
     allow_shell: bool = False
     allow_file_write: bool = True
     max_tool_iterations: int = 0
+    auto_delegate_channel_tasks: bool = True
+    max_inline_tool_result_chars: int = 20000
+    tool_result_artifact_dir: str = "data/agent_tool_results"
     workspace: AgentWorkspaceConfig = Field(default_factory=AgentWorkspaceConfig)
     approval: AgentApprovalConfig = Field(default_factory=AgentApprovalConfig)
     memory: AgentMemoryConfig = Field(default_factory=AgentMemoryConfig)
@@ -527,6 +530,14 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("agent", {})["allow_shell"] = _env_bool(agent_allow_shell)
     if agent_allow_file_write := env.get("XBOT_AGENT_ALLOW_FILE_WRITE"):
         data.setdefault("agent", {})["allow_file_write"] = _env_bool(agent_allow_file_write)
+    if agent_max_tool_iterations := env.get("XBOT_AGENT_MAX_TOOL_ITERATIONS"):
+        data.setdefault("agent", {})["max_tool_iterations"] = _env_int(agent_max_tool_iterations)
+    if agent_auto_delegate := env.get("XBOT_AGENT_AUTO_DELEGATE_CHANNEL_TASKS"):
+        data.setdefault("agent", {})["auto_delegate_channel_tasks"] = _env_bool(agent_auto_delegate)
+    if max_inline_tool_result := env.get("XBOT_AGENT_MAX_INLINE_TOOL_RESULT_CHARS"):
+        data.setdefault("agent", {})["max_inline_tool_result_chars"] = _env_int(max_inline_tool_result)
+    if tool_result_artifact_dir := env.get("XBOT_AGENT_TOOL_RESULT_ARTIFACT_DIR"):
+        data.setdefault("agent", {})["tool_result_artifact_dir"] = tool_result_artifact_dir
     if agent_workspace_root := env.get("XBOT_AGENT_WORKSPACE_ROOT"):
         data.setdefault("agent", {})["workspace_root"] = agent_workspace_root
     if agent_workspace_allow_all := env.get("XBOT_AGENT_WORKSPACE_ALLOW_ALL_FILESYSTEM"):

@@ -31,6 +31,8 @@ import type {
   AdapterStatus,
   AgentEvent,
   AgentMemoryInfo,
+  AgentTask,
+  AgentTaskDetail,
   AgentToolInfo,
   BackgroundTask,
   Conversation,
@@ -43,7 +45,7 @@ import type {
   UiEvent,
 } from "../types";
 
-type View = "chat" | "overview" | "agent" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
+type View = "chat" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
 type DeliveryMode = "console" | "channel";
 type ThemeMode = "system" | "light" | "dark";
 type ConsoleMessage = {
@@ -57,6 +59,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof MessagesSquare }> 
   { id: "chat", label: "对话", icon: MessagesSquare },
   { id: "overview", label: "总览", icon: Activity },
   { id: "agent", label: "Agent", icon: Bot },
+  { id: "tasks", label: "任务", icon: Activity },
   { id: "channels", label: "通道", icon: Network },
   { id: "extensions", label: "扩展", icon: Package },
   { id: "background", label: "后台任务", icon: Clock3 },
@@ -88,6 +91,9 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [consoleMessagesByContext, setConsoleMessagesByContext] = useState<Record<string, ConsoleMessage[]>>({});
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [selectedTaskDetail, setSelectedTaskDetail] = useState<AgentTaskDetail | null>(null);
   const [tools, setTools] = useState<AgentToolInfo[]>([]);
   const [llmStatus, setLlmStatus] = useState<Record<string, unknown> | null>(null);
   const [mcpStatus, setMcpStatus] = useState<Record<string, unknown> | null>(null);
@@ -135,6 +141,7 @@ export function App() {
         nextSkills,
         nextConversations,
         nextEvents,
+        nextTasks,
         nextTools,
         nextLlmStatus,
         nextMcpStatus,
@@ -149,6 +156,7 @@ export function App() {
           api.skills(),
           api.conversations(),
           api.agentEvents(80),
+          api.agentTasks(80),
           api.tools(),
           api.llmStatus(),
           api.mcpStatus(),
@@ -162,6 +170,7 @@ export function App() {
       setSkills(nextSkills);
       setConversations(nextConversations);
       setEvents(nextEvents);
+      setAgentTasks(nextTasks);
       setTools(nextTools);
       setLlmStatus(nextLlmStatus);
       setMcpStatus(nextMcpStatus);
@@ -171,10 +180,13 @@ export function App() {
       if (!selectedConversationId && nextConversations.length > 0) {
         setSelectedConversationId(nextConversations[0].id);
       }
+      if (!selectedTaskId && nextTasks.length > 0) {
+        setSelectedTaskId(nextTasks[0].task_id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [selectedConversationId]);
+  }, [selectedConversationId, selectedTaskId]);
 
   useEffect(() => {
     void loadAll();
@@ -211,11 +223,35 @@ export function App() {
   }, [selectedConversationId]);
 
   useEffect(() => {
+    if (!selectedTaskId) {
+      setSelectedTaskDetail(null);
+      return;
+    }
+    api
+      .agentTaskDetail(selectedTaskId)
+      .then(setSelectedTaskDetail)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [selectedTaskId]);
+
+  useEffect(() => {
     const socket = new WebSocket(wsUrl());
     socket.onmessage = (event) => {
       try {
         const item = JSON.parse(event.data) as UiEvent;
         setLiveEvents((current) => [item, ...current].slice(0, 100));
+        if (item.type === "agent.event") {
+          const agentEvent = item.data as AgentEvent;
+          setEvents((current) => [agentEvent, ...current].slice(0, 200));
+          if (agentEvent.task_id === selectedTaskId) {
+            void api.agentTaskDetail(agentEvent.task_id).then(setSelectedTaskDetail).catch(() => undefined);
+          }
+          if (agentEvent.type === "task.completed") {
+            void api.agentTasks(80).then(setAgentTasks).catch(() => undefined);
+          }
+        }
+        if (item.type === "background_task.updated") {
+          void api.backgroundTasks(50).then(setBackgroundTasks).catch(() => undefined);
+        }
       } catch {
         // Ignore malformed event frames.
       }
@@ -233,7 +269,7 @@ export function App() {
       ]);
     };
     return () => socket.close();
-  }, [wsRevision]);
+  }, [wsRevision, selectedTaskId]);
 
   const requiresToken = error.toLowerCase().includes("unauthorized");
 
@@ -632,6 +668,19 @@ export function App() {
             deleteMemory={deleteMemory}
             compactMemories={compactMemories}
             refresh={loadAll}
+          />
+        )}
+        {view === "tasks" && (
+          <TaskMonitor
+            tasks={agentTasks}
+            selectedTaskId={selectedTaskId}
+            setSelectedTaskId={setSelectedTaskId}
+            detail={selectedTaskDetail}
+            refresh={async () => {
+              const next = await api.agentTasks(80);
+              setAgentTasks(next);
+              if (selectedTaskId) setSelectedTaskDetail(await api.agentTaskDetail(selectedTaskId));
+            }}
           />
         )}
         {view === "channels" && (
@@ -1373,6 +1422,178 @@ function ManageList<T extends { name: string; version: string; description: stri
         )}
       </div>
     </div>
+  );
+}
+
+function TaskMonitor({
+  tasks,
+  selectedTaskId,
+  setSelectedTaskId,
+  detail,
+  refresh,
+}: {
+  tasks: AgentTask[];
+  selectedTaskId: string;
+  setSelectedTaskId: (value: string) => void;
+  detail: AgentTaskDetail | null;
+  refresh: () => Promise<void>;
+}) {
+  return (
+    <section className="task-monitor-grid">
+      <div className="panel task-list-panel">
+        <div className="panel-title panel-title--with-action">
+          <div>
+            <span>任务轨迹</span>
+            <small>{tasks.length} 个最近任务</small>
+          </div>
+          <button className="ghost-button" onClick={() => void refresh()}>
+            <RefreshCw size={14} />
+            刷新
+          </button>
+        </div>
+        <div className="task-list-scroll">
+          {tasks.length === 0 ? (
+            <EmptyState title="暂无任务" text="页面对话、通道唤醒和后台 Agent 执行后会生成任务轨迹。" />
+          ) : (
+            tasks.map((task) => (
+              <button
+                key={task.task_id}
+                className={`task-list-item ${selectedTaskId === task.task_id ? "task-list-item--active" : ""}`}
+                onClick={() => setSelectedTaskId(task.task_id)}
+              >
+                <div className="task-list-item__head">
+                  <strong>{shortId(task.task_id)}</strong>
+                  <StatusPill label={task.status} tone={taskTone(task.status)} />
+                </div>
+                <span>{task.source}</span>
+                <p>{task.input || task.output || "-"}</p>
+                <small>{formatDate(task.created_at)}</small>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="panel task-detail-panel">
+        {!detail ? (
+          <EmptyState title="未选择任务" text="选择左侧任务后，这里会展示工具调用、时间线和失败修复建议。" />
+        ) : (
+          <>
+            <div className="panel-title task-detail-title">
+              <div>
+                <span>{shortId(detail.task.task_id)}</span>
+                <small>{detail.task.source}</small>
+              </div>
+              <div className="row-actions">
+                <StatusPill label={detail.task.status} tone={taskTone(detail.task.status)} />
+                <button
+                  className="ghost-button"
+                  onClick={async () => {
+                    await api.resumeAgentTask(detail.task.task_id);
+                    await refresh();
+                  }}
+                >
+                  <Play size={14} />
+                  继续
+                </button>
+              </div>
+            </div>
+            <div className="task-summary-grid">
+              <Metric label="事件" value={String(detail.summary.event_count ?? 0)} />
+              <Metric label="工具调用" value={String(detail.summary.tool_started ?? 0)} />
+              <Metric label="失败" value={String(detail.summary.tool_failed ?? 0)} />
+              <Metric label="LLM 轮次" value={String(detail.summary.llm_iterations ?? 0)} />
+            </div>
+            <div className="task-detail-scroll">
+              <section className="task-section">
+                <h3>工具流</h3>
+                {detail.tool_calls.length === 0 ? (
+                  <p className="muted">这个任务没有工具调用。</p>
+                ) : (
+                  detail.tool_calls.map((call, index) => (
+                    <details key={`${call.tool}-${index}`} className={`tool-call-card tool-call-card--${call.status}`} open={index === detail.tool_calls.length - 1}>
+                      <summary>
+                        <span>{call.tool}</span>
+                        <StatusPill label={call.status} tone={taskTone(call.status)} />
+                      </summary>
+                      <div className="tool-call-card__body">
+                        <KeyValue label="开始" value={formatDate(call.started_at)} />
+                        <KeyValue label="结束" value={formatDate(call.finished_at)} />
+                        {call.error ? <div className="tool-error">{call.error}</div> : null}
+                        <div className="tool-json-grid">
+                          <pre>{stringify(call.input ?? {})}</pre>
+                          <pre>{stringify(call.output ?? call.fallback ?? {})}</pre>
+                        </div>
+                      </div>
+                    </details>
+                  ))
+                )}
+              </section>
+
+              {detail.repairs.length > 0 ? (
+                <section className="task-section">
+                  <h3>失败修复建议</h3>
+                  <div className="repair-list">
+                    {detail.repairs.map((repair, index) => (
+                      <article key={`${repair.tool}-${index}`} className="repair-card">
+                        <div className="repair-card__head">
+                          <strong>{repair.tool || "-"}</strong>
+                          <StatusPill label={repair.error_type || "failed"} tone="warn" />
+                        </div>
+                        <p>{repair.guidance || repair.error}</p>
+                        {repair.repair_steps?.length ? (
+                          <ol>
+                            {repair.repair_steps.map((step) => (
+                              <li key={step}>{step}</li>
+                            ))}
+                          </ol>
+                        ) : null}
+                        {repair.suggested_tool ? (
+                          <pre>{stringify({ tool: repair.suggested_tool, payload: repair.suggested_payload })}</pre>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              {detail.artifacts.length > 0 ? (
+                <section className="task-section">
+                  <h3>产物</h3>
+                  <div className="repair-list">
+                    {detail.artifacts.map((artifact) => (
+                      <article key={artifact.id} className="repair-card">
+                        <div className="repair-card__head">
+                          <strong>{artifact.kind}</strong>
+                          <small>{formatDate(artifact.created_at)}</small>
+                        </div>
+                        <p>{artifact.summary || artifact.path}</p>
+                        <pre>{stringify({ path: artifact.path, hash: artifact.content_hash, metadata: artifact.metadata })}</pre>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              <section className="task-section">
+                <h3>时间线</h3>
+                <div className="timeline-list">
+                  {detail.timeline.map((item, index) => (
+                    <details key={`${item.type}-${index}`} className="timeline-item">
+                      <summary>
+                        <span>{item.title}</span>
+                        <small>{formatDate(item.created_at)}</small>
+                      </summary>
+                      <pre>{stringify(item.content)}</pre>
+                    </details>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 

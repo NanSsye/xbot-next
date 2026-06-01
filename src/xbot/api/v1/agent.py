@@ -15,6 +15,10 @@ class AgentTaskRequest(BaseModel):
     source: str = "api"
 
 
+class AgentTaskResumeRequest(BaseModel):
+    source: str | None = None
+
+
 class AgentToolExecuteRequest(BaseModel):
     payload: dict = {}
     task_id: str | None = None
@@ -181,6 +185,32 @@ async def validate_policy(ctx: AppContext = Depends(get_context)) -> dict:
 async def create_task(payload: AgentTaskRequest, ctx: AppContext = Depends(get_context)) -> dict:
     result = await ctx.agent.run_task(payload.input, source=payload.source)
     return {"success": True, "data": result.model_dump()}
+
+
+@router.get("/tasks")
+async def list_tasks(limit: int = 50, ctx: AppContext = Depends(get_context)) -> dict:
+    return {"success": True, "data": await ctx.agent.list_tasks(limit=limit)}
+
+
+@router.get("/tasks/{task_id}")
+async def get_task_detail(task_id: str, ctx: AppContext = Depends(get_context)) -> dict:
+    detail = await ctx.agent.get_task_detail(task_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Agent task not found: {task_id}")
+    return {"success": True, "data": detail}
+
+
+@router.post("/tasks/{task_id}/resume")
+async def resume_task(
+    task_id: str,
+    payload: AgentTaskResumeRequest | None = None,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    try:
+        result = await ctx.agent.resume_task(task_id, source=payload.source if payload else None)
+    except XBotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"success": True, "data": result.model_dump(mode="json")}
 
 
 @router.get("/events")

@@ -24,6 +24,8 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.workspace.roots == ["."]
     assert settings.agent.llm.enabled is False
     assert settings.agent.llm.provider == "openai_compatible"
+    assert settings.agent.max_inline_tool_result_chars == 20000
+    assert settings.agent.tool_result_artifact_dir == "data/agent_tool_results"
     assert settings.agent.memory.short_term_enabled is True
     assert settings.agent.memory.short_term_recent_turns == 0
     assert settings.agent.memory.short_term_max_tokens == 128000
@@ -87,6 +89,10 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_AGENT_ADMIN_MODE_ALLOWED", "admin")
     monkeypatch.setenv("XBOT_AGENT_MODE", "admin")
     monkeypatch.setenv("XBOT_AGENT_ALLOW_SHELL", "true")
+    monkeypatch.setenv("XBOT_AGENT_MAX_TOOL_ITERATIONS", "12")
+    monkeypatch.setenv("XBOT_AGENT_AUTO_DELEGATE_CHANNEL_TASKS", "false")
+    monkeypatch.setenv("XBOT_AGENT_MAX_INLINE_TOOL_RESULT_CHARS", "12345")
+    monkeypatch.setenv("XBOT_AGENT_TOOL_RESULT_ARTIFACT_DIR", "data/custom-tool-results")
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ROOTS", "C:/tmp;D:/project")
     monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ALLOW_ALL_FILESYSTEM", "true")
     monkeypatch.setenv("XBOT_AGENT_CACHE_TOOL_RESULT_TTL_SECONDS", "90")
@@ -145,6 +151,10 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.mode == "admin"
     assert settings.agent.admin_mode_allowed is True
     assert settings.agent.allow_shell is True
+    assert settings.agent.max_tool_iterations == 12
+    assert settings.agent.auto_delegate_channel_tasks is False
+    assert settings.agent.max_inline_tool_result_chars == 12345
+    assert settings.agent.tool_result_artifact_dir == "data/custom-tool-results"
     assert settings.agent.workspace.roots == ["C:/tmp", "D:/project"]
     assert settings.agent.workspace.allow_all_filesystem is True
     assert settings.agent.cache.enabled is True

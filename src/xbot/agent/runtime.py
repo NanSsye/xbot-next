@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import mimetypes
 import re
 from pathlib import Path
@@ -23,6 +24,7 @@ from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
 from xbot.agent.policy import PolicyEngine
 from xbot.agent.scheduler import ScheduledJobManager
+from xbot.agent.todo import TodoManager
 from xbot.agent.tool_executor import ToolExecutor
 from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
 from xbot.agent.tools import register_builtin_tools
@@ -112,6 +114,7 @@ class AgentRuntime:
             query_max_chars=config.wiki.query_max_chars,
         ) if config.wiki.enabled else None
         self.compressor = MemoryCompressor()
+        self.todos = TodoManager(Path(config.memory.directory) / "todos.json")
         self.planner = AgentPlanner()
         self.llm = llm_provider or create_llm_provider(config.llm)
         self._tool_result_cache = TTLCache(config.cache.tool_result_ttl_seconds)
@@ -146,6 +149,7 @@ class AgentRuntime:
             run_agent=self._run_agent_for_task,
         )
         register_schedule_tools(self.tools, scheduler=self.scheduler)
+        self._register_todo_tool()
         self._register_wechat_send_tools()
 
     async def start(self) -> None:
@@ -357,6 +361,7 @@ class AgentRuntime:
             )
             return result
         logger.info("Agent 工具调用开始: task_id={} tool={} source={}", task_id, tool_name, source)
+        pre_artifact_snapshot = self._pre_tool_artifact_snapshot(tool_name, payload)
         await self._add_event(
             task_id,
             "tool.started",
@@ -422,6 +427,19 @@ class AgentRuntime:
             auto_result = await self._auto_fallback(task_id, fallback)
             if auto_result is not None:
                 fallback["auto_result"] = auto_result
+            await self._add_event(
+                task_id,
+                "tool.repair_plan",
+                {
+                    "tool": tool_name,
+                    "error_type": fallback.get("error_type"),
+                    "guidance": fallback.get("guidance"),
+                    "repair_steps": fallback.get("repair_steps") or [],
+                    "suggested_tool": fallback.get("suggested_tool"),
+                    "suggested_payload": fallback.get("suggested_payload"),
+                    "auto_result": fallback.get("auto_result"),
+                },
+            )
             logger.warning(
                 "Agent 工具调用失败: task_id={} tool={} error={}",
                 task_id,
@@ -455,6 +473,7 @@ class AgentRuntime:
         if tool.invalidates_cache:
             self._tool_result_cache.clear()
             logger.info("Agent 工具缓存已清空: task_id={} tool={}", task_id, tool_name)
+        await self._validate_tool_result(task_id, tool_name, payload, output, pre_artifact_snapshot=pre_artifact_snapshot)
         await self._add_event(
             task_id,
             "tool.completed",
@@ -465,6 +484,268 @@ class AgentRuntime:
             },
         )
         return result
+
+    async def _validate_tool_result(
+        self,
+        task_id: str,
+        tool_name: str,
+        payload: dict,
+        output: object,
+        *,
+        pre_artifact_snapshot: dict[str, tuple[int, int]] | None = None,
+    ) -> None:
+        if tool_name == "filesystem.write_file":
+            path = str(payload.get("path") or payload.get("file_path") or payload.get("filename") or "")
+            if not path:
+                return
+            target = self.workspace._resolve(path)
+            if target.is_file():
+                size = target.stat().st_size
+                await self._register_artifact(
+                    task_id,
+                    kind="file",
+                    path=target,
+                    summary=f"filesystem.write_file wrote {path} ({size} bytes)",
+                    metadata={"tool": tool_name, "requested_path": path, "size": size},
+                )
+                await self._add_event(
+                    task_id,
+                    "tool.validation_passed",
+                    {"tool": tool_name, "path": str(target), "size": size},
+                )
+            else:
+                await self._add_event(
+                    task_id,
+                    "tool.validation_failed",
+                    {"tool": tool_name, "path": str(target), "reason": "written path is not a file"},
+                )
+            return
+        if tool_name == "shell.exec" and isinstance(output, dict):
+            failed = output.get("timed_out") is True or output.get("returncode") not in (None, 0)
+            event_type = "tool.validation_failed" if failed else "tool.validation_passed"
+            if not failed:
+                await self._register_changed_artifacts(
+                    task_id,
+                    tool_name=tool_name,
+                    base_path=Path(str(output.get("cwd") or self.workspace.root)),
+                    before=pre_artifact_snapshot or {},
+                    metadata={"command": output.get("command"), "cwd": output.get("cwd")},
+                )
+            await self._add_event(
+                task_id,
+                event_type,
+                {
+                    "tool": tool_name,
+                    "command": output.get("command"),
+                    "cwd": output.get("cwd"),
+                    "returncode": output.get("returncode"),
+                    "timed_out": output.get("timed_out"),
+                },
+            )
+            return
+        if tool_name in {"skill.run", "skill.manage"}:
+            await self._register_output_path_artifacts(task_id, tool_name=tool_name, output=output)
+        if tool_name == "skill.manage" and isinstance(output, dict) and output.get("success"):
+            path = output.get("path") or output.get("file_path")
+            if path:
+                target = Path(str(path))
+                if not target.is_absolute():
+                    target = self.workspace.root / target
+                if target.exists():
+                    await self._register_artifact(
+                        task_id,
+                        kind="skill",
+                        path=target,
+                        summary=f"skill.manage {output.get('action') or ''} {output.get('name') or ''}".strip(),
+                        metadata={"tool": tool_name, "output": self._summarize_payload(output)},
+                    )
+
+    def _pre_tool_artifact_snapshot(self, tool_name: str, payload: dict) -> dict[str, tuple[int, int]] | None:
+        if tool_name != "shell.exec":
+            return None
+        try:
+            base_path = self.workspace._resolve(
+                str(payload.get("cwd") or payload.get("workdir") or payload.get("working_directory") or ".")
+            )
+        except Exception:
+            return None
+        return self._file_snapshot(base_path)
+
+    def _file_snapshot(self, base_path: Path, *, max_files: int = 2000) -> dict[str, tuple[int, int]]:
+        if not base_path.exists():
+            return {}
+        if base_path.is_file():
+            stat = base_path.stat()
+            return {str(base_path.resolve()): (stat.st_mtime_ns, stat.st_size)}
+        snapshot: dict[str, tuple[int, int]] = {}
+        ignored = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", "dist"}
+        try:
+            for item in base_path.rglob("*"):
+                if len(snapshot) >= max_files:
+                    break
+                if any(part in ignored for part in item.parts):
+                    continue
+                if not item.is_file():
+                    continue
+                stat = item.stat()
+                snapshot[str(item.resolve())] = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return snapshot
+        return snapshot
+
+    async def _register_changed_artifacts(
+        self,
+        task_id: str,
+        *,
+        tool_name: str,
+        base_path: Path,
+        before: dict[str, tuple[int, int]],
+        metadata: dict | None = None,
+    ) -> None:
+        after = self._file_snapshot(base_path)
+        changed = [
+            Path(path)
+            for path, stamp in after.items()
+            if path not in before or before.get(path) != stamp
+        ][:50]
+        for path in changed:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            await self._register_artifact(
+                task_id,
+                kind="file",
+                path=path,
+                summary=f"{tool_name} generated or modified {path.name} ({size} bytes)",
+                metadata={"tool": tool_name, "size": size, **(metadata or {})},
+            )
+
+    async def _register_output_path_artifacts(self, task_id: str, *, tool_name: str, output: object) -> None:
+        for path in self._extract_existing_output_paths(output)[:30]:
+            await self._register_artifact(
+                task_id,
+                kind="skill" if tool_name.startswith("skill.") else "file",
+                path=path,
+                summary=f"{tool_name} produced {path.name}",
+                metadata={"tool": tool_name},
+            )
+
+    def _extract_existing_output_paths(self, value: object) -> list[Path]:
+        candidates: list[str] = []
+
+        def visit(item: object) -> None:
+            if isinstance(item, dict):
+                for key, nested in item.items():
+                    key_text = str(key).lower()
+                    if key_text in {"path", "file_path", "local_path", "output_path", "artifact_path"} and isinstance(nested, str):
+                        candidates.append(nested)
+                    else:
+                        visit(nested)
+            elif isinstance(item, list):
+                for nested in item:
+                    visit(nested)
+
+        visit(value)
+        paths = []
+        seen = set()
+        for candidate in candidates:
+            if not candidate.strip():
+                continue
+            path = Path(candidate)
+            if not path.is_absolute():
+                path = self.workspace.root / path
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if str(resolved) in seen or not resolved.exists() or not resolved.is_file():
+                continue
+            seen.add(str(resolved))
+            paths.append(resolved)
+        return paths
+
+    async def _register_artifact(
+        self,
+        task_id: str,
+        *,
+        kind: str,
+        path: Path,
+        summary: str = "",
+        metadata: dict | None = None,
+    ) -> dict:
+        resolved = path.resolve()
+        digest = self._file_hash(resolved) if resolved.is_file() else None
+        artifact = {
+            "id": str(uuid4()),
+            "task_id": task_id,
+            "kind": kind,
+            "path": str(resolved),
+            "content_hash": digest,
+            "summary": summary,
+            "metadata": metadata or {},
+            "created_at": datetime.utcnow(),
+        }
+        if self.repository_provider:
+            async with self.repository_provider() as repo:
+                if hasattr(repo, "add_artifact"):
+                    await repo.add_artifact(artifact)
+        event_content = dict(artifact)
+        event_content["created_at"] = artifact["created_at"].isoformat()
+        await self._add_event(task_id, "artifact.created", event_content)
+        return artifact
+
+    def _file_hash(self, path: Path) -> str | None:
+        try:
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except OSError:
+            return None
+
+    def _register_todo_tool(self) -> None:
+        async def todo_handler(payload: dict):
+            return self.todos.handle(payload)
+
+        self.tools.register(
+            ToolDefinition(
+                name="todo",
+                description=(
+                    "Manage the active task list for the current session. Use for complex tasks with 3+ steps, "
+                    "long implementation work, or when the user says continue. Call without todos to read. "
+                    "Call with todos=[{id, content, status}] to write; use merge=true to update by id. "
+                    "Only one item should be in_progress at a time. Mark items completed immediately when done."
+                ),
+                risk_level="write",
+                handler=todo_handler,
+                toolset="core",
+                source="builtin",
+                timeout_seconds=10,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "todos": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["id", "content", "status"],
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "content": {"type": "string"},
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["pending", "in_progress", "completed", "cancelled"],
+                                    },
+                                },
+                            },
+                        },
+                        "merge": {"type": "boolean", "default": False},
+                    },
+                },
+            )
+        )
 
     def _register_wechat_send_tools(self) -> None:
         self.tools.register(
@@ -692,6 +973,251 @@ class AgentRuntime:
             }
             for record in records
         ]
+
+    async def list_tasks(self, limit: int = 50) -> list[dict]:
+        if not self.repository_provider:
+            return []
+        async with self.repository_provider() as repo:
+            records = await repo.list_tasks(limit)
+        return [self._task_record_to_dict(record) for record in records]
+
+    async def get_task_detail(self, task_id: str, *, event_limit: int = 300) -> dict | None:
+        if not self.repository_provider:
+            return None
+        async with self.repository_provider() as repo:
+            task = await repo.get_task(task_id)
+            if task is None:
+                return None
+            events = await repo.list_events(task_id=task_id, limit=event_limit)
+            artifacts = await repo.list_artifacts(task_id, limit=100) if hasattr(repo, "list_artifacts") else []
+        parsed_events = [
+            {
+                "id": record.id,
+                "task_id": record.task_id,
+                "type": record.type,
+                "content": self._event_content(record.content),
+                "created_at": record.created_at.isoformat(),
+            }
+            for record in events
+        ]
+        return {
+            "task": self._task_record_to_dict(task),
+            "events": parsed_events,
+            "timeline": self._task_timeline(parsed_events),
+            "tool_calls": self._task_tool_calls(parsed_events),
+            "repairs": self._task_repair_suggestions(parsed_events),
+            "artifacts": [self._artifact_record_to_dict(record) for record in artifacts],
+            "summary": self._task_detail_summary(parsed_events),
+        }
+
+    async def resume_task(self, task_id: str, *, source: str | None = None) -> AgentResult:
+        detail = await self.get_task_detail(task_id)
+        if detail is None:
+            raise XBotError(f"Agent task not found: {task_id}")
+        task = detail["task"]
+        resume_source = source or task.get("source") or "api"
+        resume_input = self._resume_task_input(detail)
+        if self.repository_provider:
+            async with self.repository_provider() as repo:
+                if hasattr(repo, "mark_task_running"):
+                    await repo.mark_task_running(task_id)
+        await self._add_event(
+            task_id,
+            "task.resumed",
+            {
+                "source": resume_source,
+                "previous_status": task.get("status"),
+                "previous_updated_at": task.get("updated_at"),
+            },
+        )
+        output = await self._run_llm(task_id, resume_input, source=resume_source)
+        result = AgentResult(
+            task_id=task_id,
+            source=resume_source,
+            status="completed",
+            output=output,
+            suppress_channel_reply=task_id in self._suppress_channel_reply_task_ids,
+        )
+        self._suppress_channel_reply_task_ids.discard(task_id)
+        if self.repository_provider:
+            async with self.repository_provider() as repo:
+                await repo.finish_task(result)
+        await self._add_event(task_id, "task.resume_completed", result.output)
+        await self._add_event(task_id, "task.completed", result.output)
+        return result
+
+    def _task_record_to_dict(self, record) -> dict:
+        return {
+            "task_id": record.id,
+            "source": record.source,
+            "status": record.status,
+            "input": record.input,
+            "output": record.result or "",
+            "created_at": record.created_at.isoformat(),
+            "updated_at": record.updated_at.isoformat(),
+        }
+
+    def _artifact_record_to_dict(self, record) -> dict:
+        metadata = {}
+        try:
+            metadata = json.loads(record.metadata_json or "{}")
+        except Exception:
+            metadata = {}
+        return {
+            "id": record.id,
+            "task_id": record.task_id,
+            "kind": record.kind,
+            "path": record.path,
+            "content_hash": record.content_hash,
+            "summary": record.summary,
+            "metadata": metadata,
+            "created_at": record.created_at.isoformat(),
+        }
+
+    def _resume_task_input(self, detail: dict) -> str:
+        task = detail["task"]
+        tool_calls = detail.get("tool_calls") or []
+        repairs = detail.get("repairs") or []
+        artifacts = detail.get("artifacts") or []
+        return (
+            "Resume interrupted Agent task.\n"
+            "Continue from the recorded task trajectory. Do not repeat completed dangerous/write operations unless "
+            "you first inspect the current state and have a concrete reason. Use todo state, artifacts, tool results, "
+            "and repair suggestions to continue. Return final only when the original task is complete or blocked.\n"
+            f"original_task_id: {task.get('task_id')}\n"
+            f"original_source: {task.get('source')}\n"
+            f"original_status: {task.get('status')}\n"
+            f"original_input:\n{task.get('input') or ''}\n"
+            f"last_output:\n{task.get('output') or '-'}\n"
+            f"tool_calls:\n{json.dumps(tool_calls[-20:], ensure_ascii=False, default=str)}\n"
+            f"artifacts:\n{json.dumps(artifacts[-20:], ensure_ascii=False, default=str)}\n"
+            f"repair_suggestions:\n{json.dumps(repairs[-10:], ensure_ascii=False, default=str)}\n"
+        )
+
+    def _task_timeline(self, events: list[dict]) -> list[dict]:
+        items = []
+        for event in events:
+            content = event.get("content")
+            if not isinstance(content, dict):
+                content = {"text": content}
+            event_type = str(event.get("type") or "")
+            if event_type == "tool.started":
+                title = f"调用工具 {content.get('tool') or '-'}"
+                status = "running"
+            elif event_type in {"tool.completed", "tool.cache_hit", "tool.fallback_completed"}:
+                title = f"工具完成 {content.get('tool') or '-'}"
+                status = "completed"
+            elif event_type in {"tool.failed", "tool.denied"}:
+                title = f"工具失败 {content.get('tool') or '-'}"
+                status = "failed"
+            elif event_type == "llm.started":
+                title = f"LLM 开始 iteration={content.get('iteration', 0)}"
+                status = "running"
+            elif event_type == "llm.completed":
+                title = f"LLM 完成 iteration={content.get('iteration', 0)}"
+                status = "completed"
+            elif event_type.startswith("task."):
+                title = event_type
+                status = "completed" if event_type == "task.completed" else "running"
+            else:
+                title = event_type
+                status = "neutral"
+            items.append(
+                {
+                    "type": event_type,
+                    "title": title,
+                    "status": status,
+                    "content": content,
+                    "created_at": event.get("created_at"),
+                }
+            )
+        return items
+
+    def _task_tool_calls(self, events: list[dict]) -> list[dict]:
+        calls: list[dict] = []
+        pending: dict[str, dict] = {}
+        for event in events:
+            content = event.get("content")
+            if not isinstance(content, dict):
+                continue
+            event_type = str(event.get("type") or "")
+            tool = str(content.get("tool") or "")
+            if not tool:
+                continue
+            if event_type == "tool.started":
+                item = {
+                    "tool": tool,
+                    "status": "running",
+                    "risk_level": content.get("risk_level"),
+                    "input": content.get("input"),
+                    "started_at": event.get("created_at"),
+                    "finished_at": None,
+                    "output": None,
+                    "error": None,
+                    "fallback": None,
+                }
+                calls.append(item)
+                pending[tool] = item
+                continue
+            item = pending.get(tool) or {
+                "tool": tool,
+                "started_at": None,
+                "input": None,
+                "risk_level": content.get("risk_level"),
+            }
+            if item not in calls:
+                calls.append(item)
+            item["status"] = {
+                "tool.completed": "completed",
+                "tool.cache_hit": "cached",
+                "tool.failed": "failed",
+                "tool.denied": "denied",
+                "tool.fallback_completed": "repaired",
+            }.get(event_type, event_type)
+            item["finished_at"] = event.get("created_at")
+            item["output"] = content.get("output")
+            item["error"] = content.get("error")
+            item["fallback"] = content.get("fallback")
+        return calls
+
+    def _task_repair_suggestions(self, events: list[dict]) -> list[dict]:
+        repairs = []
+        for event in events:
+            if event.get("type") not in {"tool.failed", "tool.denied"}:
+                continue
+            content = event.get("content")
+            if not isinstance(content, dict):
+                continue
+            fallback = content.get("fallback")
+            if not isinstance(fallback, dict):
+                continue
+            repairs.append(
+                {
+                    "tool": content.get("tool"),
+                    "error": content.get("error"),
+                    "error_type": fallback.get("error_type"),
+                    "guidance": fallback.get("guidance"),
+                    "repair_steps": fallback.get("repair_steps") or [],
+                    "suggested_tool": fallback.get("suggested_tool"),
+                    "suggested_payload": fallback.get("suggested_payload"),
+                    "auto_result": fallback.get("auto_result"),
+                    "created_at": event.get("created_at"),
+                }
+            )
+        return repairs
+
+    def _task_detail_summary(self, events: list[dict]) -> dict:
+        counts: dict[str, int] = {}
+        for event in events:
+            event_type = str(event.get("type") or "unknown")
+            counts[event_type] = counts.get(event_type, 0) + 1
+        return {
+            "event_count": len(events),
+            "tool_started": counts.get("tool.started", 0),
+            "tool_completed": counts.get("tool.completed", 0) + counts.get("tool.cache_hit", 0),
+            "tool_failed": counts.get("tool.failed", 0) + counts.get("tool.denied", 0),
+            "llm_iterations": counts.get("llm.started", 0),
+        }
 
     def _event_content(self, content: str) -> object:
         try:
@@ -999,7 +1525,7 @@ class AgentRuntime:
             return
         for storage_record in records:
             record = BackgroundTaskRecord.from_storage(storage_record)
-            if record.status in {"completed", "cancelled"}:
+            if record.status in {"completed", "cancelled", "failed", "stale"}:
                 self.background.remember(record)
                 continue
             if self._can_replay_background_task(record):
@@ -1012,11 +1538,10 @@ class AgentRuntime:
                 self.background.replay(record, runner)
                 logger.info("Background task replay queued: task_id={} tool={}", record.id, tool_name)
             else:
-                record.status = "failed"
-                record.error = record.error or "Background task was interrupted and is not replayable."
-                record.finished_at = datetime.utcnow()
-                self.background.remember(record)
-                self.background._persist_later(record)
+                self.background.mark_stale(
+                    record,
+                    reason=record.error or "Background task was interrupted and is not replayable.",
+                )
 
     def _can_replay_background_task(self, record: BackgroundTaskRecord) -> bool:
         metadata = record.metadata or {}
@@ -1078,6 +1603,8 @@ class AgentRuntime:
         source: str = "api",
         attachments: list[dict] | None = None,
     ) -> str:
+        if self._should_delegate_channel_task(source, input_text):
+            return await self._start_delegated_channel_task(task_id, input_text, source=source)
         history_key = self._session_history_key(source)
         native_tools, native_tool_map = self._native_tools_for_source(source)
         messages = [
@@ -1095,6 +1622,8 @@ class AgentRuntime:
         last_content = ""
         iteration = 0
         missing_tool_reprompts = 0
+        tool_trace: list[dict] = []
+        background_results: list[dict] = []
         while True:
             await self._add_event(
                 task_id,
@@ -1157,6 +1686,10 @@ class AgentRuntime:
             if not plan.tool_calls:
                 cleaned = self.planner.clean_final_output(plan.final or response.content)
                 requires_tools = self._source_can_force_tool_use(source) and self._request_requires_tools(input_text)
+                pending_tool_work = self._source_can_force_tool_use(source) and self._final_implies_pending_tool_work(
+                    cleaned
+                )
+                active_todo_work = self._source_can_force_tool_use(source) and self._has_active_todo_work(source)
                 if (
                     (
                         self.planner.contains_tool_call_intent(response.content)
@@ -1165,12 +1698,20 @@ class AgentRuntime:
                     or
                     self.planner.is_empty_final_response(response.content)
                     or not cleaned.strip()
+                    or pending_tool_work
+                    or active_todo_work
                     or (requires_tools and iteration == 0)
                 ):
                     if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
                         output = "这个请求需要继续调用工具，但已达到配置的工具循环上限。"
                         if history_key:
-                            await self._append_session_turn(history_key, input_text, output, response=response)
+                            await self._append_session_turn(
+                                history_key,
+                                input_text,
+                                output,
+                                response=response,
+                                tool_trace=tool_trace,
+                            )
                         return output
                     missing_tool_reprompts += 1
                     if missing_tool_reprompts > 3:
@@ -1181,27 +1722,37 @@ class AgentRuntime:
                         )
                         output = "模型连续返回空内容或不完整的工具调用，请换一种更明确的说法再试。"
                         if history_key:
-                            await self._append_session_turn(history_key, input_text, output, response=response)
+                            await self._append_session_turn(
+                                history_key,
+                                input_text,
+                                output,
+                                response=response,
+                                tool_trace=tool_trace,
+                            )
                         return output
                     messages.append(LLMMessage(role="assistant", content=response.content))
                     messages.append(
                         LLMMessage(
                             role="user",
-                            content=(
-                                "Your previous response was empty, incomplete, or did not call required tools. "
-                                "If the request depends on current project files, directories, plugins, skills, "
-                                "config, logs, or runtime state, you must call tools first. "
-                                "This request appears to need live tool data, so do not answer from memory. "
-                                "Do not say you are checking; actually request tool_calls. "
-                                "If you return tool_calls, the JSON must be valid and complete. "
-                                "Otherwise return JSON with a non-empty final answer."
+                            content=self._continuation_reprompt(
+                                input_text=input_text,
+                                tool_trace=tool_trace,
+                                requires_tools=requires_tools,
+                                pending_tool_work=pending_tool_work,
+                                active_todo_work=active_todo_work,
                             ),
                         )
                     )
                     iteration += 1
                     continue
                 if history_key:
-                    await self._append_session_turn(history_key, input_text, cleaned, response=response)
+                    await self._append_session_turn(
+                        history_key,
+                        input_text,
+                        cleaned,
+                        response=response,
+                        tool_trace=tool_trace,
+                    )
                 return cleaned
             missing_tool_reprompts = 0
             if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
@@ -1209,12 +1760,29 @@ class AgentRuntime:
                     plan.final or "工具调用次数达到上限，任务没有完成。"
                 )
                 if history_key:
-                    await self._append_session_turn(history_key, input_text, output, response=response)
+                    await self._append_session_turn(
+                        history_key,
+                        input_text,
+                        output,
+                        response=response,
+                        tool_trace=tool_trace,
+                    )
                 return output
 
             tool_results = []
             background_started = False
             explicit_wechat_send = False
+            if background_results and self._plan_starts_background(plan):
+                output = self._background_started_message(background_results, plan_final=plan.final)
+                if history_key:
+                    await self._append_session_turn(
+                        history_key,
+                        input_text,
+                        output,
+                        response=response,
+                        tool_trace=tool_trace,
+                    )
+                return output
             for call in plan.tool_calls:
                 tool_name, payload = self._prepare_tool_call(call.tool, call.payload, source, input_text)
                 result = await self.execute_tool(
@@ -1231,12 +1799,23 @@ class AgentRuntime:
                     and source.startswith("channel:wechat:")
                 ):
                     explicit_wechat_send = True
-                tool_results.append(result.model_dump(mode="json"))
+                result_json = result.model_dump(mode="json")
+                tool_results.append(result_json)
+                tool_trace.append(self._tool_trace_entry(tool_name, payload, result_json))
+                if tool_name in {"task.start", "task.agent_start"} and result.status == "completed":
+                    background_results.append(result_json)
+            tool_results = await self._store_large_tool_results(task_id, tool_results)
             if explicit_wechat_send:
                 self._suppress_channel_reply_task_ids.add(task_id)
                 output = "已发送。"
                 if history_key:
-                    await self._append_session_turn(history_key, input_text, output, response=response)
+                    await self._append_session_turn(
+                        history_key,
+                        input_text,
+                        output,
+                        response=response,
+                        tool_trace=tool_trace,
+                    )
                 return output
             if background_started and (
                 self._should_return_after_background(source)
@@ -1244,7 +1823,13 @@ class AgentRuntime:
             ):
                 output = self._background_started_message(tool_results, plan_final=plan.final)
                 if history_key:
-                    await self._append_session_turn(history_key, input_text, output, response=response)
+                    await self._append_session_turn(
+                        history_key,
+                        input_text,
+                        output,
+                        response=response,
+                        tool_trace=tool_trace,
+                    )
                 return output
             if response.tool_calls:
                 messages.append(self._assistant_tool_call_message(response))
@@ -1265,7 +1850,7 @@ class AgentRuntime:
         cleaned = self.planner.clean_final_output(last_content)
         output = cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
         if history_key:
-            await self._append_session_turn(history_key, input_text, output)
+            await self._append_session_turn(history_key, input_text, output, tool_trace=tool_trace)
         return output
 
     def _llm_content_blocks(self, input_text: str, attachments: list[dict]) -> list[LLMContentBlock] | None:
@@ -1318,6 +1903,204 @@ class AgentRuntime:
                 return 0
         return 0
 
+    async def _start_delegated_channel_task(self, task_id: str, input_text: str, *, source: str) -> str:
+        child_input = self._delegated_channel_task_input(input_text, source=source)
+        ack = "这个任务需要持续处理，我已交给后台子 Agent 执行，完成后会把结果发回来。"
+        payload = {
+            "input": child_input,
+            "description": self._delegated_channel_task_description(input_text),
+            "ack": ack,
+            "notify_mode": "parent_agent",
+            "replayable": True,
+        }
+        tool_name, enriched = self._prepare_tool_call("task.agent_start", payload, source, input_text)
+        result = await self.execute_tool(tool_name, enriched, task_id=task_id, source="agent")
+        result_json = result.model_dump(mode="json")
+        return self._background_started_message([result_json], plan_final=ack)
+
+    def _should_delegate_channel_task(self, source: str, input_text: str) -> bool:
+        if not self.config.auto_delegate_channel_tasks:
+            return False
+        if not source.startswith("channel:"):
+            return False
+        if input_text.lstrip().startswith(("Child agent task completed.", "Delegated channel task.")):
+            return False
+        if source == "background" or source.startswith("channel:agent_task:"):
+            return False
+        content = self._actual_user_request_text(input_text).strip()
+        if not content:
+            return False
+        lowered = content.lower()
+        no_delegate_patterns = (
+            "不要用子代理",
+            "别用子代理",
+            "不用子代理",
+            "不要后台",
+            "别后台",
+            "不要交给后台",
+            "直接做",
+            "你自己做",
+        )
+        if any(pattern in lowered for pattern in no_delegate_patterns):
+            return False
+        if self._looks_like_status_followup(lowered):
+            return False
+        action_pattern = (
+            r"(写|创建|新建|开发|实现|修复|完善|优化|重构|改造|添加|接入|落地|生成|制作|做一个|做成|上传|提交|部署|同步)"
+            r".{0,80}"
+            r"(skill|插件|前端|后端|代码|脚本|文件|页面|功能|工具|agent|定时任务|通道|接口|api|数据库|测试|git|web_search|搜索)"
+        )
+        object_first_pattern = (
+            r"(skill|插件|前端|后端|代码|脚本|文件|页面|功能|工具|agent|定时任务|通道|接口|api|数据库|测试|git)"
+            r".{0,80}"
+            r"(写|创建|新建|开发|实现|修复|完善|优化|重构|改造|添加|接入|落地|生成|制作|上传|提交|部署|同步)"
+        )
+        english_pattern = (
+            r"\b(write|create|build|implement|fix|improve|refactor|add|integrate|generate|deploy|commit|sync)\b"
+            r".{0,80}"
+            r"\b(skill|plugin|frontend|backend|code|script|file|page|feature|tool|agent|api|database|test|git)\b"
+        )
+        return any(
+            re.search(pattern, lowered, flags=re.IGNORECASE)
+            for pattern in (action_pattern, object_first_pattern, english_pattern)
+        )
+
+    def _looks_like_status_followup(self, lowered_content: str) -> bool:
+        status_patterns = [
+            r"^(做好了吗|做完了吗|完成了吗|好了没|什么情况|进度|继续|查看进度|现在怎么样|跑完了吗)[？?。!！]*$",
+            r"\b(status|progress|done|finished|continue)\b",
+        ]
+        return any(re.search(pattern, lowered_content, flags=re.IGNORECASE) for pattern in status_patterns)
+
+    def _delegated_channel_task_description(self, input_text: str) -> str:
+        content = self._actual_user_request_text(input_text).strip()
+        if not content:
+            return "Run delegated channel task"
+        return f"Delegated channel task: {content[:80]}"
+
+    def _delegated_channel_task_input(self, input_text: str, *, source: str) -> str:
+        return (
+            "Delegated channel task.\n"
+            "You are a child Agent. Complete the user's development task end-to-end like Codex: inspect files, "
+            "make required edits, run focused verification, and summarize the concrete result. Do not stop after "
+            "announcing the next step. If you need tools, call them. Only return final when the task is actually "
+            "complete or blocked by a concrete error.\n"
+            f"parent_source: {source}\n"
+            f"{input_text}"
+        )
+
+    def _tool_trace_entry(self, tool_name: str, payload: dict, result: dict) -> dict:
+        return {
+            "tool": tool_name,
+            "status": result.get("status") or "unknown",
+            "input": self._summarize_payload(payload),
+            "output": self._summarize_payload(result.get("output")),
+            "error": result.get("error") or "",
+        }
+
+    async def _store_large_tool_results(self, task_id: str, tool_results: list[dict]) -> list[dict]:
+        max_chars = int(getattr(self.config, "max_inline_tool_result_chars", 20000) or 0)
+        if max_chars <= 0:
+            return tool_results
+        transformed = []
+        for index, result in enumerate(tool_results, start=1):
+            raw = json.dumps(result, ensure_ascii=False, default=str)
+            if len(raw) <= max_chars:
+                transformed.append(result)
+                continue
+            stored = self._write_tool_result_artifact(task_id, index, result, raw, max_chars=max_chars)
+            transformed.append(stored)
+            await self._add_event(
+                task_id,
+                "tool.result_stored",
+                {
+                    "tool": result.get("tool"),
+                    "path": stored.get("output", {}).get("path"),
+                    "chars": len(raw),
+                },
+            )
+            artifact_path = stored.get("output", {}).get("path")
+            if artifact_path:
+                await self._register_artifact(
+                    task_id,
+                    kind="tool_result",
+                    path=Path(str(artifact_path)),
+                    summary=f"Large tool result stored for {result.get('tool') or 'tool'} ({len(raw)} chars)",
+                    metadata={"tool": result.get("tool"), "chars": len(raw)},
+                )
+        return transformed
+
+    def _write_tool_result_artifact(
+        self,
+        task_id: str,
+        index: int,
+        result: dict,
+        raw: str,
+        *,
+        max_chars: int,
+    ) -> dict:
+        base_dir = Path(str(getattr(self.config, "tool_result_artifact_dir", "data/agent_tool_results")))
+        if not base_dir.is_absolute():
+            base_dir = Path(self.config.workspace_root) / base_dir
+        base_dir.mkdir(parents=True, exist_ok=True)
+        safe_task_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id)
+        path = base_dir / f"{safe_task_id}_{index}.json"
+        path.write_text(raw, encoding="utf-8")
+        summary_chars = min(2000, max(80, max_chars // 4))
+        summary = self._large_tool_result_summary(result, max_chars=summary_chars)
+        return {
+            "task_id": result.get("task_id"),
+            "tool": result.get("tool"),
+            "status": result.get("status"),
+            "output": {
+                "_stored_tool_result": True,
+                "path": str(path),
+                "chars": len(raw),
+                "summary": summary,
+                "instruction": "The full tool result was stored on disk. Read this path only if the omitted details are necessary.",
+            },
+            "error": result.get("error"),
+            "error_type": result.get("error_type"),
+            "fallback": result.get("fallback"),
+            "created_at": result.get("created_at"),
+        }
+
+    def _large_tool_result_summary(self, result: dict, *, max_chars: int = 2000) -> str:
+        output = result.get("output")
+        if isinstance(output, str):
+            return output[:max_chars]
+        if isinstance(output, dict):
+            for key in ("summary", "message", "text", "content", "stdout", "stderr"):
+                value = output.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value[:max_chars]
+        return json.dumps(self._summarize_payload(output), ensure_ascii=False, default=str)[:max_chars]
+
+    def _format_tool_trace(self, tool_trace: list[dict] | None) -> str:
+        if not tool_trace:
+            return ""
+        lines = [
+            "[internal_tool_trace]",
+            "上一轮工具调用摘要，供后续继续任务时参考；不要原样复述，除非用户要求。",
+        ]
+        for index, item in enumerate(tool_trace[-12:], start=1):
+            parts = [
+                f"{index}. tool={item.get('tool') or ''}",
+                f"status={item.get('status') or ''}",
+            ]
+            error = str(item.get("error") or "").strip()
+            if error:
+                parts.append(f"error={error[:500]}")
+            input_text = json.dumps(item.get("input"), ensure_ascii=False, default=str)
+            output_text = json.dumps(item.get("output"), ensure_ascii=False, default=str)
+            parts.append(f"input={input_text[:800]}")
+            parts.append(f"output={output_text[:1200]}")
+            lines.append(" ".join(parts))
+        if len(tool_trace) > 12:
+            lines.append(f"... omitted {len(tool_trace) - 12} earlier tool calls")
+        lines.append("[/internal_tool_trace]")
+        return "\n".join(lines)
+
     def _session_history_key(self, source: str) -> str:
         if not self.config.memory.short_term_enabled:
             return ""
@@ -1349,14 +2132,19 @@ class AgentRuntime:
         assistant_output: str,
         *,
         response: LLMResponse | None = None,
+        tool_trace: list[dict] | None = None,
     ) -> None:
         if not key:
             return
         history = self._session_histories.setdefault(key, [])
+        assistant_history = assistant_output
+        formatted_tool_trace = self._format_tool_trace(tool_trace)
+        if formatted_tool_trace:
+            assistant_history = f"{assistant_output}\n\n{formatted_tool_trace}"
         history.extend(
             [
                 LLMMessage(role="user", content=self._short_term_user_content(user_input)),
-                LLMMessage(role="assistant", content=assistant_output),
+                LLMMessage(role="assistant", content=assistant_history),
             ]
         )
         self._compress_session_history(key)
@@ -1564,6 +2352,8 @@ class AgentRuntime:
         return input_text
 
     def _request_requires_tools(self, input_text: str) -> bool:
+        if input_text.lstrip().startswith(("Child agent task completed.", "Delegated channel task.")):
+            return False
         text = self._short_term_user_content(input_text).lower()
         if not text.strip():
             return False
@@ -1574,8 +2364,90 @@ class AgentRuntime:
         ]
         return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in tool_required_patterns)
 
+    def _final_implies_pending_tool_work(self, output: str) -> bool:
+        text = output.strip()
+        if not text:
+            return False
+        completed_patterns = [
+            r"(已|已经|刚刚|成功|完成|搞定|写好|创建好|新建好|保存好|发送了|上传了|提交了)",
+            r"\b(done|completed|created|updated|saved|sent|uploaded|committed|finished)\b",
+        ]
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in completed_patterns):
+            return False
+        pending_patterns = [
+            r"(现在|接下来|下一步|开始|准备|我来|我会|我将|正在|继续).{0,40}(创建|新建|写入|修改|更新|保存|执行|运行|调用|读取|查看|检查|搜索|安装|同步|上传|提交|删除|生成|发送)",
+            r"(创建|新建|写入|修改|更新|保存|执行|运行|调用|读取|查看|检查|搜索|安装|同步|上传|提交|删除|生成).{0,40}(脚本|文件|插件|skill|目录|代码|配置)",
+            r"\b(now|next|then|start|starting|prepare|preparing|going to|i will|i'll|let me)\b.{0,80}\b(create|write|edit|modify|update|save|run|execute|call|read|check|inspect|search|install|sync|upload|commit|delete|generate|send)\b",
+        ]
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in pending_patterns):
+            return True
+        action_words = (
+            "创建",
+            "新建",
+            "写入",
+            "修改",
+            "更新",
+            "执行",
+            "运行",
+            "调用",
+            "检查",
+            "生成",
+            "create",
+            "write",
+            "edit",
+            "update",
+            "run",
+            "execute",
+            "check",
+            "generate",
+        )
+        return text.endswith((":", "：")) and any(word in text.lower() for word in action_words)
+
     def _source_can_force_tool_use(self, source: str) -> bool:
         return source.startswith("terminal:") or source.startswith("channel:")
+
+    def _plan_starts_background(self, plan) -> bool:
+        return any(call.tool in {"task.start", "task.agent_start"} for call in plan.tool_calls)
+
+    def _continuation_reprompt(
+        self,
+        *,
+        input_text: str,
+        tool_trace: list[dict],
+        requires_tools: bool,
+        pending_tool_work: bool,
+        active_todo_work: bool,
+    ) -> str:
+        if active_todo_work:
+            return (
+                "There is an active todo list with pending or in_progress items. "
+                "Do not return final yet. Continue the unfinished work with tool_calls, or call todo with merge=true "
+                "to mark completed/cancelled items before returning final. If blocked, update todo and explain the concrete blocker."
+            )
+        if tool_trace:
+            return (
+                "You just executed tool calls but returned an empty, incomplete, or non-final response. "
+                "Process the tool results above and continue the task now. "
+                "If more work is needed, request the next tool_calls immediately. "
+                "If the task has multiple steps, update the todo tool before continuing. "
+                "Do not describe what you will do next; do it with tools. "
+                "Only return JSON final when the user's task is actually complete or blocked by a concrete reason."
+            )
+        if pending_tool_work:
+            return (
+                "Your previous response announced a pending action such as creating, editing, running, "
+                "checking, sending, uploading, or testing something. Do not end with a promise of future action. "
+                "Call the required tools now in valid JSON tool_calls, or return JSON final only if the action is already complete."
+            )
+        if requires_tools:
+            return (
+                "This request depends on current project files, directories, plugins, skills, config, logs, or runtime state. "
+                "You must call tools first and must not answer from memory. Return valid JSON tool_calls now."
+            )
+        return (
+            "Your previous response was empty or incomplete. Continue with a valid JSON tool_calls request if action is needed, "
+            "or return JSON with a non-empty final answer."
+        )
 
     def _response_plan(self, response: LLMResponse, native_tool_map: dict[str, str]):
         if not response.tool_calls:
@@ -1883,6 +2755,10 @@ class AgentRuntime:
             enriched["_source"] = source
             enriched["_input_text"] = input_text
             return tool_name, enriched
+        if tool_name == "todo":
+            enriched = dict(payload)
+            enriched["_session_key"] = self._todo_key(source)
+            return tool_name, enriched
         if tool_name == "task.start":
             nested_tool = str(payload.get("tool") or "")
             nested_payload = payload.get("payload") or {}
@@ -1973,6 +2849,7 @@ class AgentRuntime:
             return cleaned_final
         task_ids = []
         has_child_agent = False
+        has_unnotified_background = False
         for result in tool_results:
             if result.get("tool") not in {"task.start", "task.agent_start"} or result.get("status") != "completed":
                 continue
@@ -1984,10 +2861,17 @@ class AgentRuntime:
                 ack = str(metadata.get("ack") or metadata.get("message") or "").strip()
                 if ack:
                     return ack
+                notify = metadata.get("notify")
+                if not isinstance(notify, dict):
+                    has_unnotified_background = True
             if isinstance(output, dict) and output.get("id"):
                 task_ids.append(str(output["id"]))
         if has_child_agent:
             return "我先安排子代理继续处理，完成后会把结果发回来。"
+        if has_unnotified_background:
+            if task_ids:
+                return f"后台任务已开始。任务ID：{', '.join(task_ids)}。稍后可以问我“继续”或“查看进度”。"
+            return "后台任务已开始。稍后可以问我“继续”或“查看进度”。"
         prefix = "子代理任务" if has_child_agent else "后台任务"
         if task_ids:
             return f"{prefix}已开始，完成后会自动回发结果。任务ID：{', '.join(task_ids)}"
@@ -2035,7 +2919,8 @@ class AgentRuntime:
         current_time = self._current_time_prompt()
         static_prompt = self._static_agent_prompt(source=source)
         memory_prompt = self._memory_prompt()
-        return static_prompt + memory_prompt + current_time
+        todo_prompt = self._todo_prompt(source)
+        return static_prompt + memory_prompt + todo_prompt + current_time
 
     def _static_agent_prompt(self, *, source: str = "api") -> str:
         if self.config.cache.enabled and self.config.cache.static_prompt:
@@ -2075,6 +2960,9 @@ class AgentRuntime:
             "- For longer multi-step work where the user can receive an immediate acknowledgement and a later result, prefer task.agent_start to delegate a full child Agent task in the background. When using task.agent_start, include an ack/message in your own voice for the user; do not rely on a system-generated task-id notice.\n"
             "- For reminders, recurring checks, daily summaries, scheduled follow-ups, or any task that should run later/periodically, use schedule.create. For channel-origin schedules, keep the current channel source and notification target so future results return to the same user or group.\n"
             "- If a tool result contains fallback guidance or suggested_tool, use that guidance before retrying.\n"
+            "- For complex work with 3+ steps, first create or update a todo list with the todo tool. Keep exactly one item in_progress, mark completed items immediately, and read todo when the user asks to continue.\n"
+            "- You MUST use tools to take action. If you say you will create, edit, run, inspect, test, send, upload, or check something, make the corresponding tool call in the same response. Never end with only a promise of future action.\n"
+            "- Keep working until the task is actually complete or blocked by a concrete missing permission/credential/decision. Every response should either call tools that make progress or deliver a real final result.\n"
             "- Use memory.add proactively for durable user preferences, corrections, stable environment facts, and project conventions. Keep entries compact. Do not save temporary task progress.\n"
             "- If the user changes your name, identity, persona, or 'soul', save it to memory target=memory, not target=user. target=user is only for facts about the user.\n"
             "- Use memory.replace or memory.remove when a memory becomes outdated or too broad.\n"
@@ -2091,6 +2979,22 @@ class AgentRuntime:
             "Do not expose tool_calls, tools JSON, tool execution logs, or internal planning to the user.\n"
             "Do not invent tool results. Request tools first, then use returned results."
         )
+
+    def _todo_key(self, source: str) -> str:
+        return self._session_history_key(source) or source or "global"
+
+    def _todo_prompt(self, source: str) -> str:
+        active = self.todos.active_prompt(self._todo_key(source))
+        if not active:
+            return ""
+        return (
+            "\nActive todo state for this session. Treat this as current task state; "
+            "continue pending/in-progress work before starting unrelated work.\n"
+            f"{active}\n"
+        )
+
+    def _has_active_todo_work(self, source: str) -> bool:
+        return self.todos.has_active(self._todo_key(source))
 
     def _memory_prompt(self) -> str:
         if not self.config.memory.enabled:

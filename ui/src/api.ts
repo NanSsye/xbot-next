@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   AgentMemoryInfo,
   AgentTask,
+  AgentTaskDetail,
   AgentToolInfo,
   ApiEnvelope,
   BackgroundTask,
@@ -95,6 +96,13 @@ export const api = {
     request<AgentTask>("/agent/tasks", {
       method: "POST",
       body: JSON.stringify({ input, source }),
+    }),
+  agentTasks: (limit = 50) => request<AgentTask[]>(`/agent/tasks?limit=${limit}`),
+  agentTaskDetail: (taskId: string) => request<AgentTaskDetail>(`/agent/tasks/${encodeURIComponent(taskId)}`),
+  resumeAgentTask: (taskId: string) =>
+    request<AgentTask>(`/agent/tasks/${encodeURIComponent(taskId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({}),
     }),
   tools: () => request<AgentToolInfo[]>("/agent/tools"),
   llmStatus: () => request<Record<string, unknown>>("/agent/llm/status"),

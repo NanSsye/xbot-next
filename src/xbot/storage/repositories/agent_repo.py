@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from xbot.storage.models import (
+    AgentArtifactRecord,
     AgentBackgroundTaskRecord,
     AgentEventRecord,
     AgentMemoryRecord,
@@ -52,6 +53,24 @@ class AgentRepository:
         record.result = result.output
         record.updated_at = datetime.utcnow()
 
+    async def mark_task_running(self, task_id: str) -> None:
+        record = await self.session.get(AgentTaskRecord, task_id)
+        if record is None:
+            return
+        record.status = "running"
+        record.updated_at = datetime.utcnow()
+
+    async def get_task(self, task_id: str) -> AgentTaskRecord | None:
+        return await self.session.get(AgentTaskRecord, task_id)
+
+    async def list_tasks(self, limit: int = 50) -> list[AgentTaskRecord]:
+        result = await self.session.execute(
+            select(AgentTaskRecord)
+            .order_by(AgentTaskRecord.created_at.desc())
+            .limit(max(1, min(limit, 500)))
+        )
+        return list(result.scalars().all())
+
     async def add_event(self, task_id: str, event_type: str, content: str) -> None:
         self.session.add(
             AgentEventRecord(
@@ -68,6 +87,29 @@ class AgentRepository:
             stmt = stmt.where(AgentEventRecord.task_id == task_id)
         result = await self.session.execute(stmt)
         return list(reversed(result.scalars().all()))
+
+    async def add_artifact(self, item: dict) -> None:
+        self.session.add(
+            AgentArtifactRecord(
+                id=str(item["id"]),
+                task_id=str(item["task_id"]),
+                kind=str(item["kind"]),
+                path=str(item["path"]),
+                content_hash=item.get("content_hash"),
+                summary=item.get("summary"),
+                metadata_json=json.dumps(item.get("metadata") or {}, ensure_ascii=False, default=str),
+                created_at=item.get("created_at") or datetime.utcnow(),
+            )
+        )
+
+    async def list_artifacts(self, task_id: str, limit: int = 100) -> list[AgentArtifactRecord]:
+        result = await self.session.execute(
+            select(AgentArtifactRecord)
+            .where(AgentArtifactRecord.task_id == task_id)
+            .order_by(AgentArtifactRecord.created_at.asc())
+            .limit(max(1, min(limit, 500)))
+        )
+        return list(result.scalars().all())
 
     async def upsert_background_task(self, item) -> None:
         result_json = json.dumps(item.result, ensure_ascii=False, default=str) if item.result is not None else None

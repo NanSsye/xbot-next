@@ -74,6 +74,8 @@ XBOT_API_CORS_ORIGINS=https://console.example.com
 
 - `XBOT_AGENT_MODE=developer`：默认建议值。
 - `XBOT_AGENT_ALLOW_SHELL=false`：生产默认关闭 shell。
+- `XBOT_AGENT_MAX_TOOL_ITERATIONS=0`：默认不限制单轮工具循环，适合长任务；重复后台任务由 runtime 单独收口。
+- `XBOT_AGENT_AUTO_DELEGATE_CHANNEL_TASKS=true`：通道里的复杂开发任务自动交给后台子 Agent 持续完成，完成后回发。
 - `XBOT_AGENT_WORKSPACE_ROOTS` 只配置需要 Agent 访问的业务目录。
 - 不建议生产环境启用 `XBOT_AGENT_MODE=admin`。
 - 不把 `.env`、`data/`、`logs/`、用户上传文件和通道媒体目录提交到 Git。

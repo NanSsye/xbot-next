@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import json
 
 import anyio
 import pytest
@@ -48,20 +49,90 @@ class FakeSkillRepository(FakePluginRepository):
 class FakeAgentRepository:
     def __init__(self):
         self.tasks = []
+        self.task_records = {}
         self.finished = []
         self.events = []
         self.memories = []
         self.background_tasks = {}
         self.scheduled_jobs = {}
+        self.artifacts = []
 
     async def create_task(self, task_id, source, input_text):
         self.tasks.append((task_id, source, input_text))
+        self.task_records[task_id] = type(
+            "TaskRecord",
+            (),
+            {
+                "id": task_id,
+                "status": "running",
+                "source": source,
+                "input": input_text,
+                "result": None,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            },
+        )()
 
     async def finish_task(self, result):
         self.finished.append(result)
+        record = self.task_records.get(result.task_id)
+        if record is not None:
+            record.status = result.status
+            record.result = result.output
+            record.updated_at = datetime.utcnow()
+
+    async def mark_task_running(self, task_id):
+        record = self.task_records.get(task_id)
+        if record is not None:
+            record.status = "running"
+            record.updated_at = datetime.utcnow()
 
     async def add_event(self, task_id, event_type, content):
-        self.events.append((task_id, event_type, content))
+        event = type(
+            "EventRecord",
+            (),
+            {
+                "id": len(self.events) + 1,
+                "task_id": task_id,
+                "type": event_type,
+                "content": content,
+                "created_at": datetime.utcnow(),
+                "__getitem__": lambda self, index: (self.task_id, self.type, self.content)[index],
+            },
+        )()
+        self.events.append(event)
+
+    async def get_task(self, task_id):
+        return self.task_records.get(task_id)
+
+    async def list_tasks(self, limit=50):
+        return list(self.task_records.values())[-limit:]
+
+    async def list_events(self, task_id=None, limit=100):
+        items = self.events
+        if task_id:
+            items = [event for event in items if event.task_id == task_id]
+        return items[-limit:]
+
+    async def add_artifact(self, item):
+        record = type(
+            "ArtifactRecord",
+            (),
+            {
+                "id": item["id"],
+                "task_id": item["task_id"],
+                "kind": item["kind"],
+                "path": item["path"],
+                "content_hash": item.get("content_hash"),
+                "summary": item.get("summary"),
+                "metadata_json": json.dumps(item.get("metadata") or {}, ensure_ascii=False),
+                "created_at": item["created_at"],
+            },
+        )()
+        self.artifacts.append(record)
+
+    async def list_artifacts(self, task_id, limit=100):
+        return [item for item in self.artifacts if item.task_id == task_id][-limit:]
 
     async def save_memory(self, item, **kwargs):
         self.memories.append((item, kwargs))
@@ -1178,9 +1249,142 @@ async def test_builtin_tools_return_invalid_payload_for_missing_required_fields(
     assert write_result.status == "failed"
     assert write_result.error_type == "invalid_payload"
     assert "required field 'path'" in (write_result.error or "")
+    assert write_result.fallback["suggested_payload"] == {
+        "path": "relative/path.txt",
+        "content": "file content",
+    }
+    assert "both path and content" in write_result.fallback["guidance"]
     assert shell_result.status == "failed"
     assert shell_result.error_type == "invalid_payload"
     assert "required field 'command'" in (shell_result.error or "")
+    assert shell_result.fallback["suggested_payload"]["command"] == "command to run"
+    assert shell_result.fallback["repair_steps"]
+
+
+@pytest.mark.anyio
+async def test_agent_task_detail_projects_tool_timeline_and_repair_suggestions(tmp_path):
+    repo = FakeAgentRepository()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(
+        config,
+        plugins=None,
+        skills=None,
+        repository_provider=provider,
+        llm_provider=FakeLLMProvider(
+            responses=[
+                '{"tool_calls":[{"tool":"filesystem.read_file","payload":{"path":"missing.txt"}}]}',
+                '{"final":"文件不存在。"}',
+            ]
+        ),
+    )
+
+    result = await runtime.run_task("读取 missing.txt", source="terminal:local:test")
+    detail = await runtime.get_task_detail(result.task_id)
+
+    assert detail["task"]["task_id"] == result.task_id
+    assert detail["summary"]["tool_failed"] == 1
+    assert detail["tool_calls"][0]["tool"] == "filesystem.read_file"
+    assert detail["tool_calls"][0]["status"] == "failed"
+    assert detail["repairs"][0]["suggested_tool"] == "filesystem.list_dir"
+    assert "List the parent directory" in detail["repairs"][0]["repair_steps"][0]
+    assert any(item["type"] == "tool.failed" for item in detail["timeline"])
+    assert any(item["type"] == "tool.repair_plan" for item in detail["timeline"])
+
+
+@pytest.mark.anyio
+async def test_agent_registers_file_artifact_and_validation_event_after_write(tmp_path):
+    repo = FakeAgentRepository()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider)
+
+    result = await runtime.execute_tool(
+        "filesystem.write_file",
+        {"path": "notes.txt", "content": "artifact ok"},
+        task_id="task-artifact",
+    )
+    detail_events = await runtime.list_events(task_id="task-artifact", limit=20)
+
+    assert result.status == "completed"
+    assert repo.artifacts[0].kind == "file"
+    assert repo.artifacts[0].path.endswith("notes.txt")
+    assert any(event["type"] == "artifact.created" for event in detail_events)
+    assert any(event["type"] == "tool.validation_passed" for event in detail_events)
+
+
+@pytest.mark.anyio
+async def test_agent_resume_task_uses_task_trajectory(tmp_path):
+    repo = FakeAgentRepository()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"第一轮没有完成。"}',
+            '{"final":"已根据轨迹继续完成。"}',
+            '{"final":"已根据轨迹继续完成。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider, llm_provider=llm)
+
+    first = await runtime.run_task("做一个长任务", source="terminal:local:test")
+    resumed = await runtime.resume_task(first.task_id)
+
+    assert resumed.task_id == first.task_id
+    assert resumed.output == "已根据轨迹继续完成。"
+    assert len(repo.tasks) == 1
+    assert repo.task_records[first.task_id].result == "已根据轨迹继续完成。"
+    events = await runtime.list_events(task_id=first.task_id, limit=50)
+    assert any(event["type"] == "task.resumed" for event in events)
+    assert any(event["type"] == "task.resume_completed" for event in events)
+
+
+@pytest.mark.anyio
+async def test_shell_exec_registers_changed_file_artifact(tmp_path):
+    repo = FakeAgentRepository()
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        allow_shell=True,
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider)
+
+    result = await runtime.execute_tool(
+        "shell.exec",
+        {"command": "python -c \"from pathlib import Path; Path('shell-out.txt').write_text('ok', encoding='utf-8')\""},
+        task_id="task-shell-artifact",
+    )
+
+    assert result.status == "completed"
+    assert any(item.path.endswith("shell-out.txt") for item in repo.artifacts)
+    events = await runtime.list_events(task_id="task-shell-artifact", limit=50)
+    assert any(event["type"] == "artifact.created" for event in events)
 
 
 @pytest.mark.anyio
@@ -1746,6 +1950,183 @@ async def test_agent_runtime_executes_native_structured_tool_calls(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_todo_tool_tracks_active_work_and_injects_next_turn(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            (
+                '{"tool_calls":[{"tool":"todo","payload":{"todos":['
+                '{"id":"1","content":"创建 web_search.py","status":"in_progress"},'
+                '{"id":"2","content":"运行测试","status":"pending"}]}}]}'
+            ),
+            '{"tool_calls":[{"tool":"todo","payload":{"merge":true,"todos":['
+            '{"id":"1","content":"创建 web_search.py","status":"completed"},'
+            '{"id":"2","content":"运行测试","status":"completed"}]}}]}',
+            '{"final":"已完成任务。"}',
+            '{"final":"已继续执行任务。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:todo"
+
+    first = await runtime.run_task("做一个 web_search skill", source=source)
+    second = await runtime.run_task("继续", source=source)
+
+    assert first.output == "已完成任务。"
+    assert second.output == "已继续执行任务。"
+    second_turn_system_prompt = llm.messages[3][0].content
+    assert "Active todo state" not in second_turn_system_prompt
+
+
+@pytest.mark.anyio
+async def test_todo_state_persists_across_runtime_instances(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    config.memory.directory = str(tmp_path / "memories")
+    source = "terminal:local:persistent-todo"
+
+    first_runtime = AgentRuntime(config, plugins=None, skills=None)
+    first_runtime.todos.handle(
+        {
+            "_session_key": first_runtime._todo_key(source),
+            "todos": [{"id": "1", "content": "继续实现 Hermes 风格循环", "status": "in_progress"}],
+        }
+    )
+
+    second_runtime = AgentRuntime(config, plugins=None, skills=None)
+    prompt = second_runtime._agent_system_prompt(source=source)
+
+    assert "Active todo state" in prompt
+    assert "继续实现 Hermes 风格循环" in prompt
+
+
+@pytest.mark.anyio
+async def test_active_todo_blocks_direct_final_until_todo_is_closed(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"现在创建文件。"}',
+            (
+                '{"tool_calls":[{"tool":"todo","payload":{"merge":true,"todos":['
+                '{"id":"1","content":"创建文件","status":"completed"}]}}]}'
+            ),
+            '{"final":"文件创建任务已完成。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:active-todo"
+    runtime.todos.handle(
+        {
+            "_session_key": runtime._todo_key(source),
+            "todos": [{"id": "1", "content": "创建文件", "status": "in_progress"}],
+        }
+    )
+
+    result = await runtime.run_task("继续", source=source)
+
+    assert result.output == "文件创建任务已完成。"
+    assert len(llm.messages) == 3
+    assert any(
+        "There is an active todo list" in message.content
+        for messages in llm.messages
+        for message in messages
+        if message.content
+    )
+
+
+@pytest.mark.anyio
+async def test_large_tool_result_is_stored_as_artifact_before_next_llm_turn(tmp_path):
+    target = tmp_path / "large.txt"
+    target.write_text("A" * 500, encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"filesystem.read_file","payload":{"path":"large.txt"}}]}',
+            '{"final":"已读取大文件。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        max_inline_tool_result_chars=120,
+        tool_result_artifact_dir="tool-artifacts",
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("读取大文件", source="test")
+
+    assert result.output == "已读取大文件。"
+    tool_result_message = llm.messages[1][-1]
+    assert "_stored_tool_result" in tool_result_message.content
+    assert "A" * 200 not in tool_result_message.content
+    artifact_files = list((tmp_path / "tool-artifacts").glob("*.json"))
+    assert artifact_files
+    assert "A" * 500 in artifact_files[0].read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_nudges_to_continue_after_tool_then_empty_response(tmp_path):
+    target = tmp_path / "project.txt"
+    target.write_text("tool result", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"filesystem.read_file","payload":{"path":"project.txt"}}]}',
+            "",
+            '{"final":"已根据工具结果继续完成。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("读取并继续处理 project.txt", source="terminal:local:test")
+
+    assert result.output == "已根据工具结果继续完成。"
+    assert len(llm.messages) == 3
+    assert "You just executed tool calls" in llm.messages[2][-1].content
+    assert "todo" in llm.messages[2][-1].content
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_keeps_compact_tool_trace_in_short_term_history(tmp_path):
+    target = tmp_path / "project.txt"
+    target.write_text("trace survives next turn", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"filesystem.read_file","payload":{"path":"project.txt"}}]}',
+            '{"final":"第一步完成"}',
+            '{"final":"继续处理"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    source = "terminal:local:trace"
+
+    await runtime.run_task("读取 project.txt", source=source)
+    await runtime.run_task("继续", source=source)
+
+    second_turn_messages = llm.messages[2]
+    assistant_history = second_turn_messages[-2].content
+    assert "[internal_tool_trace]" in assistant_history
+    assert "filesystem.read_file" in assistant_history
+    assert "project.txt" in assistant_history
+    assert "trace survives next turn" in assistant_history
+    assert second_turn_messages[-1].content == "继续"
+
+
+@pytest.mark.anyio
 async def test_agent_runtime_parses_multiple_tool_call_json_blocks(tmp_path):
     (tmp_path / "skills").mkdir()
     llm = FakeLLMProvider(
@@ -1876,6 +2257,35 @@ async def test_agent_runtime_reprompts_after_empty_final_and_then_uses_tool(tmp_
 
 
 @pytest.mark.anyio
+async def test_agent_runtime_reprompts_when_final_announces_pending_action(tmp_path):
+    skills_dir = tmp_path / "skills" / ".agent" / "weather-query"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "skill.toml").write_text("name = 'weather-query'", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"好，参考 weather-query 的风格。现在我创建 `web_search.py` 主脚本："}',
+            '{"tool_calls":[{"tool":"filesystem.list_dir","payload":{"path":"skills/.agent/weather-query"}}]}',
+            '{"final":"已确认 weather-query 结构，下一步可以创建 web_search.py。"}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("做好了吗？", source="channel:wechat:wechat869:group")
+
+    assert result.output == "已确认 weather-query 结构，下一步可以创建 web_search.py。"
+    assert len(llm.messages) == 3
+    assert any(
+        "announced a pending action" in (message.content or "")
+        for message in llm.messages[1]
+    )
+    assert "tool_calls" not in result.output
+
+
+@pytest.mark.anyio
 async def test_agent_runtime_accepts_plain_final_without_forcing_tool_call(tmp_path):
     target_dir = tmp_path / "skills"
     target_dir.mkdir()
@@ -1966,6 +2376,21 @@ async def test_task_start_runs_tool_in_background(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_task_status_missing_suggests_listing_recent_tasks(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    result = await runtime.execute_tool("task.status", {"task_id": "missing-task"})
+
+    assert result.status == "failed"
+    assert result.fallback["suggested_tool"] == "task.list"
+    assert result.fallback["suggested_payload"] == {"limit": 10}
+
+
+@pytest.mark.anyio
 async def test_task_agent_start_runs_child_agent_and_notifies_wechat(tmp_path):
     replies = []
     llm = FakeLLMProvider(
@@ -2008,6 +2433,60 @@ async def test_task_agent_start_runs_child_agent_and_notifies_wechat(tmp_path):
     assert replies[0].quote_message_id == "wx-msg-1"
     assert replies[0].content == "我整理好了：说明已写好。"
     assert "Child agent task completed" in llm.messages[-1][-1].content
+
+
+@pytest.mark.anyio
+async def test_channel_complex_development_task_auto_delegates_to_child_agent(tmp_path):
+    replies = []
+    llm = FakeLLMProvider(
+        responses=[
+            '{"final":"子代理已完成 web_search skill。"}',
+            '{"final":"已完成：web_search skill 已创建并验证。"}',
+        ]
+    )
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+    runtime.attach_reply_sender(send_reply)
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: wx-msg-2\ncontent: 写一个 web_search skill，参考 weather-query",
+        source="channel:wechat:wechat869:room@chatroom",
+    )
+
+    for _ in range(50):
+        if replies:
+            break
+        await anyio.sleep(0.02)
+
+    tasks = runtime.background.list()
+    assert result.output == "这个任务需要持续处理，我已交给后台子 Agent 执行，完成后会把结果发回来。"
+    assert tasks[0].kind == "agent"
+    assert "Codex" in tasks[0].metadata["input"]
+    assert "写一个 web_search skill" in tasks[0].metadata["input"]
+    assert replies[0].conversation_id == "room@chatroom"
+    assert replies[0].content == "已完成：web_search skill 已创建并验证。"
+
+
+def test_channel_complex_task_respects_no_child_agent_instruction(tmp_path):
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None)
+
+    should_delegate = runtime._should_delegate_channel_task(
+        "channel:wechat:wechat869:room@chatroom",
+        "Channel message received.\ncontent: 可以，开始做，最后跑测试确定是否能用，不要用子代理",
+    )
+
+    assert should_delegate is False
 
 
 @pytest.mark.anyio
@@ -2591,6 +3070,28 @@ def test_planner_parses_openai_function_call_shape():
     assert plan.tool_calls[0].payload == {"target": "user"}
 
 
+def test_planner_does_not_parse_file_metadata_names_as_tools():
+    planner = AgentPlanner()
+
+    plan = planner.parse_llm_response(
+        '[{"name":".api_key"},{"name":"SKILL.md"},{"name":"skill.toml"},{"name":"web_search.py"}]'
+    )
+
+    assert plan.tool_calls == []
+
+
+def test_planner_parses_explicit_name_with_arguments_as_tool_call():
+    planner = AgentPlanner()
+
+    plan = planner.parse_llm_response(
+        '{"name":"memory.read","arguments":{"target":"user"}}'
+    )
+
+    assert len(plan.tool_calls) == 1
+    assert plan.tool_calls[0].tool == "memory.read"
+    assert plan.tool_calls[0].payload == {"target": "user"}
+
+
 def test_planner_parses_function_call_xml_shape():
     planner = AgentPlanner()
 
@@ -2704,6 +3205,62 @@ async def test_background_task_replays_interrupted_read_task(tmp_path):
     assert replayed.result["output"] == "replayed ok"
     assert replayed.metadata["replayed"] is True
     assert replayed.metadata["replay_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_background_restore_marks_non_replayable_running_task_stale(tmp_path):
+    repo = FakeAgentRepository()
+    record = BackgroundTaskRecord(
+        id="bg-stale",
+        kind="tool",
+        status="running",
+        source="agent",
+        description="Interrupted write",
+        metadata={
+            "tool": "filesystem.write_file",
+            "payload": {"path": "notes.txt", "content": "unsafe replay"},
+            "replayable": False,
+        },
+    )
+    repo.background_tasks[record.id] = record
+
+    @asynccontextmanager
+    async def provider():
+        yield repo
+
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, repository_provider=provider)
+    await runtime.start()
+
+    restored = await runtime.get_background_task("bg-stale")
+
+    assert restored.status == "stale"
+    assert "not replayable" in restored.error
+    assert restored.metadata["stale_reason"] == restored.error
+
+
+def test_background_manager_marks_running_task_stale_after_expired_heartbeat():
+    from xbot.agent.background import BackgroundTaskManager
+
+    manager = BackgroundTaskManager()
+    record = BackgroundTaskRecord(
+        id="bg-expired",
+        kind="tool",
+        status="running",
+        source="agent",
+        description="Expired background task",
+        started_at=datetime.utcnow() - timedelta(hours=5),
+        metadata={"heartbeat_at": (datetime.utcnow() - timedelta(hours=5)).isoformat()},
+    )
+    manager.remember(record)
+
+    stale = manager.mark_stale_running(older_than_seconds=60)
+
+    assert [item.id for item in stale] == ["bg-expired"]
+    assert manager.get("bg-expired").status == "stale"
 
 
 @pytest.mark.anyio
@@ -2898,4 +3455,53 @@ async def test_wechat869_background_task_does_not_auto_notify_and_waits_for_fina
     assert result.output == "我已经开始处理，稍后根据结果回复。"
     assert tasks[0].metadata["tool"] == "filesystem.read_file"
     assert tasks[0].metadata.get("notify") is None
+    assert len(llm.messages) == 2
+
+
+@pytest.mark.anyio
+async def test_wechat869_repeated_task_start_returns_existing_background_status(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("background once", encoding="utf-8")
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"task.start","payload":{"tool":"filesystem.read_file","payload":{"path":"notes.txt"}}}]}',
+            '{"tool_calls":[{"tool":"task.start","payload":{"tool":"filesystem.read_file","payload":{"path":"notes.txt"}}}]}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task(
+        "Channel message received.\nmessage_id: m1\ncontent: 读取文件",
+        source="channel:wechat:wechat869:44694849727@chatroom",
+    )
+
+    assert result.output.startswith("后台任务已开始")
+    assert "查看进度" in result.output
+    assert len(runtime.background.list()) == 1
+    assert len(llm.messages) == 2
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_stops_at_max_tool_iterations(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            '{"tool_calls":[{"tool":"filesystem.list_dir","payload":{"path":"."}}]}',
+            '{"tool_calls":[{"tool":"filesystem.list_dir","payload":{"path":"."}}]}',
+            '{"tool_calls":[{"tool":"filesystem.list_dir","payload":{"path":"."}}]}',
+        ]
+    )
+    config = AgentConfig(
+        workspace_root=str(tmp_path),
+        workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        max_tool_iterations=1,
+    )
+    runtime = AgentRuntime(config, plugins=None, skills=None, llm_provider=llm)
+
+    result = await runtime.run_task("循环查目录", source="terminal:local:test")
+
+    assert "工具调用次数达到上限" in result.output
     assert len(llm.messages) == 2

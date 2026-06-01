@@ -137,7 +137,7 @@ class ToolCallParser:
             return []
 
         raw_calls: list[Any] = []
-        if data.get("tool") or data.get("name"):
+        if data.get("tool") or self._has_explicit_named_call(data):
             raw_calls.append(data)
         raw_calls.extend(data.get("tool_calls") or data.get("tools") or [])
         if isinstance(data.get("function"), dict):
@@ -154,7 +154,9 @@ class ToolCallParser:
         if not isinstance(item, dict):
             return None
         function = item.get("function") if isinstance(item.get("function"), dict) else {}
-        tool = str(item.get("tool") or item.get("name") or function.get("name") or "").strip()
+        tool = str(item.get("tool") or function.get("name") or "").strip()
+        if not tool and self._has_explicit_named_call(item):
+            tool = str(item.get("name") or "").strip()
         if not tool:
             return None
         payload = item.get("payload")
@@ -166,7 +168,7 @@ class ToolCallParser:
 
     def _extract_lenient_json_pairs(self, text: str) -> list[ParsedToolCall]:
         calls: list[ParsedToolCall] = []
-        tool_pattern = re.compile(r'"(?:tool|name)"\s*:\s*"([^"]+)"')
+        tool_pattern = re.compile(r'"tool"\s*:\s*"([^"]+)"')
         decoder = json.JSONDecoder()
         for match in tool_pattern.finditer(text):
             payload: dict[str, Any] = {}
@@ -182,6 +184,11 @@ class ToolCallParser:
                     payload = self._normalize_payload(parsed_payload)
             calls.append(ParsedToolCall(tool=match.group(1), payload=payload))
         return calls
+
+    def _has_explicit_named_call(self, data: dict[str, Any]) -> bool:
+        if not data.get("name"):
+            return False
+        return any(key in data for key in ("payload", "arguments", "args"))
 
     def _extract_xml_tool_calls(self, text: str) -> list[ParsedToolCall]:
         calls = []

@@ -87,8 +87,10 @@ export type AgentTask = {
   task_id: string;
   source: string;
   status: string;
+  input?: string;
   output: string;
   created_at: string;
+  updated_at?: string;
   suppress_channel_reply?: boolean;
 };
 
@@ -98,6 +100,59 @@ export type AgentEvent = {
   type: string;
   content: unknown;
   created_at: string;
+};
+
+export type AgentTaskTimelineItem = {
+  type: string;
+  title: string;
+  status: string;
+  content: unknown;
+  created_at: string;
+};
+
+export type AgentTaskToolCall = {
+  tool: string;
+  status: string;
+  risk_level?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string | null;
+  fallback?: Record<string, unknown> | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
+export type AgentTaskRepair = {
+  tool?: string;
+  error?: string;
+  error_type?: string;
+  guidance?: string;
+  repair_steps?: string[];
+  suggested_tool?: string | null;
+  suggested_payload?: unknown;
+  auto_result?: unknown;
+  created_at?: string;
+};
+
+export type AgentArtifact = {
+  id: string;
+  task_id: string;
+  kind: string;
+  path: string;
+  content_hash?: string | null;
+  summary?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentTaskDetail = {
+  task: AgentTask;
+  events: AgentEvent[];
+  timeline: AgentTaskTimelineItem[];
+  tool_calls: AgentTaskToolCall[];
+  repairs: AgentTaskRepair[];
+  artifacts: AgentArtifact[];
+  summary: Record<string, number>;
 };
 
 export type BackgroundTask = {

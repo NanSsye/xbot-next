@@ -51,7 +51,7 @@ class AgentPlanner:
         for data in objects:
             if not isinstance(data, dict):
                 continue
-            if data.get("tool") or data.get("name"):
+            if data.get("tool") or self._has_explicit_named_call(data):
                 calls.append(data)
             calls.extend(data.get("tool_calls") or data.get("tools") or [])
             final = data.get("final") or data.get("answer") or final
@@ -74,6 +74,11 @@ class AgentPlanner:
                 if isinstance(item, dict) and (item.get("tool") or item.get("name"))
             ],
         )
+
+    def _has_explicit_named_call(self, data: dict[str, Any]) -> bool:
+        if not data.get("name"):
+            return False
+        return any(key in data for key in ("payload", "arguments", "args", "function"))
 
     def clean_final_output(self, content: str) -> str:
         text = content.strip()

@@ -2,7 +2,7 @@
 
 `xbot-next` 的 Web Control UI 是给本地或服务器运行实例使用的控制台，不是营销站点。第一版目标是把通道、会话、Agent 运行、工具调用、后台任务和定时任务放到一个实时界面里。
 
-更新时间：2026-05-31
+更新时间：2026-06-01
 
 ## 目标
 
@@ -44,6 +44,9 @@
 - `GET /api/v1/conversations/{id}/messages`
 - `DELETE /api/v1/conversations/{id}`
 - `POST /api/v1/agent/tasks`
+- `GET /api/v1/agent/tasks`
+- `GET /api/v1/agent/tasks/{task_id}`
+- `POST /api/v1/agent/tasks/{task_id}/resume`
 - `GET /api/v1/agent/events`
 - `GET /api/v1/agent/background-tasks`
 - `GET /api/v1/agent/scheduled-jobs`
@@ -84,12 +87,26 @@
 - 对话：选择通道会话、查看历史消息、页面内和 Agent 对话、查看当前活动。
 - 总览：后端状态、通道数量、后台任务数量、定时任务数量。
 - Agent：查看 LLM/MCP 状态、重载 MCP、搜索工具、添加/删除/压缩长期记忆。
+- 任务：查看 Agent 任务列表、任务详情、工具调用流、时间线和失败修复建议。
 - 通道：每个 adapter 一张卡片，展示配置启用、页面覆盖、实际启用、运行中、登录支持和运行参数。
 - 扩展：插件和 Skill 单独管理，不混在通道页；支持启用、停用、重载和状态查看。
 - 后台任务：查看后台任务状态、来源、结果和错误；支持取消运行中任务和重放可重放任务。
 - 定时任务：创建任务，查看计划、时区、下次运行、启用状态；支持暂停、恢复、立即运行和删除。
 - 活动流：集中展示 Agent 事件、工具调用和 WebSocket 实时事件。
 - 设置：管理浏览器本地保存的 API Token，查看 REST 和 WebSocket 端点。
+
+## 任务轨迹
+
+任务页基于后端 `agent_events` 做结构化投影，不额外要求新表迁移：
+
+- `task`：任务输入、输出、状态、来源和时间。
+- `timeline`：按事件顺序展示 LLM、工具、任务生命周期。
+- `tool_calls`：聚合 `tool.started`、`tool.completed`、`tool.failed`、`tool.denied` 等事件，显示输入、输出、错误和 fallback。
+- `repairs`：从失败工具的 fallback 中提取 `guidance`、`repair_steps`、`suggested_tool` 和 `suggested_payload`，方便定位为什么失败、下一步怎么修。
+- `artifacts`：展示工具登记的文件、skill 产物和大工具结果落盘路径。
+
+WebSocket 收到 `agent.event` 后会实时追加活动流；如果当前打开的是该任务详情，会自动刷新工具流和时间线。
+任务详情页提供“继续”按钮，会调用 resume API，让 Agent 带着原任务轨迹在同一个 `task_id` 上原地续跑；续跑完成后原任务结果会更新。
 
 ## 通道页
 

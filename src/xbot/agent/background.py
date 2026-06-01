@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
@@ -127,6 +127,48 @@ class BackgroundTaskManager:
     def get(self, task_id: str) -> BackgroundTaskRecord | None:
         return self._records.get(task_id)
 
+    def heartbeat(self, task_id: str, *, progress: str = "") -> BackgroundTaskRecord | None:
+        record = self._records.get(task_id)
+        if record is None:
+            return None
+        if progress:
+            record.progress = progress
+        metadata = dict(record.metadata or {})
+        metadata["heartbeat_at"] = datetime.utcnow().isoformat()
+        record.metadata = metadata
+        self._persist_later(record)
+        return record
+
+    def mark_stale(self, record: BackgroundTaskRecord, *, reason: str) -> BackgroundTaskRecord:
+        record.status = "stale"
+        record.error = reason
+        record.finished_at = datetime.utcnow()
+        metadata = dict(record.metadata or {})
+        metadata["stale_reason"] = reason
+        record.metadata = metadata
+        self._records[record.id] = record
+        self._persist_later(record)
+        return record
+
+    def mark_stale_running(self, *, older_than_seconds: int = 14400) -> list[BackgroundTaskRecord]:
+        cutoff = datetime.utcnow() - timedelta(seconds=max(1, older_than_seconds))
+        stale = []
+        for record in list(self._records.values()):
+            if record.status != "running":
+                continue
+            if record.id in self._tasks:
+                continue
+            last_seen = record.started_at or record.created_at
+            heartbeat = (record.metadata or {}).get("heartbeat_at")
+            if isinstance(heartbeat, str):
+                try:
+                    last_seen = max(last_seen, datetime.fromisoformat(heartbeat))
+                except ValueError:
+                    pass
+            if last_seen <= cutoff:
+                stale.append(self.mark_stale(record, reason="Background task heartbeat expired."))
+        return stale
+
     async def cancel(self, task_id: str) -> BackgroundTaskRecord | None:
         record = self._records.get(task_id)
         if record is None:
@@ -161,6 +203,7 @@ class BackgroundTaskManager:
         record = self._records[task_id]
         record.status = "running"
         record.started_at = datetime.utcnow()
+        self.heartbeat(task_id, progress=record.progress or "started")
         self._persist_later(record)
         try:
             record.result = await runner()

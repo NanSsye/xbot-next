@@ -184,6 +184,9 @@
 - [x] LLM 请求重试机制完成：`AgentRuntime` 在统一 `_complete_llm_with_retries()` 层处理瞬时失败，支持 `agent.llm.max_attempts` / `XBOT_LLM_MAX_ATTEMPTS` 和 `retry_backoff_seconds`；仅重试超时、网络错误、429/5xx，配置错误和 provider 不可用不重试，并记录 `llm.retry` 事件。
 - [x] Anthropic 原生 LLM provider 完成：新增 `XBOT_LLM_PROVIDER=anthropic`，支持 Anthropic `/v1/messages`、`system` 字段、`tools`、`tool_use` 和 `tool_result` 与内部工具循环互转。
 - [x] LLM 多模态输入第一版完成：新增统一 `LLMContentBlock`，AgentRuntime 可把通道附件中的本地图片按配置传入模型；OpenAI-compatible 转为 `image_url`，Anthropic 转为 `image` source，默认关闭，需 `XBOT_LLM_MULTIMODAL_ENABLED=true` 和 `XBOT_LLM_IMAGE_INPUT_ENABLED=true` 才启用。
+- [x] Codex 风格工具轨迹续作完成：同一会话短期上下文现在会保存上一轮压缩后的 `internal_tool_trace`，包含工具名、状态、输入摘要和输出摘要，便于长任务下一轮继续；完整工具结果仍只在当前轮和事件流中使用，避免上下文膨胀。
+- [x] Agent 后台任务重复保护完成：`max_tool_iterations` 默认保持 0 不限制，长任务可以持续完成；同时支持 `XBOT_AGENT_MAX_TOOL_ITERATIONS` 按部署需要手动设置上限。同一轮已启动后台任务后，如果模型继续重复 `task.start` / `task.agent_start`，runtime 会收口返回已有后台任务状态，避免无限开后台任务。
+- [x] 通道复杂开发任务自动委派完成：微信/通道里的写代码、创建 skill、修复插件、落地前端等长任务会自动启动后台子 Agent，子 Agent 按 Codex 式循环持续 inspect/edit/test，完成后由 parent Agent 整理结果回发；可用 `XBOT_AGENT_AUTO_DELEGATE_CHANNEL_TASKS=false` 关闭。
 - [x] Agent 工具调用容错优化完成：移除“模型连续没有发起工具调用”的硬中断判断，不再因为请求文本命中目录/文件/插件/日志等关键词就强制失败；模型返回普通 final 时按正常回复处理，只对空内容或不完整工具 JSON 继续追问。
 - [x] 一键安装入口第一版完成：新增 `scripts/install.sh` 和 `scripts/install.ps1`，默认安装到用户目录、创建 venv、复制 `.env`、生成全局 `xbot` / `xbot-upgrade` 命令并加入 PATH；裸 `xbot` 进入终端 TUI，`xbot run` 启动后端服务。
 - [x] 首次配置向导第一版完成：新增 `xbot setup`，中文 Rich 面板引导用户选择简易版 SQLite + memory queue 或生产版 PostgreSQL + Redis，并可选择不开微信、iLink 扫码、869、双通道；新增 `.env.local.example`，简易版同样支持微信通道和自动迁移；安装器默认在首次安装后进入向导，`XBOT_SKIP_SETUP=1` 可跳过。
@@ -202,11 +205,12 @@
 - [x] OpenClaw 风格上下文压缩落地：当上下文接近窗口上限时，按配置保留近期上下文并使用 LLM 压缩旧会话摘要，避免会话历史无限膨胀。
 - [x] 长期记忆写入范围收敛：未唤醒 bot、未进入 Agent 的普通群聊消息不应进入长期记忆；记忆更偏向用户偏好、稳定事实、纠正和项目约定。
 - [x] 定时任务工具第一版完成：Agent 可通过 schedule 工具创建、查看、暂停、恢复、删除和立即运行定时任务；任务按 source 保存通道上下文，触发时回到原会话/通道。
+- [x] Agent 长任务可靠性收口完成：任务详情结构化投影、原地 resume、artifact 登记、工具验收事件和失败 repair plan 已接入后端与 Control UI。
 - [x] 添加基础测试，核心消息、队列、Wechat869、插件/Skill/Agent 仓储和 UI build 均有覆盖；每次更新按改动范围执行对应测试。
 
 进行中：
 
-- [ ] Control UI 商业落地完善：补全更多运行状态、错误提示、空状态、批量操作、审计视图和更细的权限提示。
+- [ ] Control UI 商业落地完善：继续补批量操作、审计筛选、suggested tool 手动执行、artifact 文件预览和更细的权限提示。
 - [ ] 869 登录后续增强：补完整扫码轮询状态、登录过期恢复、profile 定期刷新、二维码过期提示和 869 登录流程异常分类。
 - [ ] Hermes 生态下一阶段：补 memory / curator 的前端管理页或独立控制台视图，能查看 `USER.md`、`MEMORY.md`、agent-owned skill usage、stale/archive 状态和手动操作入口。
 - [ ] Hermes 自进化增强二阶段：把 curator report 的 merge 建议升级为更强的内容合并 diff、人工审批 UI 和回滚入口。
@@ -216,7 +220,7 @@
 - [ ] MCP 二阶段：当前已有 include/exclude、status、reload 和失败状态记录；下一步补自动重连退避、周期健康检查、失败工具降级和连接池隔离。
 - [ ] 微信 iLink 第二通道生产验证：开启 `XBOT_WECHAT_ILINK_ENABLED=true` 并执行 migration 后验证扫码登录、登录态重启恢复、长轮询收消息、cursor 更新、文本/图片/文件回发、引用媒体下载、和 869 双通道同时启用时的独立会话隔离；后续再补 token 加密和 token 过期恢复。
 - [ ] Agent 工具 provider 四阶段：浏览器会话生命周期接入 runtime stop、数据库更多方言边界验证、GitHub 写操作审批细化、插件工具权限持久化开关和前端 UI。
-- [ ] Agent 工具体验对齐 Codex 五阶段：真正前端后台任务页面、后台任务失败原因聚合、按工具/平台配置自动后台策略。
+- [ ] Agent 工具体验对齐 Codex 五阶段：补任务类型验收 checklist、workspace 写入锁、Agent 并发限流、按工具/平台配置自动后台策略。
 - [ ] 终端 Hermes 对齐六阶段：基于 `chat-bridge` 实现真正独立 UI 进程的 TUI/Web/PTY 前端，并继续规避 Windows 中文 IME 兼容问题。
 
 尚未开始：
@@ -926,6 +930,34 @@ Adapter.receive
 ```
 
 第一版可以在 API simulate 中短路部分流程，但模块边界必须按这个链路保留。
+
+### 11.3.1 Agent 长任务可靠性收口
+
+目标：让 Agent 后端从“能调用工具”升级为“可持续执行、可恢复、可审计、可自动修复”的生产状态。
+
+执行清单：
+
+1. 任务轨迹与断点续跑
+   - 继续使用 `agent_tasks` 存任务输入、输出、状态。
+   - 继续使用 `agent_events` 存结构化事件，作为任务轨迹源。
+   - `GET /api/v1/agent/tasks/{task_id}` 聚合 `timeline`、`tool_calls`、`repairs`、`summary`。
+   - `POST /api/v1/agent/tasks/{task_id}/resume` 读取原任务和事件，生成 “Resume interrupted Agent task” 输入，并在同一个 `task_id` 上原地续跑。
+   - resume 不自动重复危险工具，由上下文提示 Agent 根据已完成工具、todo 和失败修复建议继续。
+
+2. Artifact 统一登记
+   - 复用已有 `agent_artifacts` 表。
+   - `filesystem.write_file`、`skill.manage`、`skill.run` 输出路径、`shell.exec` 变更文件、大工具结果落盘时登记 artifact。
+   - 任务详情展示 artifact，说明本次任务改了哪些文件、生成了哪些结果。
+
+3. 工具验收规则
+   - 写文件后检查文件存在、大小可读，并登记 artifact。
+   - `shell.exec` 后检查 `returncode` 和 `timed_out`，失败写入 `tool.validation_failed`。
+   - `skill.manage` create/write_file、`skill.run` 返回路径、`shell.exec` 生成/修改文件时登记 artifact。
+
+4. 失败修复计划自动执行
+   - fallback policy 输出 `guidance`、`repair_steps`、`suggested_tool`、`suggested_payload`。
+   - runtime 对低风险 suggested tool 自动执行一次，例如文件不存在时先 list 父目录。
+   - 无论是否自动执行，都写入 `tool.repair_plan` 事件，前端任务详情可展示。
 
 ### 11.4 消息信封
 

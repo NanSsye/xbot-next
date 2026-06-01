@@ -76,6 +76,9 @@ workspace_root = "."
 allow_shell = false
 allow_file_write = true
 max_tool_iterations = 0
+auto_delegate_channel_tasks = true
+max_inline_tool_result_chars = 20000
+tool_result_artifact_dir = "data/agent_tool_results"
 
 [agent.workspace]
 allow_all_filesystem = false

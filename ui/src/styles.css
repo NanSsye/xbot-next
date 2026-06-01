@@ -519,6 +519,183 @@ button {
   white-space: pre-wrap;
 }
 
+.task-monitor-grid {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 14px;
+  height: 100%;
+}
+
+.task-list-panel,
+.task-detail-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.task-list-scroll,
+.task-detail-scroll {
+  min-height: 0;
+  overflow: auto;
+}
+
+.task-list-scroll {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+}
+
+.task-list-item {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-accent);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-list-item:hover,
+.task-list-item--active {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.task-list-item--active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.task-list-item__head,
+.task-detail-title,
+.tool-call-card summary,
+.repair-card__head,
+.timeline-item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-list-item span,
+.task-list-item small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-list-item p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.45;
+}
+
+.task-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-detail-scroll {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.task-section {
+  display: grid;
+  gap: 10px;
+}
+
+.task-section h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.tool-call-card,
+.repair-card,
+.timeline-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-accent);
+}
+
+.tool-call-card summary,
+.timeline-item summary {
+  min-height: 42px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.tool-call-card__body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.tool-json-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tool-json-grid pre,
+.repair-card pre,
+.timeline-item pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.tool-error {
+  border: 1px solid var(--danger-border);
+  border-radius: 8px;
+  background: var(--danger-subtle);
+  padding: 10px;
+  color: var(--danger-text);
+}
+
+.repair-list,
+.timeline-list {
+  display: grid;
+  gap: 10px;
+}
+
+.repair-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.repair-card p,
+.repair-card ol {
+  margin: 0;
+}
+
+.repair-card ol {
+  padding-left: 18px;
+}
+
+.timeline-item pre {
+  margin: 0 12px 12px;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1154,6 +1331,10 @@ td {
       "memories";
   }
 
+  .task-monitor-grid {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+
   .activity-panel--compact {
     display: none;
   }
@@ -1245,8 +1426,20 @@ td {
     height: auto;
   }
 
+  .task-monitor-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .task-summary-grid,
+  .tool-json-grid {
+    grid-template-columns: 1fr;
+  }
+
   .conversation-list,
   .chat-panel,
+  .task-list-panel,
+  .task-detail-panel,
   .activity-panel {
     min-height: 280px;
   }
@@ -1257,6 +1450,8 @@ td {
   .manage-scroll,
   .tool-list,
   .memory-list,
+  .task-list-scroll,
+  .task-detail-scroll,
   .channel-card-grid,
   .table-wrap {
     max-height: 55dvh;
