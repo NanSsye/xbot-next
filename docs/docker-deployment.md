@@ -16,15 +16,15 @@
 ## 首次启动
 
 ```bash
-cp .env.docker.example .env.docker
-docker compose --env-file .env.docker up -d --build
+cp .env.example .env
+docker compose up -d --build
 ```
 
 Windows PowerShell：
 
 ```powershell
-Copy-Item .env.docker.example .env.docker
-docker compose --env-file .env.docker up -d --build
+Copy-Item .env.example .env
+docker compose up -d --build
 ```
 
 启动后访问：
@@ -57,7 +57,7 @@ compose 默认持久化到宿主机项目目录：
 
 ## 配置
 
-Docker 使用 `.env.docker`。常用配置：
+Docker 统一使用项目根目录 `.env`。常用配置：
 
 ```env
 XBOT_LLM_ENABLED=true
@@ -67,23 +67,28 @@ XBOT_LLM_MODEL=gpt-4.1-mini
 XBOT_LLM_API_KEY=你的模型 key
 ```
 
-如果 869 或 OpenClaw 桥运行在宿主机：
+如果 869 运行在宿主机：
 
 ```env
 XBOT_WECHAT869_HOST=host.docker.internal
 XBOT_WECHAT869_WS_URL=ws://host.docker.internal:8848/ws/GetSyncMsg
-XBOT_OPENCLAW_BRIDGE_URL=http://host.docker.internal:1569
 ```
 
-如果它们运行在局域网其他机器，改成对应机器 IP。
+如果它运行在局域网其他机器，改成对应机器 IP。
+
+OpenClaw 桥插件不写在根目录 `.env`。启用后到插件配置里改：
+
+```text
+plugins/openclaw_bridge/config.toml
+```
 
 ## 常用命令
 
 ```bash
 docker compose logs -f xbot
-docker compose --env-file .env.docker restart xbot
-docker compose --env-file .env.docker down
-docker compose --env-file .env.docker down -v
+docker compose restart xbot
+docker compose down
+docker compose down -v
 ```
 
 当前 compose 使用宿主机目录持久化。`docker compose down -v` 不会删除 bind mount 目录，但正常升级也不需要它。
@@ -94,20 +99,20 @@ docker compose --env-file .env.docker down -v
 
 ```bash
 git pull
-docker compose --env-file .env.docker restart xbot
+docker compose restart xbot
 ```
 
-如果用户不是 git 部署，而是下载压缩包部署：保留 `.env.docker`、`data/`、`logs/`、`workspace/`、`docker-data/`，替换其他项目文件，然后执行：
+如果用户不是 git 部署，而是下载压缩包部署：保留 `.env`、`data/`、`logs/`、`workspace/`、`docker-data/`，替换其他项目文件，然后执行：
 
 ```bash
-docker compose --env-file .env.docker restart xbot
+docker compose restart xbot
 ```
 
 `xbot` 容器启动时会自动检查：
 
 - `pyproject.toml` 变化：自动执行 `pip install -e .`
 - `ui/` 前端源码变化：自动执行 `npm ci` 和 `npm run build`
-- 数据库迁移：按 `.env.docker` 配置自动执行 Alembic migration
+- 数据库迁移：按 `.env` 配置自动执行 Alembic migration
 
 只有这些情况需要重新构建镜像：
 
@@ -118,7 +123,7 @@ docker compose --env-file .env.docker restart xbot
 重新构建命令：
 
 ```bash
-docker compose --env-file .env.docker up -d --build
+docker compose up -d --build
 ```
 
 ## 跳过 Playwright 浏览器安装
@@ -127,7 +132,7 @@ docker compose --env-file .env.docker up -d --build
 
 ```bash
 INSTALL_PLAYWRIGHT=false docker compose build
-docker compose --env-file .env.docker up -d
+docker compose up -d
 ```
 
 Windows PowerShell：
@@ -135,5 +140,5 @@ Windows PowerShell：
 ```powershell
 $env:INSTALL_PLAYWRIGHT="false"
 docker compose build
-docker compose --env-file .env.docker up -d
+docker compose up -d
 ```

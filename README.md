@@ -53,15 +53,15 @@ tests/                   单元测试和集成测试
 适合普通用户本机部署，不需要单独安装 Python、Node、PostgreSQL 或 Redis。Docker 会直接映射整个项目目录，后续升级可以替换目录文件后重启容器：
 
 ```bash
-cp .env.docker.example .env.docker
+cp .env.example .env
 docker compose up -d --build
 ```
 
 Windows PowerShell：
 
 ```powershell
-Copy-Item .env.docker.example .env.docker
-docker compose --env-file .env.docker up -d --build
+Copy-Item .env.example .env
+docker compose up -d --build
 ```
 
 启动后访问：
@@ -72,10 +72,10 @@ http://localhost:8548
 
 局域网设备访问时使用运行 Docker 的电脑 IP。更多说明见 [Docker 本地构建运行](docs/docker-deployment.md)。
 
-升级时保留 `.env.docker`、`data/`、`logs/`、`workspace/`、`docker-data/`，替换代码后执行：
+升级时保留 `.env`、`data/`、`logs/`、`workspace/`、`docker-data/`，替换代码后执行：
 
 ```bash
-docker compose --env-file .env.docker restart xbot
+docker compose restart xbot
 ```
 
 ### 一键安装

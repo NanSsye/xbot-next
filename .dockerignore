@@ -18,7 +18,6 @@ screenshots
 .env
 .env.*
 !.env.example
-!.env.docker.example
 *.db
 *.sqlite
 *.sqlite3

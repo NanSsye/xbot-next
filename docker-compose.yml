@@ -9,7 +9,7 @@ services:
     container_name: xbot-next
     restart: unless-stopped
     env_file:
-      - .env.docker
+      - .env
     environment:
       XBOT_SERVER_HOST: 0.0.0.0
       XBOT_SERVER_PORT: 8548

@@ -1,13 +1,11 @@
 [openclaw_bridge]
 enable = true
 
-# OpenClaw HTTP 桥地址。也可以用环境变量覆盖：
-# XBOT_OPENCLAW_BRIDGE_URL=http://host.docker.internal:1569
+# OpenClaw HTTP 桥地址。
+# 如果 OpenClaw 桥运行在宿主机，Docker Desktop 可使用 http://host.docker.internal:1569。
 bridge_url = "http://127.0.0.1:1569"
 
 # 桥接服务密钥，对应 OpenClaw 桥配置里的 [server].secret。
-# 也可以用环境变量覆盖：
-# XBOT_OPENCLAW_SHARED_SECRET=...
 shared_secret = ""
 
 # OpenClaw agent_id。

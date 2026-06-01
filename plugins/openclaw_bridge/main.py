@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import mimetypes
-import os
 import re
 import time
 from pathlib import Path
@@ -82,29 +81,7 @@ class OpenClawBridgePlugin(PluginBase):
         return True
 
     def _config(self, ctx: PluginContext) -> dict[str, Any]:
-        cfg = dict(ctx.config or {})
-        env_map = {
-            "XBOT_OPENCLAW_BRIDGE_ENABLE": ("enable", self._env_bool),
-            "XBOT_OPENCLAW_BRIDGE_URL": ("bridge_url", str),
-            "XBOT_OPENCLAW_SHARED_SECRET": ("shared_secret", str),
-            "XBOT_OPENCLAW_AGENT_ID": ("agent_id", str),
-            "XBOT_OPENCLAW_TIMEOUT_SECONDS": ("timeout_seconds", int),
-            "XBOT_OPENCLAW_GROUP_AT_ONLY": ("group_at_only", self._env_bool),
-            "XBOT_OPENCLAW_SESSION_MODE": ("session_mode", str),
-            "XBOT_OPENCLAW_STORE_UNTRIGGERED_GROUP_MESSAGES": (
-                "store_untriggered_group_messages",
-                self._env_bool,
-            ),
-            "XBOT_OPENCLAW_MEDIA_MAX_BYTES": ("media_max_bytes", int),
-        }
-        for env_key, (cfg_key, caster) in env_map.items():
-            value = os.getenv(env_key)
-            if value not in (None, ""):
-                try:
-                    cfg[cfg_key] = caster(value)
-                except Exception:
-                    logger.warning("OpenClawBridgePlugin 环境变量解析失败: {}", env_key)
-        return cfg
+        return dict(ctx.config or {})
 
     async def _call_bridge(
         self,
@@ -265,9 +242,6 @@ class OpenClawBridgePlugin(PluginBase):
         if ext and "." not in name:
             name = f"{name}.{ext.lstrip('.')}"
         return name[:200]
-
-    def _env_bool(self, value: str) -> bool:
-        return value.lower() in {"1", "true", "yes", "on"}
 
     def _dedupe(self, items: list[str]) -> list[str]:
         seen: set[str] = set()
