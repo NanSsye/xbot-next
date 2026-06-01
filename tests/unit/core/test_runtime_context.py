@@ -89,6 +89,15 @@ class FakeAgent:
         return FakeAgentResult()
 
 
+class AttachmentAwareAgent:
+    def __init__(self):
+        self.inputs = []
+
+    async def run_task(self, input_text: str, source: str = "api", attachments=None):
+        self.inputs.append((input_text, source, attachments or []))
+        return FakeAgentResult()
+
+
 class SuppressingAgent(FakeAgent):
     async def run_task(self, input_text: str, source: str = "api"):
         self.inputs.append((input_text, source))
@@ -328,7 +337,7 @@ async def test_agent_chat_plugin_passes_media_attachments_to_agent():
     settings = load_settings("configs/xbot.toml")
     settings.storage.persist_runtime_events = False
     ctx = build_context(settings)
-    fake_agent = FakeAgent()
+    fake_agent = AttachmentAwareAgent()
     ctx.plugins.attach_runtime(
         agent=fake_agent,
         send_reply=ctx.engine.send_reply,
@@ -384,10 +393,15 @@ async def test_agent_chat_plugin_passes_media_attachments_to_agent():
         await ctx.consumer.handle(MessageEnvelope.from_message(message))
 
         agent_input = fake_agent.inputs[-1][0]
+        agent_attachments = fake_agent.inputs[-1][2]
         assert "message_attachments:" in agent_input
         assert "local_path=data/wechat869/media/img.jpg" in agent_input
         assert "quoted_message:" in agent_input
         assert "local_path=data/wechat869/media/quoted.jpg" in agent_input
+        assert [item["local_path"] for item in agent_attachments] == [
+            "data/wechat869/media/img.jpg",
+            "data/wechat869/media/quoted.jpg",
+        ]
     finally:
         await ctx.engine.stop()
         await ctx.storage.close()

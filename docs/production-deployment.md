@@ -44,6 +44,26 @@ XBOT_LLM_MODEL=claude-3-5-sonnet-latest
 XBOT_LLM_API_KEY=你的 Anthropic API Key
 ```
 
+MiniMax Anthropic 兼容接口可改为：
+
+```env
+XBOT_LLM_ENABLED=true
+XBOT_LLM_PROVIDER=anthropic
+XBOT_LLM_BASE_URL=https://api.minimaxi.com/anthropic
+XBOT_LLM_MODEL=MiniMax-M3
+XBOT_LLM_API_KEY=你的 MiniMax API Key
+```
+
+多模态模型图片输入：
+
+```env
+XBOT_LLM_MULTIMODAL_ENABLED=true
+XBOT_LLM_IMAGE_INPUT_ENABLED=true
+XBOT_LLM_MAX_IMAGE_BYTES=10485760
+```
+
+图片能力走统一附件层：微信通道已下载到本地的图片会作为模型图片输入，同时保留原来的文本附件说明。普通文本模型保持默认关闭即可。视频开关已预留，默认仍只进入附件元数据，避免大文件误传。
+
 如果 Control UI 和 API 不同源，额外配置：
 
 ```env

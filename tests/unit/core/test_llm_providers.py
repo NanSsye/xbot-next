@@ -1,4 +1,10 @@
-from xbot.agent.llm import AnthropicLLMProvider, LLMMessage, create_llm_provider
+from xbot.agent.llm import (
+    AnthropicLLMProvider,
+    LLMContentBlock,
+    LLMMessage,
+    OpenAICompatibleLLMProvider,
+    create_llm_provider,
+)
 from xbot.core.config import AgentLLMConfig
 
 
@@ -100,3 +106,64 @@ def test_anthropic_provider_parses_tool_use_blocks() -> None:
     assert calls[0].id == "toolu_1"
     assert calls[0].name == "shell__exec"
     assert calls[0].arguments == {"command": "pwd"}
+
+
+def test_openai_provider_converts_image_content_blocks(tmp_path) -> None:
+    image = tmp_path / "image.png"
+    image.write_bytes(b"png-bytes")
+    provider = OpenAICompatibleLLMProvider(
+        AgentLLMConfig(
+            enabled=True,
+            provider="openai_compatible",
+            api_key="test-key",
+            model="gpt-4.1-mini",
+            multimodal_enabled=True,
+            image_input_enabled=True,
+        )
+    )
+
+    payload = LLMMessage(
+        role="user",
+        content="看图",
+        content_blocks=[
+            LLMContentBlock(type="text", text="看图"),
+            LLMContentBlock(type="image", path=str(image), mime_type="image/png"),
+        ],
+    ).to_openai_message(config=provider.config)
+
+    assert payload["content"][0] == {"type": "text", "text": "看图"}
+    assert payload["content"][1]["type"] == "image_url"
+    assert payload["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_anthropic_provider_converts_image_content_blocks(tmp_path) -> None:
+    image = tmp_path / "image.jpg"
+    image.write_bytes(b"jpg-bytes")
+    provider = AnthropicLLMProvider(
+        AgentLLMConfig(
+            enabled=True,
+            provider="anthropic",
+            api_key="test-key",
+            model="claude-3-5-sonnet-latest",
+            multimodal_enabled=True,
+            image_input_enabled=True,
+        )
+    )
+
+    payload = provider._build_payload(
+        [
+            LLMMessage(
+                role="user",
+                content="看图",
+                content_blocks=[
+                    LLMContentBlock(type="text", text="看图"),
+                    LLMContentBlock(type="image", path=str(image), mime_type="image/jpeg"),
+                ],
+            )
+        ]
+    )
+
+    assert payload["messages"][0]["content"][0] == {"type": "text", "text": "看图"}
+    assert payload["messages"][0]["content"][1]["type"] == "image"
+    assert payload["messages"][0]["content"][1]["source"]["type"] == "base64"
+    assert payload["messages"][0]["content"][1]["source"]["media_type"] == "image/jpeg"

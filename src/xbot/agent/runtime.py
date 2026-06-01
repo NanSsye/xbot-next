@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -15,7 +17,7 @@ from xbot.agent.background import BackgroundTaskManager
 from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.cache import TTLCache
 from xbot.agent.compression import MemoryCompressor
-from xbot.agent.llm import LLMMessage, LLMResponse, LLMToolCall, create_llm_provider
+from xbot.agent.llm import LLMContentBlock, LLMMessage, LLMResponse, LLMToolCall, create_llm_provider
 from xbot.agent.memory import MemoryStore
 from xbot.agent.mcp import MCPClientManager
 from xbot.agent.planner import AgentPlanner
@@ -171,7 +173,12 @@ class AgentRuntime:
 
         return unsubscribe
 
-    async def run_task(self, input_text: str, source: str = "api") -> AgentResult:
+    async def run_task(
+        self,
+        input_text: str,
+        source: str = "api",
+        attachments: list[dict] | None = None,
+    ) -> AgentResult:
         task_id = str(uuid4())
         logger.info("Agent 任务开始: task_id={} source={} input_chars={}", task_id, source, len(input_text))
         memory_input_text = self._memory_eligible_input_text(input_text)
@@ -184,7 +191,7 @@ class AgentRuntime:
         else:
             await self._add_event(task_id, "task.received", input_text)
         logger.info("Agent 任务进入 LLM: task_id={}", task_id)
-        output = await self._run_llm(task_id, input_text, source=source)
+        output = await self._run_llm(task_id, input_text, source=source, attachments=attachments)
         suppress_channel_reply = task_id in self._suppress_channel_reply_task_ids
         self._suppress_channel_reply_task_ids.discard(task_id)
         result = AgentResult(
@@ -1063,7 +1070,14 @@ class AgentRuntime:
             return value
         return {"truncated": True, "chars": len(text), "preview": text[:1200]}
 
-    async def _run_llm(self, task_id: str, input_text: str, *, source: str = "api") -> str:
+    async def _run_llm(
+        self,
+        task_id: str,
+        input_text: str,
+        *,
+        source: str = "api",
+        attachments: list[dict] | None = None,
+    ) -> str:
         history_key = self._session_history_key(source)
         native_tools, native_tool_map = self._native_tools_for_source(source)
         messages = [
@@ -1071,7 +1085,13 @@ class AgentRuntime:
         ]
         if history_key:
             messages.extend(self._session_history(history_key))
-        messages.append(LLMMessage(role="user", content=input_text))
+        messages.append(
+            LLMMessage(
+                role="user",
+                content=input_text,
+                content_blocks=self._llm_content_blocks(input_text, attachments or []),
+            )
+        )
         last_content = ""
         iteration = 0
         missing_tool_reprompts = 0
@@ -1247,6 +1267,56 @@ class AgentRuntime:
         if history_key:
             await self._append_session_turn(history_key, input_text, output)
         return output
+
+    def _llm_content_blocks(self, input_text: str, attachments: list[dict]) -> list[LLMContentBlock] | None:
+        if not self.config.llm.multimodal_enabled:
+            return None
+        blocks = [LLMContentBlock(type="text", text=input_text)]
+        for attachment in attachments:
+            image_block = self._attachment_image_block(attachment)
+            if image_block:
+                blocks.append(image_block)
+        return blocks if len(blocks) > 1 else None
+
+    def _attachment_image_block(self, attachment: dict) -> LLMContentBlock | None:
+        if not self.config.llm.image_input_enabled:
+            return None
+        mime_type = str(attachment.get("mime") or attachment.get("mime_type") or "").strip()
+        local_path = str(attachment.get("local_path") or attachment.get("path") or "").strip()
+        url = str(attachment.get("url") or "").strip()
+        if not mime_type and local_path:
+            mime_type = mimetypes.guess_type(local_path)[0] or ""
+        if not mime_type.startswith("image/"):
+            return None
+        size = self._attachment_size(attachment, local_path=local_path)
+        if size and size > int(self.config.llm.max_image_bytes):
+            logger.info(
+                "跳过超限图片输入: path={} size={} max={}",
+                local_path or url,
+                size,
+                self.config.llm.max_image_bytes,
+            )
+            return None
+        if local_path and Path(local_path).is_file():
+            return LLMContentBlock(type="image", path=local_path, mime_type=mime_type)
+        if url:
+            return LLMContentBlock(type="image", url=url, mime_type=mime_type)
+        return None
+
+    def _attachment_size(self, attachment: dict, *, local_path: str) -> int:
+        raw_size = attachment.get("size")
+        try:
+            size = int(raw_size or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if size:
+            return size
+        if local_path:
+            try:
+                return Path(local_path).stat().st_size
+            except OSError:
+                return 0
+        return 0
 
     def _session_history_key(self, source: str) -> str:
         if not self.config.memory.short_term_enabled:

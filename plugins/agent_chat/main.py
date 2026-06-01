@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import anyio
 from loguru import logger
 
@@ -95,10 +97,11 @@ class AgentChatPlugin(PluginBase):
             len(history),
             len(summaries),
         )
-        return await ctx.agent.run_task(
-            agent_input,
-            source=f"channel:{message.platform}:{message.adapter}:{message.conversation_id}",
-        )
+        source = f"channel:{message.platform}:{message.adapter}:{message.conversation_id}"
+        attachments = self._llm_attachments(message)
+        if self._agent_accepts_attachments(ctx.agent):
+            return await ctx.agent.run_task(agent_input, source=source, attachments=attachments)
+        return await ctx.agent.run_task(agent_input, source=source)
 
     def _agent_timeout_seconds(self, ctx) -> int:
         settings = getattr(ctx, "settings", None)
@@ -277,6 +280,27 @@ class AgentChatPlugin(PluginBase):
             lines.append("attachments:")
             lines.extend(self._attachment_line(item) for item in attachments if isinstance(item, dict))
         return "\n".join(lines)
+
+    def _llm_attachments(self, message: Message) -> list[dict]:
+        attachments: list[dict] = []
+        raw_attachments = message.raw.get("attachments") if isinstance(message.raw, dict) else None
+        if isinstance(raw_attachments, list):
+            attachments.extend(item for item in raw_attachments if isinstance(item, dict))
+        quote = message.raw.get("quote") if isinstance(message.raw, dict) else None
+        quote_attachments = quote.get("attachments") if isinstance(quote, dict) else None
+        if isinstance(quote_attachments, list):
+            attachments.extend(item for item in quote_attachments if isinstance(item, dict))
+        return attachments
+
+    def _agent_accepts_attachments(self, agent) -> bool:
+        try:
+            signature = inspect.signature(agent.run_task)
+        except (TypeError, ValueError):
+            return False
+        return "attachments" in signature.parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
 
     def _attachment_line(self, attachment: dict) -> str:
         fields = [

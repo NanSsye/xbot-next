@@ -76,6 +76,11 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("XBOT_LLM_BASE_URL", "https://api.anthropic.com")
     monkeypatch.setenv("XBOT_LLM_MODEL", "claude-3-5-sonnet-latest")
+    monkeypatch.setenv("XBOT_LLM_MULTIMODAL_ENABLED", "true")
+    monkeypatch.setenv("XBOT_LLM_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("XBOT_LLM_VIDEO_INPUT_ENABLED", "true")
+    monkeypatch.setenv("XBOT_LLM_MAX_IMAGE_BYTES", "1024")
+    monkeypatch.setenv("XBOT_LLM_MAX_VIDEO_BYTES", "2048")
     monkeypatch.setenv("XBOT_LLM_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("XBOT_LLM_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("XBOT_LLM_RETRY_BACKOFF_SECONDS", "0.5")
@@ -129,6 +134,11 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.llm.api_key == "test-key"
     assert settings.agent.llm.base_url == "https://api.anthropic.com"
     assert settings.agent.llm.model == "claude-3-5-sonnet-latest"
+    assert settings.agent.llm.multimodal_enabled is True
+    assert settings.agent.llm.image_input_enabled is True
+    assert settings.agent.llm.video_input_enabled is True
+    assert settings.agent.llm.max_image_bytes == 1024
+    assert settings.agent.llm.max_video_bytes == 2048
     assert settings.agent.llm.timeout_seconds == 45
     assert settings.agent.llm.max_attempts == 4
     assert settings.agent.llm.retry_backoff_seconds == 0.5

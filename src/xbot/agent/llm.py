@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -11,15 +14,27 @@ from xbot.core.config import AgentLLMConfig
 from xbot.core.exceptions import XBotError
 
 
+class LLMContentBlock(BaseModel):
+    type: str
+    text: str | None = None
+    path: str | None = None
+    url: str | None = None
+    mime_type: str | None = None
+
+
 class LLMMessage(BaseModel):
     role: str
     content: str | None = None
+    content_blocks: list[LLMContentBlock] | None = None
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     name: str | None = None
 
-    def to_openai_message(self) -> dict[str, Any]:
-        return self.model_dump(exclude_none=True)
+    def to_openai_message(self, config: AgentLLMConfig | None = None) -> dict[str, Any]:
+        payload = self.model_dump(exclude_none=True, exclude={"content_blocks"})
+        if self.content_blocks:
+            payload["content"] = _openai_content_blocks(self.content_blocks, config=config)
+        return payload
 
 
 class LLMToolCall(BaseModel):
@@ -36,6 +51,79 @@ class LLMResponse(BaseModel):
     usage: dict[str, Any] = Field(default_factory=dict)
     raw_id: str | None = None
     tool_calls: list[LLMToolCall] = Field(default_factory=list)
+
+
+def _openai_content_blocks(
+    blocks: list[LLMContentBlock],
+    *,
+    config: AgentLLMConfig | None = None,
+) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for block in blocks:
+        if block.type == "text":
+            converted.append({"type": "text", "text": block.text or ""})
+            continue
+        if block.type == "image" and _can_send_image(config):
+            image_url = block.url or _local_file_data_url(block)
+            if image_url:
+                converted.append({"type": "image_url", "image_url": {"url": image_url}})
+    return converted or [{"type": "text", "text": ""}]
+
+
+def _anthropic_content_blocks(
+    blocks: list[LLMContentBlock],
+    *,
+    config: AgentLLMConfig | None = None,
+) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for block in blocks:
+        if block.type == "text":
+            converted.append({"type": "text", "text": block.text or ""})
+            continue
+        if block.type == "image" and _can_send_image(config):
+            source = _anthropic_image_source(block)
+            if source:
+                converted.append({"type": "image", "source": source})
+    return converted or [{"type": "text", "text": ""}]
+
+
+def _can_send_image(config: AgentLLMConfig | None) -> bool:
+    return bool(config and config.multimodal_enabled and config.image_input_enabled)
+
+
+def _local_file_data_url(block: LLMContentBlock) -> str:
+    encoded = _local_file_base64(block)
+    if not encoded:
+        return ""
+    return f"data:{_block_mime_type(block)};base64,{encoded}"
+
+
+def _anthropic_image_source(block: LLMContentBlock) -> dict[str, Any]:
+    if block.url:
+        return {"type": "url", "url": block.url}
+    encoded = _local_file_base64(block)
+    if not encoded:
+        return {}
+    return {"type": "base64", "media_type": _block_mime_type(block), "data": encoded}
+
+
+def _local_file_base64(block: LLMContentBlock) -> str:
+    if not block.path:
+        return ""
+    path = Path(block.path)
+    if not path.is_file():
+        return ""
+    return base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+def _block_mime_type(block: LLMContentBlock) -> str:
+    if block.mime_type:
+        return block.mime_type
+    if block.path:
+        guessed, _ = mimetypes.guess_type(block.path)
+        if guessed:
+            return guessed
+    return "application/octet-stream"
 
 
 class LLMProvider(Protocol):
@@ -82,7 +170,7 @@ class OpenAICompatibleLLMProvider:
         url = self.config.base_url.rstrip("/") + "/chat/completions"
         payload = {
             "model": self.config.model,
-            "messages": [message.to_openai_message() for message in messages],
+            "messages": [message.to_openai_message(config=self.config) for message in messages],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
@@ -139,7 +227,7 @@ class OpenAICompatibleLLMProvider:
         url = self.config.base_url.rstrip("/") + "/chat/completions"
         payload = {
             "model": self.config.model,
-            "messages": [message.to_openai_message() for message in messages],
+            "messages": [message.to_openai_message(config=self.config) for message in messages],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
             "stream": True,
@@ -174,6 +262,8 @@ class OpenAICompatibleLLMProvider:
             "base_url": self.config.base_url,
             "model": self.config.model,
             "context_window_tokens": self.config.context_window_tokens,
+            "multimodal_enabled": self.config.multimodal_enabled,
+            "image_input_enabled": self.config.image_input_enabled,
         }
 
 
@@ -264,7 +354,12 @@ class AnthropicLLMProvider:
                 self._append_anthropic_message(converted, "assistant", blocks)
                 continue
             anthropic_role = "assistant" if role == "assistant" else "user"
-            self._append_anthropic_message(converted, anthropic_role, message.content or "")
+            content: str | list[dict[str, Any]]
+            if message.content_blocks:
+                content = _anthropic_content_blocks(message.content_blocks, config=self.config)
+            else:
+                content = message.content or ""
+            self._append_anthropic_message(converted, anthropic_role, content)
         return "\n\n".join(system_parts), converted
 
     def _append_anthropic_message(self, messages: list[dict[str, Any]], role: str, content: str | list[dict[str, Any]]) -> None:
@@ -344,6 +439,8 @@ class AnthropicLLMProvider:
             "base_url": self.config.base_url,
             "model": self.config.model,
             "context_window_tokens": self.config.context_window_tokens,
+            "multimodal_enabled": self.config.multimodal_enabled,
+            "image_input_enabled": self.config.image_input_enabled,
         }
 
 
