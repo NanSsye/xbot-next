@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!.env.docker.example
 
 __pycache__/
 *.py[cod]
@@ -32,6 +33,7 @@ data/agent/*
 data/agent/wiki/*/raw/
 data/agent/wiki/*/derived/
 logs/
+docker-data/
 
 skills/**/wechat-869.json
 

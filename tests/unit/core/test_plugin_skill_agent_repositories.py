@@ -3033,6 +3033,74 @@ def test_planner_strips_reasoning_tags_from_final_output():
     assert "<think>" not in output
 
 
+def test_planner_strips_internal_tool_trace_from_final_output():
+    planner = AgentPlanner()
+
+    output = planner.clean_final_output(
+        "已发送。\n\n"
+        "[internal_tool_trace]\n"
+        "1. tool=shell.exec output={\"command\":\"set MINIMAX_API_KEY=sk-secret\"}\n"
+        "[/internal_tool_trace]"
+    )
+
+    assert output == "已发送。"
+    assert "internal_tool_trace" not in output
+    assert "sk-secret" not in output
+
+
+def test_agent_runtime_redacts_secret_values_in_tool_trace(tmp_path):
+    runtime = AgentRuntime(
+        AgentConfig(
+            workspace_root=str(tmp_path),
+            workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        ),
+        plugins=None,
+        skills=None,
+    )
+
+    entry = runtime._tool_trace_entry(
+        "shell.exec",
+        {"command": 'set "MINIMAX_API_KEY=sk-secretsecretsecret" && python run.py'},
+        {
+            "status": "completed",
+            "output": {"stdout": "ok", "command": "MINIMAX_API_KEY=sk-secretsecretsecret"},
+        },
+    )
+    formatted = runtime._format_tool_trace([entry])
+
+    assert "sk-secretsecretsecret" not in formatted
+    assert "<redacted>" in formatted
+
+
+@pytest.mark.anyio
+async def test_agent_runtime_never_returns_internal_tool_trace_to_user(tmp_path):
+    llm = FakeLLMProvider(
+        responses=[
+            (
+                "已发送。\n\n"
+                "[internal_tool_trace]\n"
+                "1. tool=shell.exec output={\"command\":\"MINIMAX_API_KEY=sk-secretsecretsecret\"}\n"
+                "[/internal_tool_trace]"
+            )
+        ]
+    )
+    runtime = AgentRuntime(
+        AgentConfig(
+            workspace_root=str(tmp_path),
+            workspace=AgentWorkspaceConfig(roots=[str(tmp_path)]),
+        ),
+        plugins=None,
+        skills=None,
+        llm_provider=llm,
+    )
+
+    result = await runtime.run_task("继续", source="api")
+
+    assert result.output == "已发送。"
+    assert "internal_tool_trace" not in result.output
+    assert "sk-secretsecretsecret" not in result.output
+
+
 def test_planner_strips_reasoning_tags_from_json_final():
     planner = AgentPlanner()
 

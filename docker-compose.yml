@@ -1,0 +1,68 @@
+services:
+  xbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_PLAYWRIGHT: ${INSTALL_PLAYWRIGHT:-true}
+    image: xbot-next:local
+    container_name: xbot-next
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      XBOT_SERVER_HOST: 0.0.0.0
+      XBOT_SERVER_PORT: 8548
+      XBOT_STORAGE_TYPE: postgresql
+      XBOT_DATABASE_URL: postgresql+asyncpg://xbot:xbot@postgres:5432/xbot
+      XBOT_ADMIN_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      XBOT_CONVERSATION_STORE: postgresql
+      XBOT_QUEUE_TYPE: redis
+      XBOT_REDIS_URL: redis://redis:6379/15
+      XBOT_DATABASE_AUTO_BOOTSTRAP: "true"
+      XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP: "true"
+    ports:
+      - "8548:8548"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # 直接映射整个项目目录。升级时替换宿主机目录里的代码，然后重启容器即可。
+      - .:/app
+      # 避免前端依赖污染项目目录，也避免每次重启都重新下载 node_modules。
+      - ./docker-data/ui-node_modules:/app/ui/node_modules
+      - ./docker-data/pip-cache:/root/.cache/pip
+      - ./docker-data/npm-cache:/root/.npm
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: xbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - ./docker-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: xbot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./docker-data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

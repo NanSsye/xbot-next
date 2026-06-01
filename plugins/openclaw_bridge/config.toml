@@ -1,0 +1,32 @@
+[openclaw_bridge]
+enable = true
+
+# OpenClaw HTTP 桥地址。也可以用环境变量覆盖：
+# XBOT_OPENCLAW_BRIDGE_URL=http://host.docker.internal:1569
+bridge_url = "http://127.0.0.1:1569"
+
+# 桥接服务密钥，对应 OpenClaw 桥配置里的 [server].secret。
+# 也可以用环境变量覆盖：
+# XBOT_OPENCLAW_SHARED_SECRET=...
+shared_secret = ""
+
+# OpenClaw agent_id。
+agent_id = "main"
+timeout_seconds = 300
+
+# 群聊触发规则。私聊默认全部投递到 /reply。
+trigger_prefix = "学姐"
+trigger_prefixes = ["学姐"]
+trigger_keywords = ["学姐"]
+group_at_only = true
+
+# 会话映射方式：
+# - room_user：群聊按「群 + 用户」隔离
+# - room：群聊按「群」共享会话
+session_mode = "room_user"
+
+# 是否把未触发回复的群聊消息投递到 /store_message，仅作为 OpenClaw 侧群聊上下文。
+store_untriggered_group_messages = true
+
+# 发送给 OpenClaw 桥的图片/文件最大内联大小。超过后只发送文件元信息。
+media_max_bytes = 26214400

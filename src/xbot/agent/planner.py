@@ -28,6 +28,10 @@ class AgentPlanner:
         r"```(?:think|thinking|reasoning|analysis)\s+.*?```",
         flags=re.IGNORECASE | re.DOTALL,
     )
+    _INTERNAL_TOOL_TRACE_RE = re.compile(
+        r"\[internal_tool_trace\].*?(?:\[/internal_tool_trace\]|$)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
     def __init__(self) -> None:
         self.tool_parser = ToolCallParser()
@@ -36,6 +40,7 @@ class AgentPlanner:
         return [task]
 
     def parse_llm_response(self, content: str) -> AgentPlan:
+        content = self._strip_internal_blocks(content)
         objects = self._extract_json_objects(content)
         parsed_calls = self.tool_parser.extract(content)
         if not objects:
@@ -81,7 +86,7 @@ class AgentPlanner:
         return any(key in data for key in ("payload", "arguments", "args", "function"))
 
     def clean_final_output(self, content: str) -> str:
-        text = content.strip()
+        text = self._strip_internal_blocks(content).strip()
         for data in reversed(self._extract_json_objects(text)):
             if isinstance(data, dict) and not (data.get("tool_calls") or data.get("tools")):
                 final = data.get("final") or data.get("answer")
@@ -98,9 +103,10 @@ class AgentPlanner:
         return stripped.strip()
 
     def contains_tool_call_intent(self, content: str) -> bool:
-        return self.tool_parser.contains_intent(content)
+        return self.tool_parser.contains_intent(self._strip_internal_blocks(content))
 
     def is_empty_final_response(self, content: str) -> bool:
+        content = self._strip_internal_blocks(content)
         data = self._extract_json(content)
         if not isinstance(data, dict):
             return not content.strip()
@@ -174,4 +180,8 @@ class AgentPlanner:
     def _strip_reasoning_blocks(self, content: str) -> str:
         text = self._REASONING_BLOCK_RE.sub("", content)
         text = self._REASONING_FENCE_RE.sub("", text)
+        text = self._strip_internal_blocks(text)
         return text.strip()
+
+    def _strip_internal_blocks(self, content: str) -> str:
+        return self._INTERNAL_TOOL_TRACE_RE.sub("", content or "")

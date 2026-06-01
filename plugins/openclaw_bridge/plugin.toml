@@ -1,0 +1,18 @@
+name = "openclaw_bridge"
+version = "0.1.0"
+entry = "main:OpenClawBridgePlugin"
+author = "xbot"
+description = "将命中的通道消息投递到 OpenClaw 桥，由 OpenClaw 桥负责自动回复。"
+enabled = false
+
+[routing]
+enabled = true
+priority = 20
+exclusive = true
+message_types = ["text", "image", "file"]
+platforms = ["wechat", "web"]
+
+[permissions]
+network = true
+filesystem = true
+admin = false

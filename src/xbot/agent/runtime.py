@@ -390,7 +390,7 @@ class AgentRuntime:
                         {"tool": tool_name, "risk_level": tool.risk_level},
                     )
                     return result
-            output = await self.executor.execute(tool_name, payload)
+            output = self._redact_payload(await self.executor.execute(tool_name, payload))
         except PolicyDeniedError as exc:
             fallback = self.fallback_policy.explain(
                 ToolError(tool=tool_name, payload=payload, error=exc, denied=True)
@@ -1590,10 +1590,47 @@ class AgentRuntime:
                 )
 
     def _summarize_payload(self, value: object) -> object:
+        value = self._redact_payload(value)
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
         if len(text) <= 1200:
             return value
         return {"truncated": True, "chars": len(text), "preview": text[:1200]}
+
+    def _redact_payload(self, value: object) -> object:
+        if isinstance(value, str):
+            return self._redact_sensitive_text(value)
+        if isinstance(value, dict):
+            redacted = {}
+            for key, item in value.items():
+                key_text = str(key).lower()
+                if any(term in key_text for term in ("api_key", "apikey", "token", "secret", "password", "private_key")):
+                    redacted[key] = "<redacted>"
+                else:
+                    redacted[key] = self._redact_payload(item)
+            return redacted
+        if isinstance(value, list):
+            return [self._redact_payload(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._redact_payload(item) for item in value)
+        return value
+
+    def _redact_sensitive_text(self, text: str) -> str:
+        patterns = [
+            r"sk-[A-Za-z0-9_=\-]{16,}",
+            r"(?i)(MINIMAX_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|XBOT_LLM_API_KEY|API_KEY|TOKEN|SECRET|PASSWORD)=([^&\s\"']+)",
+            r"(?i)(api_key|apikey|token|secret|password)([\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]+)",
+        ]
+        redacted = text
+        for pattern in patterns:
+            redacted = re.sub(pattern, lambda match: self._redaction_replacement(match), redacted)
+        return redacted
+
+    def _redaction_replacement(self, match: re.Match) -> str:
+        if match.lastindex and match.lastindex >= 3:
+            return f"{match.group(1)}{match.group(2)}<redacted>"
+        if match.lastindex and match.lastindex >= 2:
+            return f"{match.group(1)}=<redacted>"
+        return "<redacted>"
 
     async def _run_llm(
         self,
@@ -1753,12 +1790,12 @@ class AgentRuntime:
                         response=response,
                         tool_trace=tool_trace,
                     )
-                return cleaned
+                return self._clean_user_output(cleaned)
             missing_tool_reprompts = 0
             if self.config.max_tool_iterations > 0 and iteration >= self.config.max_tool_iterations:
-                output = self.planner.clean_final_output(
+                output = self._clean_user_output(self.planner.clean_final_output(
                     plan.final or "工具调用次数达到上限，任务没有完成。"
-                )
+                ))
                 if history_key:
                     await self._append_session_turn(
                         history_key,
@@ -1821,7 +1858,7 @@ class AgentRuntime:
                 self._should_return_after_background(source)
                 or self._has_child_agent_started(tool_results)
             ):
-                output = self._background_started_message(tool_results, plan_final=plan.final)
+                output = self._clean_user_output(self._background_started_message(tool_results, plan_final=plan.final))
                 if history_key:
                     await self._append_session_turn(
                         history_key,
@@ -1849,6 +1886,7 @@ class AgentRuntime:
             iteration += 1
         cleaned = self.planner.clean_final_output(last_content)
         output = cleaned if cleaned and not self.planner.is_empty_final_response(cleaned) else "我没有生成有效回复，请换一种说法再试。"
+        output = self._clean_user_output(output)
         if history_key:
             await self._append_session_turn(history_key, input_text, output, tool_trace=tool_trace)
         return output
@@ -2101,6 +2139,9 @@ class AgentRuntime:
         lines.append("[/internal_tool_trace]")
         return "\n".join(lines)
 
+    def _clean_user_output(self, text: str) -> str:
+        return self._redact_sensitive_text(self.planner.clean_final_output(text or "")).strip()
+
     def _session_history_key(self, source: str) -> str:
         if not self.config.memory.short_term_enabled:
             return ""
@@ -2122,7 +2163,11 @@ class AgentRuntime:
                     ),
                 )
             )
-        messages.extend(self._session_histories.get(key, []))
+        for message in self._session_histories.get(key, []):
+            content = message.content or ""
+            if message.role == "assistant":
+                content = self._redact_sensitive_text(content)
+            messages.append(message.model_copy(update={"content": content}))
         return messages
 
     async def _append_session_turn(
