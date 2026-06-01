@@ -176,10 +176,21 @@ XBOT_DATABASE_URL=postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot
 XBOT_ADMIN_DATABASE_URL=postgresql://postgres:change-me@192.168.6.19:5433/postgres
 
 XBOT_LLM_ENABLED=true
+XBOT_LLM_PROVIDER=openai_compatible
 XBOT_LLM_BASE_URL=https://api.openai.com/v1
 XBOT_LLM_MODEL=gpt-4.1-mini
 XBOT_LLM_CONTEXT_WINDOW_TOKENS=128000
 XBOT_LLM_API_KEY=change-me
+```
+
+Anthropic 原生接口示例：
+
+```env
+XBOT_LLM_ENABLED=true
+XBOT_LLM_PROVIDER=anthropic
+XBOT_LLM_BASE_URL=https://api.anthropic.com
+XBOT_LLM_MODEL=claude-3-5-sonnet-latest
+XBOT_LLM_API_KEY=你的 Anthropic API Key
 ```
 
 如果要开启微信 869 通道：

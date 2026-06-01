@@ -182,6 +182,7 @@
 - [x] 微信统一发送工具第一版完成：新增 `wechat.send_text`、`wechat.send_image`、`wechat.send_file`，Agent 在微信通道内不需要选择协议细节，runtime 会根据 `source=channel:wechat:<adapter>:...` 自动路由；`wechat869` 图片/文件复用现有 869 media skill，`wechat_ilink` 图片/文件通过 iLink upload CDN + media item 协议回发到当前会话。
 - [x] iLink 媒体收发第一版完成：图片/文件发送支持 `/ilink/bot/getuploadurl`、AES-128-ECB 加密上传 CDN、`image_item/file_item` 发送；接收采用“引用触发”策略，用户单独发送 iLink 图片/文件时只记录/暂存不触发 Agent，用户引用媒体提问时下载到 `data/wechat_ilink/media` 并把本地路径放入 `quoted_message`。
 - [x] LLM 请求重试机制完成：`AgentRuntime` 在统一 `_complete_llm_with_retries()` 层处理瞬时失败，支持 `agent.llm.max_attempts` / `XBOT_LLM_MAX_ATTEMPTS` 和 `retry_backoff_seconds`；仅重试超时、网络错误、429/5xx，配置错误和 provider 不可用不重试，并记录 `llm.retry` 事件。
+- [x] Anthropic 原生 LLM provider 完成：新增 `XBOT_LLM_PROVIDER=anthropic`，支持 Anthropic `/v1/messages`、`system` 字段、`tools`、`tool_use` 和 `tool_result` 与内部工具循环互转。
 - [x] Agent 工具调用容错优化完成：移除“模型连续没有发起工具调用”的硬中断判断，不再因为请求文本命中目录/文件/插件/日志等关键词就强制失败；模型返回普通 final 时按正常回复处理，只对空内容或不完整工具 JSON 继续追问。
 - [x] 一键安装入口第一版完成：新增 `scripts/install.sh` 和 `scripts/install.ps1`，默认安装到用户目录、创建 venv、复制 `.env`、生成全局 `xbot` / `xbot-upgrade` 命令并加入 PATH；裸 `xbot` 进入终端 TUI，`xbot run` 启动后端服务。
 - [x] 首次配置向导第一版完成：新增 `xbot setup`，中文 Rich 面板引导用户选择简易版 SQLite + memory queue 或生产版 PostgreSQL + Redis，并可选择不开微信、iLink 扫码、869、双通道；新增 `.env.local.example`，简易版同样支持微信通道和自动迁移；安装器默认在首次安装后进入向导，`XBOT_SKIP_SETUP=1` 可跳过。

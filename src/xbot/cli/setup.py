@@ -141,6 +141,7 @@ def _llm_updates(values: dict[str, str], *, yes: bool) -> dict[str, str]:
         console.print(
             Panel(
                 "支持任意 OpenAI-compatible /chat/completions 服务。\n"
+                "也支持 Anthropic 原生 /v1/messages 服务，provider 填 anthropic。\n"
                 "后续模型、密钥、地址变化时，可以直接编辑 .env。",
                 title="步骤 3/3：模型",
                 border_style="green",
@@ -150,6 +151,11 @@ def _llm_updates(values: dict[str, str], *, yes: bool) -> dict[str, str]:
     enabled = _ask("是否启用 LLM", enabled_default, yes=yes)
     updates = {
         "XBOT_LLM_ENABLED": enabled,
+        "XBOT_LLM_PROVIDER": _ask(
+            "LLM Provider(openai_compatible/anthropic)",
+            values.get("XBOT_LLM_PROVIDER") or "openai_compatible",
+            yes=yes,
+        ),
         "XBOT_LLM_BASE_URL": _ask(
             "LLM 接口地址",
             values.get("XBOT_LLM_BASE_URL") or "https://api.openai.com/v1",
@@ -269,6 +275,7 @@ def _write_env(path: Path, values: dict[str, str], updates: dict[str, str]) -> N
         "XBOT_QUEUE_TYPE",
         "XBOT_REDIS_URL",
         "XBOT_LLM_ENABLED",
+        "XBOT_LLM_PROVIDER",
         "XBOT_LLM_BASE_URL",
         "XBOT_LLM_MODEL",
         "XBOT_LLM_CONTEXT_WINDOW_TOKENS",

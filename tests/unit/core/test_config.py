@@ -72,9 +72,10 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_API_TOKEN", "secret-token")
     monkeypatch.setenv("XBOT_API_CORS_ORIGINS", "https://console.example.com,http://127.0.0.1:5173")
     monkeypatch.setenv("XBOT_LLM_ENABLED", "true")
+    monkeypatch.setenv("XBOT_LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("XBOT_LLM_API_KEY", "test-key")
-    monkeypatch.setenv("XBOT_LLM_BASE_URL", "http://llm.local/v1")
-    monkeypatch.setenv("XBOT_LLM_MODEL", "test-model")
+    monkeypatch.setenv("XBOT_LLM_BASE_URL", "https://api.anthropic.com")
+    monkeypatch.setenv("XBOT_LLM_MODEL", "claude-3-5-sonnet-latest")
     monkeypatch.setenv("XBOT_LLM_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("XBOT_LLM_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("XBOT_LLM_RETRY_BACKOFF_SECONDS", "0.5")
@@ -124,9 +125,10 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.api.token == "secret-token"
     assert settings.api.cors_origins == ["https://console.example.com", "http://127.0.0.1:5173"]
     assert settings.agent.llm.enabled is True
+    assert settings.agent.llm.provider == "anthropic"
     assert settings.agent.llm.api_key == "test-key"
-    assert settings.agent.llm.base_url == "http://llm.local/v1"
-    assert settings.agent.llm.model == "test-model"
+    assert settings.agent.llm.base_url == "https://api.anthropic.com"
+    assert settings.agent.llm.model == "claude-3-5-sonnet-latest"
     assert settings.agent.llm.timeout_seconds == 45
     assert settings.agent.llm.max_attempts == 4
     assert settings.agent.llm.retry_backoff_seconds == 0.5

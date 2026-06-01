@@ -28,9 +28,20 @@ XBOT_QUEUE_TYPE=redis
 XBOT_REDIS_URL=redis://127.0.0.1:6379/15
 
 XBOT_LLM_ENABLED=true
+XBOT_LLM_PROVIDER=openai_compatible
 XBOT_LLM_BASE_URL=https://api.openai.com/v1
 XBOT_LLM_MODEL=gpt-4.1-mini
 XBOT_LLM_API_KEY=你的模型密钥
+```
+
+Anthropic 原生接口可改为：
+
+```env
+XBOT_LLM_ENABLED=true
+XBOT_LLM_PROVIDER=anthropic
+XBOT_LLM_BASE_URL=https://api.anthropic.com
+XBOT_LLM_MODEL=claude-3-5-sonnet-latest
+XBOT_LLM_API_KEY=你的 Anthropic API Key
 ```
 
 如果 Control UI 和 API 不同源，额外配置：

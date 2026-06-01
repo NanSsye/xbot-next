@@ -173,7 +173,7 @@ class AgentWikiConfig(BaseModel):
 
 class AgentLLMConfig(BaseModel):
     enabled: bool = False
-    provider: Literal["openai_compatible"] = "openai_compatible"
+    provider: Literal["openai_compatible", "anthropic"] = "openai_compatible"
     base_url: str = "https://api.openai.com/v1"
     api_key: str | None = None
     model: str = "gpt-4.1-mini"
@@ -474,6 +474,8 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("conversation", {})["store"] = conversation_store
     if llm_api_key := env.get("XBOT_LLM_API_KEY"):
         data.setdefault("agent", {}).setdefault("llm", {})["api_key"] = llm_api_key
+    if llm_provider := env.get("XBOT_LLM_PROVIDER"):
+        data.setdefault("agent", {}).setdefault("llm", {})["provider"] = llm_provider
     if llm_base_url := env.get("XBOT_LLM_BASE_URL"):
         data.setdefault("agent", {}).setdefault("llm", {})["base_url"] = llm_base_url
     if llm_model := env.get("XBOT_LLM_MODEL"):
