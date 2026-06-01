@@ -6,6 +6,7 @@ services:
       args:
         INSTALL_PLAYWRIGHT: ${INSTALL_PLAYWRIGHT:-true}
     image: xbot-next:local
+    pull_policy: build
     container_name: xbot-next
     restart: unless-stopped
     env_file:
