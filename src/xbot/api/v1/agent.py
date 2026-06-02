@@ -25,6 +25,11 @@ class AgentToolExecuteRequest(BaseModel):
     source: str = "api"
 
 
+class AgentMemoryRequest(BaseModel):
+    kind: str = "note"
+    summary: str = ""
+
+
 class BackgroundTaskRequest(BaseModel):
     tool: str
     payload: dict = {}
@@ -159,6 +164,42 @@ async def list_agent_events(
     ctx: AppContext = Depends(get_context),
 ) -> dict:
     return {"success": True, "data": await ctx.agent.list_events(task_id=task_id, limit=limit)}
+
+
+@router.get("/memories")
+async def list_memories(limit: int = 50) -> dict:
+    return {"success": True, "data": []}
+
+
+@router.post("/memories")
+async def create_memory(payload: AgentMemoryRequest) -> dict:
+    return {
+        "success": True,
+        "data": {
+            "id": "hermes-memory-managed",
+            "kind": payload.kind or "note",
+            "summary": "Hermes owns memory in data/hermes; xbot memory API is compatibility-only.",
+            "created_at": "",
+        },
+    }
+
+
+@router.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: str) -> dict:
+    return {"success": True, "data": {"id": memory_id, "deleted": False, "runtime": "hermes"}}
+
+
+@router.post("/memories/compact")
+async def compact_memories() -> dict:
+    return {
+        "success": True,
+        "data": {
+            "id": "hermes-memory-managed",
+            "kind": "system",
+            "summary": "Hermes handles memory compaction internally.",
+            "created_at": "",
+        },
+    }
 
 
 @router.post("/background-tasks")

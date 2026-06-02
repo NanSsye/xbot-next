@@ -17,6 +17,9 @@ def test_create_app():
     assert "/api/v1/agent/tasks/{task_id}" in paths
     assert "/api/v1/agent/tasks/{task_id}/resume" in paths
     assert "/api/v1/agent/events" in paths
+    assert "/api/v1/agent/memories" in paths
+    assert "/api/v1/agent/memories/compact" in paths
+    assert "/api/v1/agent/memories/{memory_id}" in paths
     assert "/api/v1/messages/simulate" in paths
     assert "/api/v1/messages/recent" in paths
     assert "/api/v1/plugins/{name}/enable" in paths
