@@ -97,7 +97,7 @@ class AgentRuntime:
             max_due_per_tick=config.schedule.max_due_per_tick,
         )
         self.memory = MemoryStore(
-            config.memory.directory,
+            config.memory.directory or None,
             memory_char_limit=config.memory.memory_char_limit,
             user_char_limit=config.memory.user_char_limit,
         )

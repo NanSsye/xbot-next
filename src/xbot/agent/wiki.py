@@ -41,7 +41,7 @@ class WikiPage:
 class WikiStore:
     def __init__(
         self,
-        directory: str | Path = "data/agent/wiki",
+        directory: str | Path = "data/hermes/wiki",
         *,
         default_wiki: str = "xbot",
         query_max_chars: int = 12000,

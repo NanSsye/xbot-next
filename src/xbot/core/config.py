@@ -138,7 +138,7 @@ class AgentMemoryRedactionConfig(BaseModel):
 class AgentMemoryConfig(BaseModel):
     enabled: bool = True
     store: Literal["postgresql"] = "postgresql"
-    directory: str = "data/agent/memories"
+    directory: str = ""
     memory_char_limit: int = 2200
     user_char_limit: int = 1375
     review_enabled: bool = True
@@ -163,8 +163,8 @@ class AgentMemoryConfig(BaseModel):
 
 
 class AgentWikiConfig(BaseModel):
-    enabled: bool = True
-    directory: str = "data/agent/wiki"
+    enabled: bool = False
+    directory: str = "data/hermes/wiki"
     default_wiki: str = "xbot"
     query_max_chars: int = 12000
     rag_enabled: bool = False
@@ -326,7 +326,7 @@ class AgentConfig(BaseModel):
     max_tool_iterations: int = 0
     auto_delegate_channel_tasks: bool = True
     max_inline_tool_result_chars: int = 20000
-    tool_result_artifact_dir: str = "data/agent_tool_results"
+    tool_result_artifact_dir: str = "data/artifacts/agent_tool_results"
     workspace: AgentWorkspaceConfig = Field(default_factory=AgentWorkspaceConfig)
     approval: AgentApprovalConfig = Field(default_factory=AgentApprovalConfig)
     memory: AgentMemoryConfig = Field(default_factory=AgentMemoryConfig)

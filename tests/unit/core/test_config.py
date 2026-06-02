@@ -25,7 +25,7 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.llm.enabled is False
     assert settings.agent.llm.provider == "openai_compatible"
     assert settings.agent.max_inline_tool_result_chars == 20000
-    assert settings.agent.tool_result_artifact_dir == "data/agent_tool_results"
+    assert settings.agent.tool_result_artifact_dir == "data/artifacts/agent_tool_results"
     assert settings.agent.memory.short_term_enabled is True
     assert settings.agent.memory.short_term_recent_turns == 0
     assert settings.agent.memory.short_term_max_tokens == 128000
@@ -35,8 +35,9 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.memory.compaction_reserve_tokens == 16384
     assert settings.agent.memory.compaction_keep_recent_tokens == 20000
     assert settings.agent.memory.compaction_llm_enabled is True
-    assert settings.agent.wiki.enabled is True
-    assert settings.agent.wiki.directory == "data/agent/wiki"
+    assert settings.agent.memory.directory == ""
+    assert settings.agent.wiki.enabled is False
+    assert settings.agent.wiki.directory == "data/hermes/wiki"
     assert settings.agent.wiki.default_wiki == "xbot"
     assert settings.agent.wiki.rag_enabled is False
     assert settings.agent.mcp.enabled is True

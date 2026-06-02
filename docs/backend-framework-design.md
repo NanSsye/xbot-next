@@ -165,16 +165,16 @@
 - [x] 终端对话视觉增强第二版完成：参考 Hermes classic CLI，把用户输入改为 prompt 行，assistant 改为轻量 `xbot` 标题块流式输出，短系统提示保留一行状态，避免对话区堆叠大面板。
 - [x] 终端交互修复：取消用户输入二次显示，补充 stream restart/suffix 去重，避免 OpenAI-compatible 流式接口重复输出回答后半段。
 - [x] 终端 Hermes 状态栏增强：每轮回复后显示模型名、上下文占用、百分比进度条、本轮耗时和 LLM 耗时；上下文已用量优先读取接口 usage，窗口总量支持 `agent.llm.context_window_tokens` / `XBOT_LLM_CONTEXT_WINDOW_TOKENS`，未配置时按模型名兜底。
-- [x] Hermes 记忆系统对齐第一阶段完成：新增文件化 curated memory，使用 `data/agent/memories/MEMORY.md` 与 `USER.md` 保存长期事实和用户画像；新增 `memory.read/add/replace/remove` 工具，并在 Agent system prompt 中注入会话启动时冻结的长期记忆快照。
+- [x] Hermes 记忆系统切换完成：旧 xbot curated memory 种子已废弃，Agent 长期记忆交由 Hermes 的 `data/hermes/` session、memory 与 skill 体系接管。
 - [x] Hermes 自进化第二阶段第一版完成：任务完成后按 `agent.memory.review_interval` 启动后台 memory review；review 使用受限 prompt，只允许执行 `memory.read/add/replace/remove`，用于保存用户偏好、纠正、稳定环境事实和项目约定，不阻塞主回复。
 - [x] Hermes 自进化第三/四阶段第一版完成：新增 `skill.manage` 程序性记忆工具，限定只能管理 `skills/.agent/` 下的 agent-owned skills；新增 `.usage.json`、pin/unpin、archive/restore 基础 curator 能力，后台 review 可在受限范围内 patch/create agent-owned skill。
 - [x] Hermes 生态级生命周期第五阶段完成：新增 memory flush、curator 自动间隔调度、agent-owned skill stale/archive 自动转换，以及终端 `/memory`、`/curator`、`/skills agent` 管理入口；默认仍只影响主项目，不触碰桌面生产副本。
 - [x] Hermes 生态级控制面第一版完成：新增 `/api/v1/agent/memory/*`、`/api/v1/agent/curator/*`、`/api/v1/agent/skills/agent-owned`，管理后台或外部控制台可直接读写 curated memory、触发 flush、查看/运行 curator、pin/archive/restore agent-owned skill。
 - [x] Hermes 自进化增强完成：curator 新增 dry-run report、规则建议、重复 skill 检测、可选 LLM 建议、latest report 持久化和人工确认 apply；终端新增 `/curator report`、`/curator apply`，API 新增 `/curator/report`、`/curator/apply`。
-- [x] Hermes 灵魂/模板种子完成：新增 tracked 的 `data/agent/memories/MEMORY.md`、`USER.md`、`skills/.agent/.templates/`、`skills/.agent/.curator/README.md` 和种子 skill `skills/.agent/xbot-self-evolution/`；memory 解析会忽略模板注释，避免模板说明被注入 prompt。
+- [x] Hermes 灵魂/模板种子改为运行期管理：不再提交旧 xbot memory 种子，Hermes 运行数据统一保存在 `data/hermes/`。
 - [x] Hermes 短期记忆对齐完成：`AgentRuntime` 新增按 source 隔离的 session working memory，terminal/channel 每轮会把短期 summary 和最近 user/assistant 轮次带入下一次 LLM 调用；`/new` 会清理当前终端 session 的短期历史。
 - [x] Hermes 短期压缩第一版完成：旧轮次不再直接遗忘；默认不按轮数裁剪，超过 `short_term_max_tokens=128000` 的内容会压入 session summary，再与最近原文一起带入后续对话；微信通道同样按 conversation source 隔离。
-- [x] Wiki Knowledge Base 第一阶段完成：新增 `WikiStore`、`wiki.manage`、`/api/v1/agent/wiki`、默认 `data/agent/wiki/xbot/` Markdown 种子；默认不依赖第三方软件，使用 Markdown 页面、目录索引、文件检索和 LLM 维护页面，RAG/向量库仅作为后续派生缓存。
+- [x] Wiki Knowledge Base 保留为框架 API 能力，但默认关闭；旧 xbot wiki 种子已删除，若后续启用则默认使用 `data/hermes/wiki/`。
 - [x] Wiki Knowledge Base 第二阶段完成：新增页面合并建议、交叉链接维护、冲突检测、专题 digest、派生 search/RAG index 重建；生成报告写入 `merge-suggestions.md` / `conflicts.md`，派生索引写入 `derived/search-index.json` 且可随时重建。
 - [x] 子代理后台任务第一版完成：新增 `task.agent_start`，支持主 Agent 把完整任务委托给后台子 Agent，先向用户回复任务已开始，子 Agent 完成后通过 background notify 自动回发结果；微信通道也支持子代理完成通知。
 - [x] 子代理主代理编排升级完成：`task.agent_start` 默认进入 `parent_agent` 完成模式，子代理完成后先把结果交回主 Agent 综合上下文整理，再由主 Agent 按原通道回复用户；失败时才兜底使用后台通知直发结果。
@@ -2002,7 +2002,7 @@ Hermes 的长期能力分三层：
 
 xbot 采用分阶段落地：
 
-1. [x] 第一阶段：文件化 curated memory。默认目录 `data/agent/memories/`，包含 `MEMORY.md` 与 `USER.md`；系统提示词只注入会话启动时的冻结快照，当前会话写入立即落盘但不刷新本轮 system prompt，避免 prompt cache 和对话行为在中途漂移。
+1. [x] 第一阶段：文件化 curated memory 曾由 xbot 自研 Agent 管理；切换 Hermes 后旧目录已废弃，Agent 记忆统一由 Hermes 管理。
 2. [x] 第一阶段工具面：新增 `memory.read`、`memory.add`、`memory.replace`、`memory.remove`。`target=user` 用于用户偏好和个人画像，`target=memory` 用于环境事实、项目约定、工具经验；写入有长度预算和基础敏感/注入词拦截。
 3. [x] 第二阶段：后台 memory review。每 N 轮复制本轮输入、输出和 source，启动一个受限 review task；该 task 只允许 `memory.read/add/replace/remove`，不能调用 shell/browser/filesystem/skill，避免复盘过程污染主任务或执行危险操作。
 4. [x] 第三阶段：程序性记忆。新增 `skill.manage`，支持在 `skills/.agent/` 目录中 create/patch/write_file/archive；优先 patch 已加载或已有 umbrella skill，避免每个任务都创建窄 skill。
@@ -2013,7 +2013,7 @@ xbot 采用分阶段落地：
 9. [x] 第八阶段：可见模板种子。仓库提供初始 memory 和 self-evolution skill 模板，运行时也会在缺失 `MEMORY.md` / `USER.md` 时创建注释模板；注释模板不会进入长期记忆快照。
 10. [x] 第九阶段：短期 working memory。参考 Hermes 的 `conversation_history -> messages` 模型，xbot 在 `AgentRuntime` 内维护 source-scoped `LLMMessage` 历史；terminal session 和 channel conversation 默认不按轮数裁剪，主要受 `agent.memory.short_term_max_tokens` 控制。API 默认不共享短期历史，避免无 session 的调用互相污染。
 11. [x] 第十阶段：短期压缩。旧轮次超过 token 窗口后进入 `Short-term session summary`，最近轮次继续保留原文；下一轮消息顺序为 system prompt、长期记忆、短期 summary、最近历史、当前用户输入。默认原文窗口 `128K tokens`、summary `32K tokens`，字符预算配置保留为兼容兜底；当前为确定性摘要，后续可升级为 LLM 压缩 diff/主题化摘要。
-12. [x] 第十一阶段：Wiki Knowledge Base。新增 `data/agent/wiki/<wiki-name>/`，用于系统化项目知识、研究资料和业务知识沉淀；它不替代 `MEMORY.md` / `USER.md`，而是承载更大、更结构化的长期知识。
+12. [x] 第十一阶段：Wiki Knowledge Base 曾使用 xbot 旧 wiki 目录；切换 Hermes 后默认关闭并迁到 `data/hermes/wiki/`，避免与 Hermes 记忆目录并存。
 
 记忆写入原则：
 
@@ -2031,7 +2031,7 @@ xbot 的分层定位：
 - `USER.md`：用户偏好、纠正、沟通风格和长期个人画像。
 - `MEMORY.md`：少量高密度、稳定的环境事实、项目约定和工具坑点。
 - `skills/.agent/`：程序性记忆，保存“怎么做某类任务”。
-- `data/agent/wiki/<wiki-name>/`：知识库，保存大量结构化项目资料、研究资料、业务知识和长期综合判断。
+- `data/hermes/wiki/<wiki-name>/`：可选知识库目录，默认关闭；Agent 主记忆仍以 Hermes session/memory/skills 为准。
 
 第一版已落地，不需要额外第三方软件：
 
@@ -2043,7 +2043,7 @@ xbot 的分层定位：
 默认目录：
 
 ```text
-data/agent/wiki/
+data/hermes/wiki/
   xbot/
     schema.md      # 维护规则和页面结构约定
     index.md       # 总索引
@@ -2090,7 +2090,7 @@ GET  /api/v1/agent/wiki/{wiki}/query?query=<question>&limit=5
 ```toml
 [agent.wiki]
 enabled = true
-directory = "data/agent/wiki"
+directory = "data/hermes/wiki"
 default_wiki = "xbot"
 query_max_chars = 12000
 rag_enabled = false
