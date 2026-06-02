@@ -40,6 +40,9 @@ class AgentChatPlugin(PluginBase):
         if not content:
             logger.info("AgentChatPlugin 清理后内容为空，跳过消息: {}", message.id)
             return False
+        if self._is_new_session_command(content):
+            await self._handle_new_session_command(message, ctx)
+            return True
 
         logger.info(
             "AgentChatPlugin 调用 Agent: id={} conversation={} sender={} content={}",
@@ -100,11 +103,46 @@ class AgentChatPlugin(PluginBase):
             len(history),
             len(summaries),
         )
-        source = f"channel:{message.platform}:{message.adapter}:{message.conversation_id}"
+        source = self._source_for_message(message)
         attachments = self._llm_attachments(message)
         if self._agent_accepts_attachments(ctx.agent):
             return await ctx.agent.run_task(agent_input, source=source, attachments=attachments)
         return await ctx.agent.run_task(agent_input, source=source)
+
+    async def _handle_new_session_command(self, message: Message, ctx) -> None:
+        source = self._source_for_message(message)
+        try:
+            result = ctx.agent.clear_session_history(source)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            logger.warning("AgentChatPlugin 新会话重置失败: id={} error={}", message.id, exc)
+            await self._send_error_reply(message, ctx, f"新会话重置失败：{exc}")
+            return
+        session_id = result.get("session_id") if isinstance(result, dict) else ""
+        logger.info(
+            "AgentChatPlugin 已重置当前会话: id={} source={} session_id={}",
+            message.id,
+            source,
+            session_id,
+        )
+        await ctx.send_reply(
+            Reply(
+                platform=message.platform,
+                adapter=message.adapter,
+                conversation_id=message.conversation_id,
+                type="text",
+                content="已开启新会话，会重新读取当前人格配置。",
+                quote_message_id=message.id,
+            )
+        )
+
+    def _is_new_session_command(self, content: str) -> bool:
+        command = content.strip().split(maxsplit=1)[0].lower()
+        return command in {"/new", "/reset"}
+
+    def _source_for_message(self, message: Message) -> str:
+        return f"channel:{message.platform}:{message.adapter}:{message.conversation_id}"
 
     def _should_use_xbot_context(self, ctx) -> bool:
         settings = getattr(ctx, "settings", None)

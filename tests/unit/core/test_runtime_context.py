@@ -150,6 +150,16 @@ class FakeAgent:
         return FakeAgentResult()
 
 
+class ResettableAgent(FakeAgent):
+    def __init__(self):
+        super().__init__()
+        self.cleared_sources = []
+
+    def clear_session_history(self, source: str | None = None):
+        self.cleared_sources.append(source)
+        return {"session_id": "xbot-test-session", "deleted": True}
+
+
 class AttachmentAwareAgent:
     def __init__(self):
         self.inputs = []
@@ -357,6 +367,41 @@ async def test_agent_chat_plugin_handles_private_text_as_fallback():
         assert replies[-1].adapter == "wechat869"
         assert replies[-1].conversation_id == "wxid_sender"
         assert replies[-1].content == "agent reply"
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
+async def test_agent_chat_plugin_new_resets_current_channel_session():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+    fake_agent = ResettableAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="wechat",
+            adapter="wechat869",
+            conversation_id="group-1@chatroom",
+            sender_id="wxid_sender",
+            sender_name="张三",
+            content="@小小x /new",
+            raw={
+                "id": "group-new-1",
+                "scope": "group",
+                "mentions_bot": True,
+                "bot_nickname": "小小x",
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        replies = await ctx.messages.recent_replies()
+        assert fake_agent.inputs == []
+        assert fake_agent.cleared_sources == ["channel:wechat:wechat869:group-1@chatroom"]
+        assert replies[-1].conversation_id == "group-1@chatroom"
+        assert replies[-1].content == "已开启新会话，会重新读取当前人格配置。"
     finally:
         await ctx.engine.stop()
         await ctx.storage.close()

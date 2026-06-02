@@ -260,6 +260,29 @@ def _session_id_for_source(source: str) -> str:
     return f"xbot-{safe[:96] or 'default'}"
 
 
+def clear_hermes_session(source: str | None = None) -> dict[str, Any]:
+    """Delete the Hermes session mapped to an xbot source."""
+    _ensure_hermes_import_path()
+    home_dir = hermes_home_dir()
+    _ensure_hermes_home_files(home_dir)
+    os.environ["HERMES_HOME"] = str(home_dir)
+
+    from hermes_state import SessionDB
+
+    normalized_source = source or "default"
+    session_id = _session_id_for_source(normalized_source)
+    session_db = SessionDB(db_path=home_dir / "state.db")
+    deleted = session_db.delete_session(session_id, sessions_dir=home_dir / "sessions")
+    return {
+        "success": True,
+        "runtime": "hermes",
+        "source": normalized_source,
+        "session_id": session_id,
+        "deleted": bool(deleted),
+        "message": "Hermes session cleared; the next turn will rebuild system prompt and reload SOUL.md.",
+    }
+
+
 def _input_with_attachments(input_text: str, attachments: list[dict] | None) -> str:
     if not attachments:
         return input_text

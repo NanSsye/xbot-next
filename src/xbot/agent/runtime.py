@@ -9,7 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from xbot.agent.background import BackgroundTaskManager, BackgroundTaskRecord
-from xbot.agent.hermes_runtime import run_hermes_agent
+from xbot.agent.hermes_runtime import clear_hermes_session, run_hermes_agent
 from xbot.agent.mcp import MCPClientManager
 from xbot.agent.scheduler import ScheduledJobManager
 from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
@@ -212,9 +212,8 @@ class AgentRuntime:
             "message": "Hermes manages memory and self-improvement in data/hermes.",
         }
 
-    def clear_session_history(self, source: str | None = None) -> None:
-        # Hermes owns session history in data/hermes/state.db.
-        return None
+    def clear_session_history(self, source: str | None = None) -> dict:
+        return clear_hermes_session(source)
 
     def llm_status(self) -> dict:
         return {

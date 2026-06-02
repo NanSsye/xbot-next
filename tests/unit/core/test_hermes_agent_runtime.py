@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from xbot.agent.hermes_runtime import _ensure_hermes_home_files, _restore_session_history
+from xbot.agent.hermes_runtime import (
+    _ensure_hermes_home_files,
+    _ensure_hermes_import_path,
+    _restore_session_history,
+    _session_id_for_source,
+    clear_hermes_session,
+)
 import xbot.agent.runtime as runtime_module
 from xbot.agent.runtime import AgentRuntime
 from xbot.core.config import AgentConfig
@@ -80,3 +86,24 @@ def test_ensure_hermes_home_files_does_not_overwrite_existing_config(tmp_path):
     _ensure_hermes_home_files(tmp_path)
 
     assert config_path.read_text(encoding="utf-8") == "memory:\n  memory_enabled: false\n"
+
+
+def test_clear_hermes_session_deletes_only_source_session(tmp_path, monkeypatch):
+    monkeypatch.setattr("xbot.agent.hermes_runtime.hermes_home_dir", lambda: tmp_path)
+    _ensure_hermes_import_path()
+
+    from hermes_state import SessionDB
+
+    target_source = "channel:wechat:wechat869:group-1@chatroom"
+    target_session_id = _session_id_for_source(target_source)
+    other_session_id = _session_id_for_source("channel:wechat:wechat869:group-2@chatroom")
+    session_db = SessionDB(db_path=tmp_path / "state.db")
+    session_db.create_session(target_session_id, source=target_source, system_prompt="old")
+    session_db.create_session(other_session_id, source="other", system_prompt="keep")
+
+    result = clear_hermes_session(target_source)
+
+    assert result["session_id"] == target_session_id
+    assert result["deleted"] is True
+    assert session_db.get_session(target_session_id) is None
+    assert session_db.get_session(other_session_id) is not None
