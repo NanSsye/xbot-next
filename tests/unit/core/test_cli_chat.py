@@ -5,7 +5,6 @@ import pytest
 from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.runtime import AgentResult, AgentRuntimeEvent
 from xbot.agent.runtime import AgentRuntime
-from xbot.agent.tools.toolsets import toolsets_for_source
 from xbot.cli.chat import (
     TerminalChatOptions,
     TerminalChatSession,
@@ -39,8 +38,8 @@ def test_terminal_source_uses_terminal_toolset():
         )
     )
 
-    assert toolsets_for_source(config, "terminal:local:s1") == {"core", "filesystem", "shell"}
-    assert toolsets_for_source(config, "api") == {"core"}
+    assert config.toolsets.terminal == ["core", "filesystem", "shell"]
+    assert config.toolsets.api == ["core"]
 
 
 def test_agent_visible_tools_uses_terminal_toolset():
@@ -56,8 +55,9 @@ def test_agent_visible_tools_uses_terminal_toolset():
     )
     tools = {item["name"] for item in runtime.visible_tools(source="terminal:local:s1")}
 
-    assert "filesystem.read_file" in tools
-    assert "shell.exec" not in tools
+    assert "read_file" in tools
+    assert "terminal" in tools
+    assert "skill_manage" in tools
 
 
 def test_terminal_chat_uses_plain_input_by_default(tmp_path):

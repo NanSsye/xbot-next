@@ -46,7 +46,7 @@ class OpenClawBridgePlugin(PluginBase):
                 message.sender_id,
                 (message.content or "")[:80],
             )
-            return False
+            return True
         if self._is_message_processed(message):
             return True
         self._mark_processed(message)

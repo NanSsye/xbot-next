@@ -17,7 +17,6 @@ from xbot.messaging.queue_factory import create_message_queue
 from xbot.plugins.manager import PluginManager
 from xbot.runtime.engine import XBotEngine
 from xbot.skills.manager import SkillManager
-from xbot.agent.tools.database_provider import register_database_tools
 from xbot.storage.session import Storage
 
 
@@ -115,7 +114,6 @@ def build_context(settings: Settings) -> AppContext:
         if settings.storage.persist_runtime_events
         else None,
     )
-    register_database_tools(agent.tools, storage=storage)
     engine = XBotEngine(settings)
     engine.attach_managers(plugins=plugins, skills=skills, adapters=adapters)
     engine.attach_storage(storage=storage, message_store=messages)

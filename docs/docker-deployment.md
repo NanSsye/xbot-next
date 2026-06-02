@@ -45,6 +45,7 @@ compose 默认持久化到宿主机项目目录：
 
 ```text
 ./data/                  xbot 运行数据、媒体、Agent 文件
+./data/hermes/           Hermes session、memory、skills、curator 状态和轨迹
 ./logs/                  日志
 ./workspace/             Agent 工作目录
 ./ui/dist/               前端构建产物
@@ -66,6 +67,8 @@ XBOT_LLM_BASE_URL=https://api.openai.com/v1
 XBOT_LLM_MODEL=gpt-4.1-mini
 XBOT_LLM_API_KEY=你的模型 key
 ```
+
+内嵌 Hermes 会复用这些 `XBOT_LLM_*` 主模型配置。Hermes 自带扩展凭证不要写到根目录 `.env`；需要搜索、外部 memory provider、OpenRouter/Nous 等扩展时，放到 `data/hermes/.env`。
 
 如果 869 运行在宿主机：
 
@@ -113,6 +116,8 @@ docker compose restart xbot
 - `pyproject.toml` 变化：自动执行 `pip install -e .`
 - `ui/` 前端源码变化：自动执行 `npm ci` 和 `npm run build`
 - 数据库迁移：按 `.env` 配置自动执行 Alembic migration
+
+内嵌 Hermes 源码位于 `vendor/hermes/`。因为 compose 映射整个项目目录，替换 `vendor/hermes/` 后重启 `xbot` 容器即可生效；通常不需要重新构建镜像。
 
 只有这些情况需要重新构建镜像：
 

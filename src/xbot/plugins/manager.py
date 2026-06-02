@@ -331,8 +331,7 @@ class PluginManager:
         )
 
     def _claims_message(self, message: Message, routing: PluginRouting) -> bool:
-        has_triggers = bool(routing.prefixes or routing.keywords or routing.exact)
-        return routing.exclusive and has_triggers and self._matches_routing(message, routing)
+        return routing.exclusive and self._matches_routing(message, routing)
 
     async def _persist_manifest(self, manifest: PluginManifest, plugin_dir: Path, enabled: bool) -> None:
         if not self.repository_provider:

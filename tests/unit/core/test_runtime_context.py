@@ -1,10 +1,12 @@
 import pytest
 from contextlib import asynccontextmanager
 
-from xbot.core.config import load_settings
+from xbot.core.config import PluginConfig, load_settings
 from xbot.adapters.registry import AdapterRegistry
 from xbot.messaging.message_store import InMemoryMessageStore
 from xbot.messaging.models import Message, MessageEnvelope, Reply
+from xbot.plugins.manager import PluginManager
+from xbot.plugins.manifest import PluginManifest, PluginRouting
 from xbot.runtime.context import build_context
 
 
@@ -29,7 +31,8 @@ async def test_context_start_loads_plugin_skill_and_tools():
         assert ctx.engine.status().state == "running"
         assert any(plugin["name"] == "echo" for plugin in ctx.plugins.list_plugins())
         assert any(skill["name"] == "code_assistant" for skill in ctx.skills.list_skills())
-        assert any(tool["name"] == "filesystem.read_file" for tool in ctx.agent.tools.list_tools())
+        assert any(tool["name"] == "read_file" for tool in ctx.agent.tools.list_tools())
+        assert any(tool["name"] == "skill_manage" for tool in ctx.agent.tools.list_tools())
     finally:
         await ctx.engine.stop()
         await ctx.storage.close()
@@ -77,6 +80,64 @@ class FakeMessageRepository:
 
 class FakeAgentResult:
     output = "agent reply"
+
+
+@pytest.mark.anyio
+async def test_exclusive_plugin_blocks_fallback_even_when_it_returns_false():
+    calls: list[str] = []
+
+    class ExclusivePlugin:
+        async def on_message(self, message, ctx):
+            calls.append("exclusive")
+            return False
+
+    class FallbackPlugin:
+        async def on_message(self, message, ctx):
+            calls.append("fallback")
+            return True
+
+    manager = PluginManager(PluginConfig())
+    manager._plugins = {
+        "exclusive": ExclusivePlugin(),
+        "fallback": FallbackPlugin(),
+    }
+    manager._manifests = {
+        "exclusive": PluginManifest(
+            name="exclusive",
+            entry="main:ExclusivePlugin",
+            routing=PluginRouting(
+                enabled=True,
+                priority=10,
+                exclusive=True,
+                message_types=["text"],
+                platforms=["wechat"],
+            ),
+        ),
+        "fallback": PluginManifest(
+            name="fallback",
+            entry="main:FallbackPlugin",
+            routing=PluginRouting(
+                enabled=True,
+                priority=10000,
+                fallback=True,
+                message_types=["text"],
+                platforms=["wechat"],
+            ),
+        ),
+    }
+
+    await manager.dispatch_message(
+        Message(
+            platform="wechat",
+            adapter="wechat869",
+            conversation_id="wxid_user",
+            sender_id="wxid_user",
+            content="你好",
+            raw={"scope": "private"},
+        )
+    )
+
+    assert calls == ["exclusive"]
     suppress_channel_reply = False
 
 

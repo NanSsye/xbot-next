@@ -27,6 +27,7 @@ COPY plugins ./plugins
 COPY scripts ./scripts
 COPY skills ./skills
 COPY src ./src
+COPY vendor ./vendor
 COPY ui ./ui
 COPY docker/entrypoint.sh /usr/local/bin/xbot-docker-entrypoint
 

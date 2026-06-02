@@ -58,7 +58,7 @@
 
 ## 4. 当前实现进度
 
-更新时间：2026-05-31
+更新时间：2026-06-02
 
 已完成：
 
@@ -74,6 +74,10 @@
 - [x] 建立 PluginBase、PluginManager、plugin manifest/loader。
 - [x] 建立 SkillManager、skill manifest/loader。
 - [x] 建立 AgentRuntime 空壳、ToolRegistry、ToolExecutor、PolicyEngine、Workspace、MemoryStore。
+- [x] 内嵌 Hermes Agent 源码到 `vendor/hermes/`，生产默认由 Hermes 执行 Agent 任务；xbot 保留通道、插件、队列、存储、前端 API 等框架层。
+- [x] Hermes 默认模式下，`agent_chat` 不再向 Agent 输入拼接 xbot 会话历史/summary；xbot 自研 memory review/curator 不再随每轮 Agent 回复启动。
+- [x] Hermes 持久化配置接入完成：首次运行自动创建 `data/hermes/config.yaml` 与 `.env.example`，主模型继续由 xbot 根 `.env` 注入，Hermes 自身 memory、skill 自进化、curator 和扩展凭证由 `data/hermes/` 接管。
+- [x] 自研 Agent 执行链已删除：移除 xbot 内部 LLM provider、planner、tool parser、tool executor、filesystem/shell/browser/git/database 等旧工具 provider；`AgentRuntime` 仅保留 Hermes 调用外壳、任务/事件、后台任务和定时任务框架接口。
 - [x] 添加 Echo 示例插件。
 - [x] 添加 `code_assistant` 示例 skill。
 - [x] 补齐 adapters API。
@@ -212,7 +216,7 @@
 
 - [ ] Control UI 商业落地完善：继续补批量操作、审计筛选、suggested tool 手动执行、artifact 文件预览和更细的权限提示。
 - [ ] 869 登录后续增强：补完整扫码轮询状态、登录过期恢复、profile 定期刷新、二维码过期提示和 869 登录流程异常分类。
-- [ ] Hermes 生态下一阶段：补 memory / curator 的前端管理页或独立控制台视图，能查看 `USER.md`、`MEMORY.md`、agent-owned skill usage、stale/archive 状态和手动操作入口。
+- [ ] Hermes 生态下一阶段：补 memory / curator 的前端管理页或独立控制台视图，能查看 Hermes `USER.md`、`MEMORY.md`、skill usage、stale/archive 状态和手动操作入口。
 - [ ] Hermes 自进化增强二阶段：把 curator report 的 merge 建议升级为更强的内容合并 diff、人工审批 UI 和回滚入口。
 - [ ] Wiki Knowledge Base 第三阶段：补 LLM 辅助页面合并 diff、人工审批 apply、双向链接质量评分、冲突解决状态和可选真正 embedding provider。
 - [ ] Agent 记忆外部化：预留 memory provider 接口，后续支持数据库、向量检索或外部知识库，但默认仍保持文件化 curated memory 简单可靠。
@@ -1320,7 +1324,7 @@ exact = ["菜单"]
 - `priority` 越小越先匹配。
 - `prefixes`、`keywords`、`exact` 用于判断是否命中插件提示词。
 - 插件返回 `True`、`Reply`、`{"handled": true}` 或发送了回复，即视为已处理。
-- `exclusive = true` 且触发词命中时，即使插件没有回复，也会截断后续 Agent fallback。
+- `exclusive = true` 且路由匹配时，即使插件没有回复，也会截断后续 Agent fallback。
 - `fallback = true` 的插件最后运行，用于兜底能力，例如 `agent_chat`。
 - 因此消息链路是：通道消息 -> 普通插件匹配 -> 插件命中则优先处理 -> 未处理再进入 Agent。
 

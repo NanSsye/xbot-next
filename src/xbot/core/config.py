@@ -316,6 +316,7 @@ class AgentToolsetConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     enabled: bool = True
+    uses_hermes_runtime: bool = True
     mode: Literal["safe", "developer", "admin"] = "developer"
     admin_mode_allowed: bool = False
     timezone: str = "Asia/Shanghai"

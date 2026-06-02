@@ -88,7 +88,10 @@ class AgentChatPlugin(PluginBase):
         return True
 
     async def _run_agent(self, message: Message, ctx, content: str):
-        summaries, history = await self._conversation_context(message, ctx)
+        if self._should_use_xbot_context(ctx):
+            summaries, history = await self._conversation_context(message, ctx)
+        else:
+            summaries, history = "", ""
         agent_input = self._build_agent_input(message, content, history, summaries)
         logger.info(
             "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={}",
@@ -102,6 +105,13 @@ class AgentChatPlugin(PluginBase):
         if self._agent_accepts_attachments(ctx.agent):
             return await ctx.agent.run_task(agent_input, source=source, attachments=attachments)
         return await ctx.agent.run_task(agent_input, source=source)
+
+    def _should_use_xbot_context(self, ctx) -> bool:
+        settings = getattr(ctx, "settings", None)
+        agent = getattr(settings, "agent", None)
+        if agent is not None and getattr(agent, "uses_hermes_runtime", False):
+            return False
+        return True
 
     def _agent_timeout_seconds(self, ctx) -> int:
         settings = getattr(ctx, "settings", None)
@@ -240,11 +250,12 @@ class AgentChatPlugin(PluginBase):
             f"group_member_wxid: {group_member_wxid}\n"
             f"message_id: {message.id}\n"
             f"mentions_bot: {bool(message.raw.get('mentions_bot'))}\n"
-            "memory_scope: Only the current triggered message, its attachments/quote, and the assistant reply are eligible for long-term memory. "
-            "conversation_summaries and recent_conversation_messages are passive context and must not be saved as memory unless the current user explicitly asks to remember them.\n"
+            "memory_scope: Hermes owns long-term memory, session history, context compression, and task trajectory. "
+            "Only the current triggered message, its attachments/quote, and the assistant reply should affect memory. "
+            "Do not infer durable memory from unrelated channel traffic.\n"
             f"current_trigger_message:\n{content}\n"
-            f"conversation_summaries:\n{summaries or '- none'}\n"
-            f"recent_conversation_messages:\n{history or '- none'}\n"
+            f"xbot_conversation_summaries:\n{summaries or '- disabled; Hermes session memory is authoritative'}\n"
+            f"xbot_recent_conversation_messages:\n{history or '- disabled; Hermes session memory is authoritative'}\n"
             f"message_attachments:\n{self._attachments_block(message) or '- none'}\n"
             f"quoted_message:\n{self._quote_block(message) or '- none'}\n"
             f"content: {content}\n"

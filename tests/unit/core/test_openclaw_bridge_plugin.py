@@ -136,5 +136,5 @@ async def test_openclaw_bridge_ignores_self_message_before_bridge_call(monkeypat
 
     result = await plugin.on_message(message, _ctx(tmp_path))
 
-    assert result is False
+    assert result is True
     assert FakeAsyncClient.calls == []
