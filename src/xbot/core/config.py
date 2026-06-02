@@ -107,17 +107,6 @@ class PluginConfig(BaseModel):
 class SkillConfig(BaseModel):
     directory: str = "skills"
     auto_load: bool = True
-    curator_enabled: bool = True
-    curator_interval_turns: int = 20
-    curator_stale_after_days: int = 30
-    curator_archive_after_days: int = 90
-
-
-class AgentWorkspaceConfig(BaseModel):
-    allow_all_filesystem: bool = False
-    roots: list[str] = Field(default_factory=lambda: ["."])
-    deny: list[str] = Field(default_factory=list)
-    allow_outside_workspace: bool = False
 
 
 class AgentApprovalConfig(BaseModel):
@@ -128,49 +117,6 @@ class AgentApprovalConfig(BaseModel):
     database_write: bool = True
 
 
-class AgentMemoryRedactionConfig(BaseModel):
-    enabled: bool = True
-    patterns: list[str] = Field(
-        default_factory=lambda: ["password", "token", "secret", "api_key", "private_key"]
-    )
-
-
-class AgentMemoryConfig(BaseModel):
-    enabled: bool = True
-    store: Literal["postgresql"] = "postgresql"
-    directory: str = ""
-    memory_char_limit: int = 2200
-    user_char_limit: int = 1375
-    review_enabled: bool = True
-    review_interval: int = 10
-    flush_min_turns: int = 6
-    short_term_enabled: bool = True
-    short_term_recent_turns: int = 0
-    short_term_max_tokens: int = 128000
-    short_term_summary_max_tokens: int = 32000
-    short_term_max_chars: int = 0
-    short_term_summary_max_chars: int = 0
-    auto_compress: bool = True
-    compaction_reserve_tokens: int = 16384
-    compaction_keep_recent_tokens: int = 20000
-    compaction_llm_enabled: bool = True
-    max_working_events: int = 50
-    max_tool_output_chars: int = 12000
-    semantic_memory: bool = True
-    vector_search: bool = False
-    retention_days: int = 180
-    redaction: AgentMemoryRedactionConfig = Field(default_factory=AgentMemoryRedactionConfig)
-
-
-class AgentWikiConfig(BaseModel):
-    enabled: bool = False
-    directory: str = "data/hermes/wiki"
-    default_wiki: str = "xbot"
-    query_max_chars: int = 12000
-    rag_enabled: bool = False
-    vector_index: bool = False
-
-
 class AgentLLMConfig(BaseModel):
     enabled: bool = False
     provider: Literal["openai_compatible", "anthropic"] = "openai_compatible"
@@ -178,11 +124,6 @@ class AgentLLMConfig(BaseModel):
     api_key: str | None = None
     model: str = "gpt-4.1-mini"
     context_window_tokens: int | None = None
-    multimodal_enabled: bool = False
-    image_input_enabled: bool = False
-    video_input_enabled: bool = False
-    max_image_bytes: int = 10 * 1024 * 1024
-    max_video_bytes: int = 50 * 1024 * 1024
     timeout_seconds: int = 60
     max_attempts: int = 3
     retry_backoff_seconds: float = 1.0
@@ -208,110 +149,10 @@ class AgentMCPConfig(BaseModel):
     servers: dict[str, AgentMCPServerConfig] = Field(default_factory=dict)
 
 
-class AgentCacheConfig(BaseModel):
-    enabled: bool = True
-    tool_result_ttl_seconds: int = 30
-    static_prompt: bool = True
-    tool_results: bool = True
-    skills: bool = True
-
-
 class AgentScheduleConfig(BaseModel):
     enabled: bool = True
     tick_seconds: float = 30.0
     max_due_per_tick: int = 10
-
-
-class AgentToolsetConfig(BaseModel):
-    api: list[str] = Field(
-        default_factory=lambda: [
-            "core",
-            "memory",
-            "wiki",
-            "filesystem",
-            "filesystem_write",
-            "filesystem_dangerous",
-            "skill",
-            "shell",
-            "mcp",
-            "environment",
-            "task",
-            "schedule",
-            "browser",
-            "database",
-            "git",
-            "plugin",
-        ]
-    )
-    private: list[str] = Field(
-        default_factory=lambda: [
-            "core",
-            "memory",
-            "wiki",
-            "filesystem",
-            "skill",
-            "wechat",
-            "mcp",
-            "environment",
-            "task",
-            "schedule",
-            "plugin",
-        ]
-    )
-    group: list[str] = Field(
-        default_factory=lambda: [
-            "core",
-            "memory",
-            "wiki",
-            "filesystem",
-            "skill",
-            "wechat",
-            "mcp",
-            "environment",
-            "task",
-            "schedule",
-            "plugin",
-        ]
-    )
-    terminal: list[str] = Field(
-        default_factory=lambda: [
-            "core",
-            "memory",
-            "wiki",
-            "filesystem",
-            "filesystem_write",
-            "skill",
-            "shell",
-            "mcp",
-            "environment",
-            "task",
-            "schedule",
-            "browser",
-            "database",
-            "git",
-            "plugin",
-        ]
-    )
-    admin: list[str] = Field(
-        default_factory=lambda: [
-            "core",
-            "memory",
-            "wiki",
-            "filesystem",
-            "filesystem_write",
-            "filesystem_dangerous",
-            "skill",
-            "shell",
-            "mcp",
-            "environment",
-            "task",
-            "schedule",
-            "browser",
-            "database",
-            "git",
-            "plugin",
-        ]
-    )
 
 
 class AgentConfig(BaseModel):
@@ -327,15 +168,10 @@ class AgentConfig(BaseModel):
     auto_delegate_channel_tasks: bool = True
     max_inline_tool_result_chars: int = 20000
     tool_result_artifact_dir: str = "data/artifacts/agent_tool_results"
-    workspace: AgentWorkspaceConfig = Field(default_factory=AgentWorkspaceConfig)
     approval: AgentApprovalConfig = Field(default_factory=AgentApprovalConfig)
-    memory: AgentMemoryConfig = Field(default_factory=AgentMemoryConfig)
-    wiki: AgentWikiConfig = Field(default_factory=AgentWikiConfig)
     llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig)
     mcp: AgentMCPConfig = Field(default_factory=AgentMCPConfig)
-    cache: AgentCacheConfig = Field(default_factory=AgentCacheConfig)
     schedule: AgentScheduleConfig = Field(default_factory=AgentScheduleConfig)
-    toolsets: AgentToolsetConfig = Field(default_factory=AgentToolsetConfig)
 
 
 class WebAdapterConfig(BaseModel):
@@ -491,16 +327,6 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("agent", {}).setdefault("llm", {})["model"] = llm_model
     if llm_context_window := env.get("XBOT_LLM_CONTEXT_WINDOW_TOKENS"):
         data.setdefault("agent", {}).setdefault("llm", {})["context_window_tokens"] = _env_int(llm_context_window)
-    if llm_multimodal := env.get("XBOT_LLM_MULTIMODAL_ENABLED"):
-        data.setdefault("agent", {}).setdefault("llm", {})["multimodal_enabled"] = _env_bool(llm_multimodal)
-    if llm_image_input := env.get("XBOT_LLM_IMAGE_INPUT_ENABLED"):
-        data.setdefault("agent", {}).setdefault("llm", {})["image_input_enabled"] = _env_bool(llm_image_input)
-    if llm_video_input := env.get("XBOT_LLM_VIDEO_INPUT_ENABLED"):
-        data.setdefault("agent", {}).setdefault("llm", {})["video_input_enabled"] = _env_bool(llm_video_input)
-    if llm_max_image_bytes := env.get("XBOT_LLM_MAX_IMAGE_BYTES"):
-        data.setdefault("agent", {}).setdefault("llm", {})["max_image_bytes"] = _env_int(llm_max_image_bytes)
-    if llm_max_video_bytes := env.get("XBOT_LLM_MAX_VIDEO_BYTES"):
-        data.setdefault("agent", {}).setdefault("llm", {})["max_video_bytes"] = _env_int(llm_max_video_bytes)
     if llm_timeout := env.get("XBOT_LLM_TIMEOUT_SECONDS"):
         data.setdefault("agent", {}).setdefault("llm", {})["timeout_seconds"] = _env_int(llm_timeout)
     if llm_max_attempts := env.get("XBOT_LLM_MAX_ATTEMPTS"):
@@ -511,18 +337,6 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         )
     if llm_enabled := env.get("XBOT_LLM_ENABLED"):
         data.setdefault("agent", {}).setdefault("llm", {})["enabled"] = _env_bool(llm_enabled)
-    if memory_compaction_reserve := env.get("XBOT_AGENT_MEMORY_COMPACTION_RESERVE_TOKENS"):
-        data.setdefault("agent", {}).setdefault("memory", {})["compaction_reserve_tokens"] = _env_int(
-            memory_compaction_reserve
-        )
-    if memory_compaction_keep := env.get("XBOT_AGENT_MEMORY_COMPACTION_KEEP_RECENT_TOKENS"):
-        data.setdefault("agent", {}).setdefault("memory", {})["compaction_keep_recent_tokens"] = _env_int(
-            memory_compaction_keep
-        )
-    if memory_compaction_llm := env.get("XBOT_AGENT_MEMORY_COMPACTION_LLM_ENABLED"):
-        data.setdefault("agent", {}).setdefault("memory", {})["compaction_llm_enabled"] = _env_bool(
-            memory_compaction_llm
-        )
     if agent_mode := env.get("XBOT_AGENT_MODE"):
         data.setdefault("agent", {})["mode"] = agent_mode
     if agent_admin_allowed := env.get("XBOT_AGENT_ADMIN_MODE_ALLOWED"):
@@ -539,40 +353,6 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("agent", {})["max_inline_tool_result_chars"] = _env_int(max_inline_tool_result)
     if tool_result_artifact_dir := env.get("XBOT_AGENT_TOOL_RESULT_ARTIFACT_DIR"):
         data.setdefault("agent", {})["tool_result_artifact_dir"] = tool_result_artifact_dir
-    if agent_workspace_root := env.get("XBOT_AGENT_WORKSPACE_ROOT"):
-        data.setdefault("agent", {})["workspace_root"] = agent_workspace_root
-    if agent_workspace_allow_all := env.get("XBOT_AGENT_WORKSPACE_ALLOW_ALL_FILESYSTEM"):
-        data.setdefault("agent", {}).setdefault("workspace", {})["allow_all_filesystem"] = _env_bool(
-            agent_workspace_allow_all
-        )
-    if agent_workspace_allow_outside := env.get("XBOT_AGENT_WORKSPACE_ALLOW_OUTSIDE"):
-        data.setdefault("agent", {}).setdefault("workspace", {})["allow_outside_workspace"] = _env_bool(
-            agent_workspace_allow_outside
-        )
-    if agent_workspace_roots := env.get("XBOT_AGENT_WORKSPACE_ROOTS"):
-        data.setdefault("agent", {}).setdefault("workspace", {})["roots"] = [
-            item.strip() for item in agent_workspace_roots.split(";") if item.strip()
-        ]
-    if agent_cache_enabled := env.get("XBOT_AGENT_CACHE_ENABLED"):
-        data.setdefault("agent", {}).setdefault("cache", {})["enabled"] = _env_bool(
-            agent_cache_enabled
-        )
-    if agent_cache_ttl := env.get("XBOT_AGENT_CACHE_TOOL_RESULT_TTL_SECONDS"):
-        data.setdefault("agent", {}).setdefault("cache", {})["tool_result_ttl_seconds"] = int(
-            agent_cache_ttl
-        )
-    if agent_cache_static_prompt := env.get("XBOT_AGENT_CACHE_STATIC_PROMPT"):
-        data.setdefault("agent", {}).setdefault("cache", {})["static_prompt"] = _env_bool(
-            agent_cache_static_prompt
-        )
-    if agent_cache_tool_results := env.get("XBOT_AGENT_CACHE_TOOL_RESULTS"):
-        data.setdefault("agent", {}).setdefault("cache", {})["tool_results"] = _env_bool(
-            agent_cache_tool_results
-        )
-    if agent_cache_skills := env.get("XBOT_AGENT_CACHE_SKILLS"):
-        data.setdefault("agent", {}).setdefault("cache", {})["skills"] = _env_bool(
-            agent_cache_skills
-        )
     if agent_schedule_enabled := env.get("XBOT_AGENT_SCHEDULE_ENABLED"):
         data.setdefault("agent", {}).setdefault("schedule", {})["enabled"] = _env_bool(
             agent_schedule_enabled
@@ -584,40 +364,6 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if agent_schedule_max_due := env.get("XBOT_AGENT_SCHEDULE_MAX_DUE_PER_TICK"):
         data.setdefault("agent", {}).setdefault("schedule", {})["max_due_per_tick"] = _env_int(
             agent_schedule_max_due
-        )
-    if agent_wiki_enabled := env.get("XBOT_AGENT_WIKI_ENABLED"):
-        data.setdefault("agent", {}).setdefault("wiki", {})["enabled"] = _env_bool(agent_wiki_enabled)
-    if agent_wiki_directory := env.get("XBOT_AGENT_WIKI_DIRECTORY"):
-        data.setdefault("agent", {}).setdefault("wiki", {})["directory"] = agent_wiki_directory
-    if agent_wiki_default := env.get("XBOT_AGENT_WIKI_DEFAULT"):
-        data.setdefault("agent", {}).setdefault("wiki", {})["default_wiki"] = agent_wiki_default
-    if agent_wiki_query_max_chars := env.get("XBOT_AGENT_WIKI_QUERY_MAX_CHARS"):
-        data.setdefault("agent", {}).setdefault("wiki", {})["query_max_chars"] = _env_int(
-            agent_wiki_query_max_chars
-        )
-    if agent_toolsets_api := env.get("XBOT_AGENT_TOOLSETS_API"):
-        data.setdefault("agent", {}).setdefault("toolsets", {})["api"] = _env_list(
-            agent_toolsets_api
-        )
-    if agent_toolsets_private := env.get("XBOT_AGENT_TOOLSETS_PRIVATE"):
-        data.setdefault("agent", {}).setdefault("toolsets", {})["private"] = _env_list(
-            agent_toolsets_private
-        )
-    if agent_toolsets_group := env.get("XBOT_AGENT_TOOLSETS_GROUP"):
-        data.setdefault("agent", {}).setdefault("toolsets", {})["group"] = _env_list(
-            agent_toolsets_group
-        )
-    if agent_toolsets_terminal := env.get("XBOT_AGENT_TOOLSETS_TERMINAL"):
-        data.setdefault("agent", {}).setdefault("toolsets", {})["terminal"] = _env_list(
-            agent_toolsets_terminal
-        )
-    if agent_toolsets_admin := env.get("XBOT_AGENT_TOOLSETS_ADMIN"):
-        data.setdefault("agent", {}).setdefault("toolsets", {})["admin"] = _env_list(
-            agent_toolsets_admin
-        )
-    if agent_mcp_enabled := env.get("XBOT_AGENT_MCP_ENABLED"):
-        data.setdefault("agent", {}).setdefault("mcp", {})["enabled"] = _env_bool(
-            agent_mcp_enabled
         )
     if wechat869_enabled := env.get("XBOT_WECHAT869_ENABLED"):
         data.setdefault("adapters", {}).setdefault("wechat869", {})["enabled"] = _env_bool(

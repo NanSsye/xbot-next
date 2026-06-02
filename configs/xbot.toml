@@ -80,19 +80,6 @@ auto_delegate_channel_tasks = true
 max_inline_tool_result_chars = 20000
 tool_result_artifact_dir = "data/artifacts/agent_tool_results"
 
-[agent.workspace]
-allow_all_filesystem = false
-roots = ["."]
-deny = [
-  "C:/Windows",
-  "C:/Users/*/.ssh",
-  "C:/Users/*/AppData",
-  "/etc",
-  "/root",
-  "/home/*/.ssh"
-]
-allow_outside_workspace = false
-
 [agent.approval]
 dangerous_tools = true
 outside_workspace = true
@@ -100,30 +87,11 @@ delete_files = true
 shell_exec = false
 database_write = true
 
-[agent.memory]
-enabled = true
-store = "postgresql"
-auto_compress = true
-max_working_events = 50
-max_tool_output_chars = 12000
-semantic_memory = true
-vector_search = false
-retention_days = 180
-
-[agent.memory.redaction]
-enabled = true
-patterns = ["password", "token", "secret", "api_key", "private_key"]
-
 [agent.llm]
 enabled = false
 provider = "openai_compatible"
 base_url = "https://api.openai.com/v1"
 model = "gpt-4.1-mini"
-multimodal_enabled = false
-image_input_enabled = false
-video_input_enabled = false
-max_image_bytes = 10485760
-max_video_bytes = 52428800
 timeout_seconds = 60
 max_attempts = 3
 retry_backoff_seconds = 1.0
@@ -132,13 +100,6 @@ temperature = 0.2
 
 [agent.mcp]
 enabled = true
-
-[agent.cache]
-enabled = true
-tool_result_ttl_seconds = 30
-static_prompt = true
-tool_results = true
-skills = true
 
 [agent.schedule]
 enabled = true

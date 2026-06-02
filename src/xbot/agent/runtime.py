@@ -11,10 +11,8 @@ from pydantic import BaseModel, Field
 from xbot.agent.background import BackgroundTaskManager, BackgroundTaskRecord
 from xbot.agent.hermes_runtime import run_hermes_agent
 from xbot.agent.mcp import MCPClientManager
-from xbot.agent.memory import MemoryStore
 from xbot.agent.scheduler import ScheduledJobManager
 from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
-from xbot.agent.wiki import WikiStore
 from xbot.core.config import AgentConfig
 from xbot.core.exceptions import XBotError
 from xbot.core.logging import logger
@@ -95,20 +93,6 @@ class AgentRuntime:
             timezone_name=config.timezone,
             tick_seconds=config.schedule.tick_seconds,
             max_due_per_tick=config.schedule.max_due_per_tick,
-        )
-        self.memory = MemoryStore(
-            config.memory.directory or None,
-            memory_char_limit=config.memory.memory_char_limit,
-            user_char_limit=config.memory.user_char_limit,
-        )
-        self.wiki = (
-            WikiStore(
-                config.wiki.directory,
-                default_wiki=config.wiki.default_wiki,
-                query_max_chars=config.wiki.query_max_chars,
-            )
-            if config.wiki.enabled
-            else None
         )
         self._event_subscribers: set[AgentEventSubscriber] = set()
         self._suppress_channel_reply_task_ids: set[str] = set()
@@ -226,30 +210,6 @@ class AgentRuntime:
             "reason": reason,
             "runtime": "hermes",
             "message": "Hermes manages memory and self-improvement in data/hermes.",
-        }
-
-    async def run_curator(self) -> dict:
-        return {
-            "success": True,
-            "runtime": "hermes",
-            "message": "Hermes curator is configured in data/hermes/config.yaml.",
-        }
-
-    async def generate_curator_report(self, *, use_llm: bool = True) -> dict:
-        return {
-            "success": True,
-            "runtime": "hermes",
-            "use_llm": use_llm,
-            "message": "Hermes curator reports are stored under data/hermes/logs/curator when Hermes runs them.",
-        }
-
-    async def apply_curator_report(self, *, report_id: str = "latest", proposal_ids: list[str] | None = None) -> dict:
-        return {
-            "success": False,
-            "runtime": "hermes",
-            "report_id": report_id,
-            "proposal_ids": proposal_ids or [],
-            "message": "Apply curator changes through Hermes curator tooling.",
         }
 
     def clear_session_history(self, source: str | None = None) -> None:

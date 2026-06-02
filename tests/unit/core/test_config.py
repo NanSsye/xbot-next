@@ -21,39 +21,11 @@ def test_load_default_config(monkeypatch):
     assert settings.conversation.enabled is True
     assert settings.conversation.context.recent_messages == 0
     assert settings.agent.mode == "developer"
-    assert settings.agent.workspace.roots == ["."]
     assert settings.agent.llm.enabled is False
     assert settings.agent.llm.provider == "openai_compatible"
     assert settings.agent.max_inline_tool_result_chars == 20000
     assert settings.agent.tool_result_artifact_dir == "data/artifacts/agent_tool_results"
-    assert settings.agent.memory.short_term_enabled is True
-    assert settings.agent.memory.short_term_recent_turns == 0
-    assert settings.agent.memory.short_term_max_tokens == 128000
-    assert settings.agent.memory.short_term_summary_max_tokens == 32000
-    assert settings.agent.memory.short_term_max_chars == 0
-    assert settings.agent.memory.short_term_summary_max_chars == 0
-    assert settings.agent.memory.compaction_reserve_tokens == 16384
-    assert settings.agent.memory.compaction_keep_recent_tokens == 20000
-    assert settings.agent.memory.compaction_llm_enabled is True
-    assert settings.agent.memory.directory == ""
-    assert settings.agent.wiki.enabled is False
-    assert settings.agent.wiki.directory == "data/hermes/wiki"
-    assert settings.agent.wiki.default_wiki == "xbot"
-    assert settings.agent.wiki.rag_enabled is False
     assert settings.agent.mcp.enabled is True
-    assert settings.agent.toolsets.group == [
-        "core",
-        "memory",
-        "wiki",
-        "filesystem",
-        "skill",
-        "wechat",
-        "mcp",
-        "environment",
-        "task",
-        "schedule",
-        "plugin",
-    ]
     assert settings.agent.schedule.enabled is True
     assert settings.agent.schedule.tick_seconds == 30.0
     assert settings.adapters.wechat869.enabled is False
@@ -79,11 +51,6 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("XBOT_LLM_BASE_URL", "https://api.anthropic.com")
     monkeypatch.setenv("XBOT_LLM_MODEL", "claude-3-5-sonnet-latest")
-    monkeypatch.setenv("XBOT_LLM_MULTIMODAL_ENABLED", "true")
-    monkeypatch.setenv("XBOT_LLM_IMAGE_INPUT_ENABLED", "true")
-    monkeypatch.setenv("XBOT_LLM_VIDEO_INPUT_ENABLED", "true")
-    monkeypatch.setenv("XBOT_LLM_MAX_IMAGE_BYTES", "1024")
-    monkeypatch.setenv("XBOT_LLM_MAX_VIDEO_BYTES", "2048")
     monkeypatch.setenv("XBOT_LLM_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("XBOT_LLM_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("XBOT_LLM_RETRY_BACKOFF_SECONDS", "0.5")
@@ -94,17 +61,9 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_AGENT_AUTO_DELEGATE_CHANNEL_TASKS", "false")
     monkeypatch.setenv("XBOT_AGENT_MAX_INLINE_TOOL_RESULT_CHARS", "12345")
     monkeypatch.setenv("XBOT_AGENT_TOOL_RESULT_ARTIFACT_DIR", "data/custom-tool-results")
-    monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ROOTS", "C:/tmp;D:/project")
-    monkeypatch.setenv("XBOT_AGENT_WORKSPACE_ALLOW_ALL_FILESYSTEM", "true")
-    monkeypatch.setenv("XBOT_AGENT_CACHE_TOOL_RESULT_TTL_SECONDS", "90")
     monkeypatch.setenv("XBOT_AGENT_SCHEDULE_ENABLED", "false")
     monkeypatch.setenv("XBOT_AGENT_SCHEDULE_TICK_SECONDS", "15")
     monkeypatch.setenv("XBOT_AGENT_SCHEDULE_MAX_DUE_PER_TICK", "3")
-    monkeypatch.setenv("XBOT_AGENT_WIKI_DIRECTORY", "data/custom-wiki")
-    monkeypatch.setenv("XBOT_AGENT_WIKI_DEFAULT", "project")
-    monkeypatch.setenv("XBOT_AGENT_WIKI_QUERY_MAX_CHARS", "4096")
-    monkeypatch.setenv("XBOT_AGENT_TOOLSETS_GROUP", "core,skill")
-    monkeypatch.setenv("XBOT_AGENT_MCP_ENABLED", "false")
     monkeypatch.setenv("XBOT_WECHAT869_ENABLED", "true")
     monkeypatch.setenv("XBOT_WECHAT869_HOST", "wechat.local")
     monkeypatch.setenv("XBOT_WECHAT869_PORT", "8848")
@@ -141,11 +100,6 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.llm.api_key == "test-key"
     assert settings.agent.llm.base_url == "https://api.anthropic.com"
     assert settings.agent.llm.model == "claude-3-5-sonnet-latest"
-    assert settings.agent.llm.multimodal_enabled is True
-    assert settings.agent.llm.image_input_enabled is True
-    assert settings.agent.llm.video_input_enabled is True
-    assert settings.agent.llm.max_image_bytes == 1024
-    assert settings.agent.llm.max_video_bytes == 2048
     assert settings.agent.llm.timeout_seconds == 45
     assert settings.agent.llm.max_attempts == 4
     assert settings.agent.llm.retry_backoff_seconds == 0.5
@@ -156,18 +110,10 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.auto_delegate_channel_tasks is False
     assert settings.agent.max_inline_tool_result_chars == 12345
     assert settings.agent.tool_result_artifact_dir == "data/custom-tool-results"
-    assert settings.agent.workspace.roots == ["C:/tmp", "D:/project"]
-    assert settings.agent.workspace.allow_all_filesystem is True
-    assert settings.agent.cache.enabled is True
-    assert settings.agent.cache.tool_result_ttl_seconds == 90
     assert settings.agent.schedule.enabled is False
     assert settings.agent.schedule.tick_seconds == 15
     assert settings.agent.schedule.max_due_per_tick == 3
-    assert settings.agent.wiki.directory == "data/custom-wiki"
-    assert settings.agent.wiki.default_wiki == "project"
-    assert settings.agent.wiki.query_max_chars == 4096
-    assert settings.agent.toolsets.group == ["core", "skill"]
-    assert settings.agent.mcp.enabled is False
+    assert settings.agent.mcp.enabled is True
     assert settings.adapters.wechat869.enabled is True
     assert settings.adapters.wechat869.host == "wechat.local"
     assert settings.adapters.wechat869.port == 8848

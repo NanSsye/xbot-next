@@ -15,7 +15,7 @@ from xbot.cli.chat import (
 )
 from xbot.cli.bridge import TerminalBridgeOptions, TerminalBridgeSession
 from xbot.cli.tui import TerminalTuiRenderer
-from xbot.core.config import AgentConfig, AgentToolsetConfig
+from xbot.core.config import AgentConfig
 from xbot.core.logging import configure_terminal_logging, logger
 
 
@@ -30,29 +30,8 @@ def test_terminal_agent_input_contains_terminal_context(tmp_path):
     assert "content: 列出插件" in text
 
 
-def test_terminal_source_uses_terminal_toolset():
-    config = AgentConfig(
-        toolsets=AgentToolsetConfig(
-            terminal=["core", "filesystem", "shell"],
-            api=["core"],
-        )
-    )
-
-    assert config.toolsets.terminal == ["core", "filesystem", "shell"]
-    assert config.toolsets.api == ["core"]
-
-
-def test_agent_visible_tools_uses_terminal_toolset():
-    runtime = AgentRuntime(
-        AgentConfig(
-            toolsets=AgentToolsetConfig(
-                terminal=["core", "filesystem"],
-                api=["core"],
-            )
-        ),
-        plugins=None,
-        skills=None,
-    )
+def test_agent_visible_tools_exposes_hermes_catalog():
+    runtime = AgentRuntime(AgentConfig(), plugins=None, skills=None)
     tools = {item["name"] for item in runtime.visible_tools(source="terminal:local:s1")}
 
     assert "read_file" in tools

@@ -2,13 +2,14 @@
 
 这份清单面向长期运行的 xbot 实例。个人电脑试用可以使用 SQLite + memory queue；面向真实用户或团队时建议按下面方式部署。
 
-更新时间：2026-05-31
+更新时间：2026-06-02
 
 ## 基础拓扑
 
 - xbot 后端：`xbot run`，默认 `0.0.0.0:8548`。
 - Control UI：执行 `xbot ui-build` 后由后端同源托管 `/`。
-- 数据库：PostgreSQL，保存会话、消息、Agent 任务、记忆、定时任务和运行事件。
+- 数据库：PostgreSQL，保存会话、消息、Agent 任务、定时任务和运行事件。
+- Hermes 数据：`data/hermes/`，保存 Agent 会话、记忆、skills、自进化和轨迹。
 - 队列：Redis，用于消息队列和后续横向扩展。
 - 反向代理：Nginx、Caddy 或同类网关，负责 HTTPS、域名和访问日志。
 
@@ -54,15 +55,7 @@ XBOT_LLM_MODEL=MiniMax-M3
 XBOT_LLM_API_KEY=你的 MiniMax API Key
 ```
 
-多模态模型图片输入：
-
-```env
-XBOT_LLM_MULTIMODAL_ENABLED=true
-XBOT_LLM_IMAGE_INPUT_ENABLED=true
-XBOT_LLM_MAX_IMAGE_BYTES=10485760
-```
-
-图片能力走统一附件层：微信通道已下载到本地的图片会作为模型图片输入，同时保留原来的文本附件说明。普通文本模型保持默认关闭即可。视频开关已预留，默认仍只进入附件元数据，避免大文件误传。
+多模态、工具调用、记忆和 skill 自进化由 Hermes 负责。xbot 通道层会把已下载附件路径交给 Hermes，是否能理解图片/视频取决于当前 Hermes 模型和工具能力。
 
 如果 Control UI 和 API 不同源，额外配置：
 
@@ -76,7 +69,6 @@ XBOT_API_CORS_ORIGINS=https://console.example.com
 - `XBOT_AGENT_ALLOW_SHELL=false`：生产默认关闭 shell。
 - `XBOT_AGENT_MAX_TOOL_ITERATIONS=0`：默认不限制单轮工具循环，适合长任务；重复后台任务由 runtime 单独收口。
 - `XBOT_AGENT_AUTO_DELEGATE_CHANNEL_TASKS=true`：通道里的复杂开发任务自动交给后台子 Agent 持续完成，完成后回发。
-- `XBOT_AGENT_WORKSPACE_ROOTS` 只配置需要 Agent 访问的业务目录。
 - 不建议生产环境启用 `XBOT_AGENT_MODE=admin`。
 - 不把 `.env`、`data/`、`logs/`、用户上传文件和通道媒体目录提交到 Git。
 

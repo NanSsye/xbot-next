@@ -989,9 +989,7 @@ class TerminalChatSession:
         if command == "/help":
             self.renderer.system(
                 "/help /exit /status /tools /tasks /task <id> /replay <id> "
-                "/events [n] /logs [n] /memory [user] "
-                "/curator <status|report|apply|run|archive|restore|pin|unpin> "
-                "/skills agent /clear /new"
+                "/events [n] /logs [n] /clear /new"
             )
             return True
         if command == "/status":
@@ -1022,39 +1020,6 @@ class TerminalChatSession:
             limit = self._parse_limit(arg)
             self.renderer.event_history(self._events, limit=limit)
             self.renderer.background_history(self._background_events, limit=limit)
-            return True
-        if command == "/memory":
-            target = arg.strip() or "memory"
-            if target not in {"memory", "user"}:
-                self.renderer.error("usage: /memory [memory|user]")
-                return True
-            result = self.ctx.agent.memory.read_curated(target)
-            rows = [("target", target), ("usage", result.get("usage", ""))]
-            for index, entry in enumerate(result.get("entries", []), start=1):
-                rows.append((str(index), entry))
-            self.renderer.table(rows)
-            return True
-        if command == "/skills" and arg.strip() == "agent":
-            if not self.ctx.skills or not hasattr(self.ctx.skills, "manage"):
-                self.renderer.error("skill manager is not available")
-                return True
-            result = await self.ctx.skills.manage({"action": "usage"})
-            usage = result.get("usage", {})
-            if not usage:
-                self.renderer.system("no agent-owned skills")
-                return True
-            rows = [
-                (
-                    name,
-                    f"{item.get('state', 'active')} pinned={bool(item.get('pinned'))} "
-                    f"use={item.get('use_count', 0)} patch={item.get('patch_count', 0)}",
-                )
-                for name, item in sorted(usage.items())
-            ]
-            self.renderer.table(rows)
-            return True
-        if command == "/curator":
-            await self._handle_curator_command(arg)
             return True
         if command == "/clear":
             self.renderer.clear()
@@ -1098,70 +1063,6 @@ class TerminalChatSession:
             return True
         self.renderer.error(f"unknown command: {command}")
         return True
-
-    async def _handle_curator_command(self, arg: str) -> None:
-        parts = arg.split()
-        action = parts[0] if parts else "status"
-        name = parts[1] if len(parts) > 1 else ""
-        if action == "report":
-            use_llm = "--no-llm" not in parts
-            report = await self.ctx.agent.generate_curator_report(use_llm=use_llm)
-            summary = report.get("summary", {})
-            rows = [
-                ("report", str(report.get("id", ""))),
-                ("skills", str(summary.get("skill_count", 0))),
-                ("proposals", str(summary.get("proposal_count", 0))),
-            ]
-            for item in report.get("proposals", []):
-                rows.append(
-                    (
-                        str(item.get("id")),
-                        (
-                            f"{item.get('action')} {item.get('target')}"
-                            f" <- {item.get('source_skill') or '-'} "
-                            f"confidence={item.get('confidence')} {item.get('reason')}"
-                        ),
-                    )
-                )
-            self.renderer.table(rows)
-            return
-        if action == "apply":
-            proposal_ids = parts[1:] if len(parts) > 1 else []
-            try:
-                result = await self.ctx.agent.apply_curator_report(proposal_ids=proposal_ids or None)
-            except Exception as exc:
-                self.renderer.error(str(exc))
-                return
-            rows = [("report", str(result.get("report_id", "")))]
-            for item in result.get("results", []):
-                rows.append((str(item.get("id")), f"{item.get('status')} {item.get('reason', '')}"))
-            self.renderer.table(rows)
-            return
-        if action == "run":
-            self.renderer.table(list((await self.ctx.agent.run_curator()).items()))
-            return
-        if action == "status":
-            if not self.ctx.skills or not hasattr(self.ctx.skills, "manage"):
-                self.renderer.error("skill manager is not available")
-                return
-            usage = (await self.ctx.skills.manage({"action": "usage"})).get("usage", {})
-            counts: dict[str, int] = {}
-            for item in usage.values():
-                counts[str(item.get("state") or "active")] = counts.get(str(item.get("state") or "active"), 0) + 1
-            self.renderer.table(sorted(counts.items()) or [("agent skills", "0")])
-            return
-        if action in {"archive", "restore", "pin", "unpin"}:
-            if not name:
-                self.renderer.error(f"usage: /curator {action} <skill>")
-                return
-            try:
-                result = await self.ctx.skills.manage({"action": action, "name": name})
-            except Exception as exc:
-                self.renderer.error(str(exc))
-                return
-            self.renderer.table(list(result.items()))
-            return
-        self.renderer.error("usage: /curator [status|report|apply|run|archive|restore|pin|unpin]")
 
     def _remember_event(self, event: AgentRuntimeEvent) -> None:
         self._events.append(event)

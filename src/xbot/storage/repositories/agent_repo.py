@@ -10,7 +10,6 @@ from xbot.storage.models import (
     AgentArtifactRecord,
     AgentBackgroundTaskRecord,
     AgentEventRecord,
-    AgentMemoryRecord,
     AgentScheduledJobRecord,
     AgentTaskRecord,
 )
@@ -205,32 +204,3 @@ class AgentRepository:
             return False
         await self.session.delete(record)
         return True
-
-    async def save_memory(
-        self,
-        item,
-        *,
-        scope: str = "global",
-        source: str = "agent",
-        tags: list[str] | None = None,
-        importance: int = 0,
-    ) -> None:
-        record = AgentMemoryRecord(
-            id=item.id,
-            scope=scope,
-            kind=item.kind,
-            source=source,
-            content_json=json.dumps({"summary": item.summary}, ensure_ascii=False),
-            summary=item.summary,
-            tags_json=json.dumps(tags or [], ensure_ascii=False),
-            importance=importance,
-            created_at=item.created_at,
-            updated_at=datetime.utcnow(),
-        )
-        await self.session.merge(record)
-
-    async def list_memories(self, limit: int = 50) -> list[AgentMemoryRecord]:
-        result = await self.session.execute(
-            select(AgentMemoryRecord).order_by(AgentMemoryRecord.created_at.desc()).limit(limit)
-        )
-        return list(result.scalars().all())

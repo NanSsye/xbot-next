@@ -107,33 +107,6 @@ class AdapterStateRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-class AgentMemoryRecord(Base):
-    __tablename__ = "agent_memories"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    scope: Mapped[str] = mapped_column(String(128), default="global", index=True)
-    kind: Mapped[str] = mapped_column(String(64), index=True)
-    source: Mapped[str] = mapped_column(String(128), default="agent", index=True)
-    content_json: Mapped[str] = mapped_column(Text, default="{}")
-    summary: Mapped[str] = mapped_column(Text)
-    tags_json: Mapped[str] = mapped_column(Text, default="[]")
-    importance: Mapped[int] = mapped_column(Integer, default=0)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class AgentMemoryLinkRecord(Base):
-    __tablename__ = "agent_memory_links"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    memory_id: Mapped[str] = mapped_column(String(64), index=True)
-    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    artifact_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    relation: Mapped[str] = mapped_column(String(128))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
 class AgentArtifactRecord(Base):
     __tablename__ = "agent_artifacts"
 
