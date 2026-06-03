@@ -452,10 +452,12 @@ class AgentRuntime:
     def _task_record_to_dict(self, record) -> dict:
         return {
             "id": record.id,
+            "task_id": record.id,
             "status": record.status,
             "source": record.source,
             "input": record.input,
             "result": record.result,
+            "output": record.result or "",
             "created_at": record.created_at.isoformat() if record.created_at else None,
             "updated_at": record.updated_at.isoformat() if record.updated_at else None,
         }

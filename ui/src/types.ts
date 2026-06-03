@@ -84,11 +84,13 @@ export type Message = {
 };
 
 export type AgentTask = {
+  id?: string;
   task_id: string;
   source: string;
   status: string;
   input?: string;
   output: string;
+  result?: string | null;
   created_at: string;
   updated_at?: string;
   suppress_channel_reply?: boolean;

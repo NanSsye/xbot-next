@@ -1,15 +1,99 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import ipaddress
+import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import anyio
 
 from xbot.core.config import AgentConfig
 from xbot.core.logging import logger
+
+
+_HERMES_TOOL_POLICY: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "xbot_hermes_tool_policy",
+    default=None,
+)
+
+_MEMBER_TOOLSETS = [
+    "web",
+    "file",
+    "terminal",
+    "skills",
+    "todo",
+    "memory",
+    "session_search",
+    "clarify",
+    "vision",
+]
+
+_MEMBER_DENIED_TOOLS = {
+    "process",
+    "execute_code",
+    "delegate_task",
+    "cronjob",
+    "send_message",
+    "text_to_speech",
+    "computer_use",
+    "ha_list_entities",
+    "ha_get_state",
+    "ha_list_services",
+    "ha_call_service",
+    "kanban_show",
+    "kanban_list",
+    "kanban_complete",
+    "kanban_block",
+    "kanban_heartbeat",
+    "kanban_comment",
+    "kanban_create",
+    "kanban_link",
+    "kanban_unblock",
+}
+
+_MEMBER_DENIED_PREFIXES = ("browser_",)
+
+_PRIVATE_HOSTNAMES = {"localhost", "localhost.localdomain"}
+
+_LAN_COMMAND_PATTERNS = [
+    r"\bnmap\b",
+    r"\bmasscan\b",
+    r"\bnet\s+view\b",
+    r"\bnbtstat\b",
+    r"\barp\s+-a\b",
+    r"\bnetstat\b",
+    r"\broute\s+print\b",
+    r"\bipconfig\s+/all\b",
+    r"\bGet-NetNeighbor\b",
+    r"\bTest-NetConnection\b",
+    r"\bResolve-DnsName\b",
+    r"\bnslookup\b",
+    r"\bping\s+(?:10\.|127\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)",
+    r"\b(?:curl|wget|Invoke-WebRequest|iwr)\b[^\n\r]*(?:10\.|127\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)",
+    r"\b(?:ssh|scp|sftp|telnet|nc|netcat)\b[^\n\r]*(?:10\.|127\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)",
+]
+
+_PATH_ARG_KEYS = {
+    "path",
+    "file",
+    "filename",
+    "filepath",
+    "file_path",
+    "directory",
+    "dir",
+    "root",
+    "cwd",
+    "target",
+    "output_path",
+}
+
+_URL_ARG_KEYS = {"url", "uri", "href"}
 
 
 def hermes_vendor_dir() -> Path:
@@ -249,13 +333,42 @@ def _configure_hermes_auxiliary_client(auxiliary_client: Any, config: AgentConfi
 
 
 def _toolsets_for_source(source: str) -> list[str]:
+    profile = _permission_profile_for_source(source)
+    if profile == "guest":
+        return []
+    if profile == "member":
+        return list(_MEMBER_TOOLSETS)
     if source.startswith("api") or source.startswith("terminal"):
         return ["hermes-api-server"]
     return ["hermes-api-server"]
 
 
+def _permission_profile_for_source(source: str) -> str:
+    normalized = (source or "").strip()
+    if normalized.endswith(":guest") or normalized.endswith(":restricted"):
+        return "guest"
+    if normalized.endswith(":member"):
+        return "member"
+    return "admin"
+
+
+def _session_source_for_source(source: str) -> str:
+    """Map a permission-scoped xbot source back to the shared Hermes session.
+
+    Tool permission is decided per incoming message, but chat memory should
+    stay at the channel conversation level. For example, a WeChat group should
+    not split into two Hermes sessions just because one turn is restricted.
+    """
+    normalized = (source or "default").strip() or "default"
+    for suffix in (":restricted", ":member", ":guest"):
+        if normalized.endswith(suffix):
+            return normalized[: -len(suffix)]
+    return normalized
+
+
 def _session_id_for_source(source: str) -> str:
-    safe = "".join(ch if ch.isalnum() else "-" for ch in source.strip().lower())
+    session_source = _session_source_for_source(source)
+    safe = "".join(ch if ch.isalnum() else "-" for ch in session_source.strip().lower())
     safe = "-".join(part for part in safe.split("-") if part)
     return f"xbot-{safe[:96] or 'default'}"
 
@@ -317,6 +430,198 @@ def _restore_session_history(agent: Any) -> list[dict[str, Any]]:
     return [item for item in restored if item.get("role") != "session_meta"]
 
 
+def _member_workspace_roots(config: AgentConfig) -> list[Path]:
+    roots = getattr(config.member_policy, "workspace_roots", None) or []
+    resolved: list[Path] = []
+    base = Path.cwd()
+    for raw in roots:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            path = base / path
+        resolved.append(path.resolve())
+    return resolved
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_member_path(raw_path: str, policy: dict[str, Any]) -> Path:
+    path = Path(str(raw_path)).expanduser()
+    if not path.is_absolute():
+        cwd = policy.get("cwd")
+        base = Path(str(cwd)).expanduser() if cwd else Path.cwd()
+        if not base.is_absolute():
+            base = Path.cwd() / base
+        path = base / path
+    return path.resolve()
+
+
+def _member_path_allowed(raw_path: str, policy: dict[str, Any]) -> bool:
+    roots = policy.get("workspace_roots") or []
+    if not roots:
+        return False
+    try:
+        resolved = _resolve_member_path(raw_path, policy)
+    except Exception:
+        return False
+    return any(_is_relative_to(resolved, Path(root)) for root in roots)
+
+
+def _extract_values_by_key(value: Any, keys: set[str]) -> list[str]:
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in keys and isinstance(item, str):
+                found.append(item)
+            found.extend(_extract_values_by_key(item, keys))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_extract_values_by_key(item, keys))
+    return found
+
+
+def _host_is_private(host: str) -> bool:
+    hostname = (host or "").strip().strip("[]").lower()
+    if not hostname:
+        return False
+    if hostname in _PRIVATE_HOSTNAMES or hostname.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return any(
+        (
+            ip.is_private,
+            ip.is_loopback,
+            ip.is_link_local,
+            ip.is_multicast,
+            ip.is_reserved,
+            ip.is_unspecified,
+        )
+    )
+
+
+def _url_is_private(raw_url: str) -> bool:
+    text = str(raw_url or "").strip()
+    if not text:
+        return False
+    parsed = urlparse(text if "://" in text else f"http://{text}")
+    return _host_is_private(parsed.hostname or "")
+
+
+def _command_looks_like_private_network_probe(command: str) -> bool:
+    text = str(command or "")
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in _LAN_COMMAND_PATTERNS)
+
+
+def _tool_policy_denial(function_name: str, function_args: dict[str, Any], policy: dict[str, Any]) -> str | None:
+    profile = policy.get("profile") or "admin"
+    if profile == "admin":
+        return None
+    if profile == "guest":
+        return "当前 869 用户是 guest 权限，只能普通聊天，不能调用工具。"
+
+    name = str(function_name or "")
+    args = function_args if isinstance(function_args, dict) else {}
+    if name in _MEMBER_DENIED_TOOLS or any(name.startswith(prefix) for prefix in _MEMBER_DENIED_PREFIXES):
+        return f"普通成员不能调用 {name}。"
+
+    if name == "terminal":
+        if not bool(policy.get("allow_terminal", True)):
+            return "普通成员的终端工具已在配置中关闭。"
+        command = str(args.get("command") or args.get("cmd") or "")
+        if _command_looks_like_private_network_probe(command):
+            return "普通成员不能扫描、探测或访问局域网/私有网络目标。"
+        cwd = args.get("cwd") or args.get("working_dir")
+        if cwd and not _member_path_allowed(str(cwd), policy):
+            return "普通成员只能在授权工作目录内执行终端命令。"
+
+    if name in {"read_file", "write_file", "patch", "search_files"}:
+        path_values = _extract_values_by_key(args, _PATH_ARG_KEYS)
+        if not path_values:
+            return "普通成员文件工具必须显式指定授权工作目录内的路径。"
+        for path_value in path_values:
+            if not _member_path_allowed(path_value, policy):
+                return f"普通成员不能访问授权工作目录外的路径: {path_value}"
+
+    if name in {"web_extract", "browser_navigate"}:
+        if not bool(policy.get("allow_public_web", True)):
+            return "普通成员的公网访问工具已在配置中关闭。"
+        url_values = _extract_values_by_key(args, _URL_ARG_KEYS)
+        for url in url_values:
+            if bool(policy.get("block_private_network", True)) and _url_is_private(url):
+                return f"普通成员不能访问 localhost、内网或私有网络 URL: {url}"
+
+    if bool(policy.get("block_private_network", True)):
+        for url in _extract_values_by_key(args, _URL_ARG_KEYS):
+            if _url_is_private(url):
+                return f"普通成员不能访问 localhost、内网或私有网络 URL: {url}"
+
+    return None
+
+
+def _policy_error(message: str) -> str:
+    return json.dumps(
+        {
+            "error": "xbot_tool_policy_denied",
+            "message": message,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _install_hermes_tool_policy_wrapper() -> None:
+    import model_tools
+    import run_agent
+
+    original = getattr(model_tools, "_xbot_original_handle_function_call", None)
+    if original is None:
+        original = model_tools.handle_function_call
+        setattr(model_tools, "_xbot_original_handle_function_call", original)
+
+        def xbot_policy_handle_function_call(function_name: str, function_args: dict[str, Any], *args, **kwargs) -> str:
+            policy = _HERMES_TOOL_POLICY.get()
+            if policy:
+                denial = _tool_policy_denial(function_name, function_args or {}, policy)
+                if denial:
+                    logger.warning(
+                        "Hermes 工具调用被 xbot 权限策略拦截: profile={} tool={} reason={}",
+                        policy.get("profile"),
+                        function_name,
+                        denial,
+                    )
+                    return _policy_error(denial)
+            return original(function_name, function_args, *args, **kwargs)
+
+        model_tools.handle_function_call = xbot_policy_handle_function_call
+
+    run_agent.handle_function_call = model_tools.handle_function_call
+
+
+def _tool_policy_for_source(config: AgentConfig, source: str) -> dict[str, Any]:
+    profile = _permission_profile_for_source(source)
+    policy_config = config.member_policy
+    if profile == "member" and not policy_config.enabled:
+        profile = "admin"
+    return {
+        "profile": profile,
+        "workspace_roots": _member_workspace_roots(config),
+        "cwd": Path.cwd(),
+        "allow_terminal": bool(policy_config.allow_terminal),
+        "allow_public_web": bool(policy_config.allow_public_web),
+        "block_private_network": bool(policy_config.block_private_network),
+    }
+
+
 async def run_hermes_agent(
     *,
     config: AgentConfig,
@@ -373,6 +678,8 @@ async def run_hermes_agent(
         from agent import auxiliary_client
         from hermes_state import SessionDB
 
+        _install_hermes_tool_policy_wrapper()
+
         # Hermes .env is for Hermes-specific extensions. The primary model
         # remains controlled by xbot's root .env and is restored after Hermes'
         # loader/import path has had a chance to touch process env.
@@ -382,6 +689,10 @@ async def run_hermes_agent(
         _configure_hermes_auxiliary_client(auxiliary_client, config)
 
         session_db = SessionDB()
+        session_source = _session_source_for_source(source)
+        session_id = _session_id_for_source(source)
+        tool_policy = _tool_policy_for_source(config, source)
+        token = _HERMES_TOOL_POLICY.set(tool_policy)
         agent = AIAgent(
             base_url=config.llm.base_url,
             api_key=config.llm.api_key,
@@ -392,10 +703,10 @@ async def run_hermes_agent(
             enabled_toolsets=_toolsets_for_source(source),
             quiet_mode=True,
             save_trajectories=True,
-            session_id=_session_id_for_source(source),
+            session_id=session_id,
             session_db=session_db,
             platform="xbot",
-            gateway_session_key=source,
+            gateway_session_key=session_source,
             skip_context_files=False,
             skip_memory=False,
             max_tokens=config.llm.max_tokens,
@@ -405,23 +716,29 @@ async def run_hermes_agent(
             tool_complete_callback=tool_complete_callback,
             stream_delta_callback=stream_delta_callback,
         )
-        conversation_history = _restore_session_history(agent)
-        if conversation_history:
-            publish(
-                "hermes.resumed",
-                {
-                    "session_id": getattr(agent, "session_id", _session_id_for_source(source)),
-                    "message_count": len(conversation_history),
-                    "user_message_count": sum(
-                        1 for item in conversation_history if item.get("role") == "user"
-                    ),
-                },
+        try:
+            conversation_history = _restore_session_history(agent)
+            if conversation_history:
+                publish(
+                    "hermes.resumed",
+                    {
+                        "session_id": getattr(agent, "session_id", session_id),
+                        "session_source": session_source,
+                        "permission_source": source,
+                        "permission_profile": tool_policy.get("profile"),
+                        "message_count": len(conversation_history),
+                        "user_message_count": sum(
+                            1 for item in conversation_history if item.get("role") == "user"
+                        ),
+                    },
+                )
+            result = agent.run_conversation(
+                _input_with_attachments(input_text, attachments),
+                conversation_history=conversation_history,
+                task_id=task_id,
             )
-        result = agent.run_conversation(
-            _input_with_attachments(input_text, attachments),
-            conversation_history=conversation_history,
-            task_id=task_id,
-        )
+        finally:
+            _HERMES_TOOL_POLICY.reset(token)
         if isinstance(result, dict):
             output = result.get("final_response") or result.get("response") or result.get("content") or ""
             if output:
@@ -436,6 +753,11 @@ async def run_hermes_agent(
             "status": llm_status(),
             "source": source,
             "session_id": _session_id_for_source(source),
+            "session_source": _session_source_for_source(source),
+            "permission_profile": _permission_profile_for_source(source),
+            "member_workspace_roots": [
+                str(path) for path in _member_workspace_roots(config)
+            ],
             "toolsets": _toolsets_for_source(source),
         },
     )

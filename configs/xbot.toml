@@ -106,6 +106,13 @@ enabled = true
 tick_seconds = 30
 max_due_per_tick = 10
 
+[agent.member_policy]
+enabled = true
+workspace_roots = ["workspace", ".agent-workspace"]
+allow_terminal = true
+allow_public_web = true
+block_private_network = true
+
 [adapters.web]
 enabled = true
 
@@ -118,6 +125,9 @@ token_key = ""
 ws_url = ""
 bot_wxid = ""
 bot_nickname = ""
+admin_wxids = []
+member_wxids = []
+default_profile = "member"
 connect_timeout_seconds = 10
 reconnect_seconds = 5
 text_only = false

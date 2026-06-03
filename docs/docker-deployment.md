@@ -1,5 +1,7 @@
 # Docker 本地构建运行
 
+更新时间：2026-06-03
+
 本项目支持用户在本机直接构建 Docker 运行环境，并把整个项目目录映射进容器。compose 会同时启动：
 
 - `xbot` 后端和 Web 控制台
@@ -69,6 +71,29 @@ XBOT_LLM_API_KEY=你的模型 key
 ```
 
 内嵌 Hermes 会复用这些 `XBOT_LLM_*` 主模型配置。Hermes 自带扩展凭证不要写到根目录 `.env`；需要搜索、外部 memory provider、OpenRouter/Nous 等扩展时，放到 `data/hermes/.env`。
+
+869 普通成员工具授权目录也写在根目录 `.env`：
+
+```env
+XBOT_WECHAT869_ADMIN_WXIDS=管理员wxid
+XBOT_WECHAT869_MEMBER_WXIDS=
+XBOT_WECHAT869_DEFAULT_PROFILE=member
+
+XBOT_AGENT_MEMBER_POLICY_ENABLED=true
+XBOT_AGENT_MEMBER_WORKSPACE_ROOTS=workspace,.agent-workspace
+XBOT_AGENT_MEMBER_ALLOW_TERMINAL=true
+XBOT_AGENT_MEMBER_ALLOW_PUBLIC_WEB=true
+XBOT_AGENT_MEMBER_BLOCK_PRIVATE_NETWORK=true
+```
+
+Docker compose 会映射整个项目目录，所以相对授权目录就是容器内项目目录下的同名目录，同时也对应宿主机项目目录里的同名目录。例如 `workspace` 同时是：
+
+```text
+容器内：/app/workspace
+宿主机：./workspace
+```
+
+不要把 `/`、`C:\`、`D:\` 或整个用户目录加入普通成员授权目录。
 
 如果 869 运行在宿主机：
 

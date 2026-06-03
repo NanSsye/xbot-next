@@ -155,6 +155,14 @@ class AgentScheduleConfig(BaseModel):
     max_due_per_tick: int = 10
 
 
+class AgentMemberPolicyConfig(BaseModel):
+    enabled: bool = True
+    workspace_roots: list[str] = Field(default_factory=lambda: ["workspace", ".agent-workspace"])
+    allow_terminal: bool = True
+    allow_public_web: bool = True
+    block_private_network: bool = True
+
+
 class AgentConfig(BaseModel):
     enabled: bool = True
     uses_hermes_runtime: bool = True
@@ -172,6 +180,7 @@ class AgentConfig(BaseModel):
     llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig)
     mcp: AgentMCPConfig = Field(default_factory=AgentMCPConfig)
     schedule: AgentScheduleConfig = Field(default_factory=AgentScheduleConfig)
+    member_policy: AgentMemberPolicyConfig = Field(default_factory=AgentMemberPolicyConfig)
 
 
 class WebAdapterConfig(BaseModel):
@@ -187,6 +196,9 @@ class Wechat869AdapterConfig(BaseModel):
     ws_url: str = ""
     bot_wxid: str = ""
     bot_nickname: str = ""
+    admin_wxids: list[str] = Field(default_factory=list)
+    member_wxids: list[str] = Field(default_factory=list)
+    default_profile: Literal["member", "guest"] = "member"
     connect_timeout_seconds: int = 10
     reconnect_seconds: int = 5
     text_only: bool = False
@@ -365,6 +377,26 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("agent", {}).setdefault("schedule", {})["max_due_per_tick"] = _env_int(
             agent_schedule_max_due
         )
+    if agent_member_policy_enabled := env.get("XBOT_AGENT_MEMBER_POLICY_ENABLED"):
+        data.setdefault("agent", {}).setdefault("member_policy", {})["enabled"] = _env_bool(
+            agent_member_policy_enabled
+        )
+    if agent_member_workspace_roots := env.get("XBOT_AGENT_MEMBER_WORKSPACE_ROOTS"):
+        data.setdefault("agent", {}).setdefault("member_policy", {})["workspace_roots"] = _env_list(
+            agent_member_workspace_roots
+        )
+    if agent_member_allow_terminal := env.get("XBOT_AGENT_MEMBER_ALLOW_TERMINAL"):
+        data.setdefault("agent", {}).setdefault("member_policy", {})["allow_terminal"] = _env_bool(
+            agent_member_allow_terminal
+        )
+    if agent_member_allow_public_web := env.get("XBOT_AGENT_MEMBER_ALLOW_PUBLIC_WEB"):
+        data.setdefault("agent", {}).setdefault("member_policy", {})["allow_public_web"] = _env_bool(
+            agent_member_allow_public_web
+        )
+    if agent_member_block_private_network := env.get("XBOT_AGENT_MEMBER_BLOCK_PRIVATE_NETWORK"):
+        data.setdefault("agent", {}).setdefault("member_policy", {})[
+            "block_private_network"
+        ] = _env_bool(agent_member_block_private_network)
     if wechat869_enabled := env.get("XBOT_WECHAT869_ENABLED"):
         data.setdefault("adapters", {}).setdefault("wechat869", {})["enabled"] = _env_bool(
             wechat869_enabled
@@ -390,6 +422,18 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     if wechat869_bot_nickname := env.get("XBOT_WECHAT869_BOT_NICKNAME"):
         data.setdefault("adapters", {}).setdefault("wechat869", {})["bot_nickname"] = (
             wechat869_bot_nickname
+        )
+    if wechat869_admin_wxids := env.get("XBOT_WECHAT869_ADMIN_WXIDS"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["admin_wxids"] = _env_list(
+            wechat869_admin_wxids
+        )
+    if wechat869_member_wxids := env.get("XBOT_WECHAT869_MEMBER_WXIDS"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["member_wxids"] = _env_list(
+            wechat869_member_wxids
+        )
+    if wechat869_default_profile := env.get("XBOT_WECHAT869_DEFAULT_PROFILE"):
+        data.setdefault("adapters", {}).setdefault("wechat869", {})["default_profile"] = (
+            wechat869_default_profile
         )
     if wechat869_text_only := env.get("XBOT_WECHAT869_TEXT_ONLY"):
         data.setdefault("adapters", {}).setdefault("wechat869", {})["text_only"] = _env_bool(

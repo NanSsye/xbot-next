@@ -1,6 +1,6 @@
 # Hermes Agent Integration
 
-更新时间：2026-06-02
+更新时间：2026-06-03
 
 `xbot-next` 现在内嵌 Hermes Agent，默认不再使用自研 Agent 工具循环作为生产执行核心。
 
@@ -95,6 +95,52 @@ XBOT_LLM_MULTIMODAL_*
 ```
 
 通道、插件、任务记录、事件流、后台任务和定时任务仍由 xbot 框架提供；Agent 推理和工具执行只走 Hermes。
+
+## 869 权限与工具策略
+
+Hermes 仍然负责完整 Agent 循环，但 869 通道会在 xbot wrapper 层给每条触发消息打权限标签：
+
+```text
+admin   管理员，完整 Hermes 工具权限
+member  普通成员，受限工具权限
+guest   访客，只聊天
+```
+
+同一个群不会因为权限不同拆成多个 Hermes session。`channel:wechat:wechat869:群ID`、`:member`、`:guest`、旧的 `:restricted` 都会映射回同一个 Hermes session，因此群记忆保持连续。
+
+普通成员不是完全禁用工具，而是通过 xbot 的硬策略限制：
+
+- 文件工具只能访问 `XBOT_AGENT_MEMBER_WORKSPACE_ROOTS` 内的路径。
+- 终端工具只能在授权目录内执行，且会拦截网段扫描、内网探测、访问私有 IP 的命令。
+- 公网搜索/公开网页读取可以开启；`localhost`、内网 IP、私有网段、`.local` 会被拒绝。
+- 高风险工具如 `execute_code`、`delegate_task`、`cronjob`、`process`、主动 `send_message`、浏览器控制默认拒绝。
+
+配置示例：
+
+```env
+XBOT_WECHAT869_ADMIN_WXIDS=xianan96928
+XBOT_WECHAT869_MEMBER_WXIDS=
+XBOT_WECHAT869_DEFAULT_PROFILE=member
+
+XBOT_AGENT_MEMBER_POLICY_ENABLED=true
+XBOT_AGENT_MEMBER_WORKSPACE_ROOTS=workspace,.agent-workspace
+XBOT_AGENT_MEMBER_ALLOW_TERMINAL=true
+XBOT_AGENT_MEMBER_ALLOW_PUBLIC_WEB=true
+XBOT_AGENT_MEMBER_BLOCK_PRIVATE_NETWORK=true
+```
+
+授权目录可以写相对路径或绝对路径。相对路径按 xbot 启动时的项目根目录解析，例如桌面生产目录 `C:\Users\Administrator\Desktop\xbot-next` 下：
+
+```env
+XBOT_AGENT_MEMBER_WORKSPACE_ROOTS=workspace,.agent-workspace
+```
+
+等价于授权：
+
+```text
+C:\Users\Administrator\Desktop\xbot-next\workspace
+C:\Users\Administrator\Desktop\xbot-next\.agent-workspace
+```
 
 ## 运行数据
 

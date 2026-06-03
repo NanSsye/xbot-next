@@ -64,10 +64,18 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_AGENT_SCHEDULE_ENABLED", "false")
     monkeypatch.setenv("XBOT_AGENT_SCHEDULE_TICK_SECONDS", "15")
     monkeypatch.setenv("XBOT_AGENT_SCHEDULE_MAX_DUE_PER_TICK", "3")
+    monkeypatch.setenv("XBOT_AGENT_MEMBER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("XBOT_AGENT_MEMBER_WORKSPACE_ROOTS", "workspace,.agent-workspace")
+    monkeypatch.setenv("XBOT_AGENT_MEMBER_ALLOW_TERMINAL", "false")
+    monkeypatch.setenv("XBOT_AGENT_MEMBER_ALLOW_PUBLIC_WEB", "true")
+    monkeypatch.setenv("XBOT_AGENT_MEMBER_BLOCK_PRIVATE_NETWORK", "true")
     monkeypatch.setenv("XBOT_WECHAT869_ENABLED", "true")
     monkeypatch.setenv("XBOT_WECHAT869_HOST", "wechat.local")
     monkeypatch.setenv("XBOT_WECHAT869_PORT", "8848")
     monkeypatch.setenv("XBOT_WECHAT869_TOKEN_KEY", "token")
+    monkeypatch.setenv("XBOT_WECHAT869_ADMIN_WXIDS", "wxid_admin, xianan96928")
+    monkeypatch.setenv("XBOT_WECHAT869_MEMBER_WXIDS", "wxid_member")
+    monkeypatch.setenv("XBOT_WECHAT869_DEFAULT_PROFILE", "guest")
     monkeypatch.setenv("XBOT_WECHAT869_TEXT_ONLY", "false")
     monkeypatch.setenv("XBOT_WECHAT869_MEDIA_DIR", "data/custom-media")
     monkeypatch.setenv("XBOT_WECHAT869_MAX_IMAGE_BYTES", "123")
@@ -113,11 +121,18 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.agent.schedule.enabled is False
     assert settings.agent.schedule.tick_seconds == 15
     assert settings.agent.schedule.max_due_per_tick == 3
+    assert settings.agent.member_policy.workspace_roots == ["workspace", ".agent-workspace"]
+    assert settings.agent.member_policy.allow_terminal is False
+    assert settings.agent.member_policy.allow_public_web is True
+    assert settings.agent.member_policy.block_private_network is True
     assert settings.agent.mcp.enabled is True
     assert settings.adapters.wechat869.enabled is True
     assert settings.adapters.wechat869.host == "wechat.local"
     assert settings.adapters.wechat869.port == 8848
     assert settings.adapters.wechat869.token_key == "token"
+    assert settings.adapters.wechat869.admin_wxids == ["wxid_admin", "xianan96928"]
+    assert settings.adapters.wechat869.member_wxids == ["wxid_member"]
+    assert settings.adapters.wechat869.default_profile == "guest"
     assert settings.adapters.wechat869.text_only is False
     assert settings.adapters.wechat869.media_dir == "data/custom-media"
     assert settings.adapters.wechat869.max_image_bytes == 123

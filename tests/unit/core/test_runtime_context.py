@@ -373,6 +373,83 @@ async def test_agent_chat_plugin_handles_private_text_as_fallback():
 
 
 @pytest.mark.anyio
+async def test_agent_chat_plugin_marks_non_admin_wechat869_as_member():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    settings.adapters.wechat869.admin_wxids = ["wxid_admin"]
+    ctx = build_context(settings)
+    fake_agent = FakeAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply, settings=settings)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="wechat",
+            adapter="wechat869",
+            conversation_id="group-1@chatroom",
+            sender_id="wxid_user",
+            sender_name="张三",
+            content="@小小x 扫一下 192.168.6.19",
+            raw={
+                "id": "group-non-admin-agent-1",
+                "scope": "group",
+                "mentions_bot": True,
+                "bot_nickname": "小小x",
+                "sender_wxid": "wxid_user",
+                "group_member_wxid": "wxid_user",
+                "group_wxid": "group-1@chatroom",
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        assert fake_agent.inputs
+        agent_input, source = fake_agent.inputs[-1]
+        assert source == "channel:wechat:wechat869:group-1@chatroom:member"
+        assert "tool_permission: member" in agent_input
+        assert "member can use tools only inside" in agent_input
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
+async def test_agent_chat_plugin_allows_admin_wechat869_tools():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    settings.adapters.wechat869.admin_wxids = ["wxid_admin"]
+    ctx = build_context(settings)
+    fake_agent = FakeAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply, settings=settings)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="wechat",
+            adapter="wechat869",
+            conversation_id="group-1@chatroom",
+            sender_id="wxid_admin",
+            sender_name="管理员",
+            content="@小小x 看一下服务状态",
+            raw={
+                "id": "group-admin-agent-1",
+                "scope": "group",
+                "mentions_bot": True,
+                "bot_nickname": "小小x",
+                "sender_wxid": "wxid_admin",
+                "group_member_wxid": "wxid_admin",
+                "group_wxid": "group-1@chatroom",
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        assert fake_agent.inputs
+        agent_input, source = fake_agent.inputs[-1]
+        assert source == "channel:wechat:wechat869:group-1@chatroom"
+        assert "tool_permission: admin" in agent_input
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
 async def test_agent_chat_plugin_new_resets_current_channel_session():
     settings = load_settings("configs/xbot.toml")
     settings.storage.persist_runtime_events = False
@@ -399,7 +476,7 @@ async def test_agent_chat_plugin_new_resets_current_channel_session():
 
         replies = await ctx.messages.recent_replies()
         assert fake_agent.inputs == []
-        assert fake_agent.cleared_sources == ["channel:wechat:wechat869:group-1@chatroom"]
+        assert fake_agent.cleared_sources == ["channel:wechat:wechat869:group-1@chatroom:member"]
         assert replies[-1].conversation_id == "group-1@chatroom"
         assert replies[-1].content == "已开启新会话，会重新读取当前人格配置。"
     finally:

@@ -1,6 +1,6 @@
 # xbot 后端框架设计
 
-更新时间：2026-06-02
+更新时间：2026-06-03
 
 ## 当前定位
 
@@ -25,6 +25,7 @@ xbot 负责：
 - 微信、Web、终端等通道接入。
 - 插件加载、启停、路由和 `exclusive` 阻断。
 - `agent_chat` fallback 触发条件。
+- 869 通道的管理员/普通成员/访客权限分级，以及普通成员工具调用前的硬策略拦截。
 - Agent task/event/artifact/background/schedule 记录。
 - Web/API 控制台。
 - Docker、本地安装和生产部署入口。
@@ -39,6 +40,48 @@ Hermes 负责：
 - 自进化和 curator。
 - trajectory 保存。
 - Hermes 扩展环境变量。
+
+## 869 Agent 权限模型
+
+869 通道按触发消息的 wxid 分为三档：
+
+```text
+admin   完整 Hermes 工具权限
+member  受限工具权限，可在授权目录内读写文件、写代码、使用公网搜索
+guest   只聊天，不调用工具
+```
+
+权限只影响当前消息的工具能力，不拆分 Hermes 会话。也就是说同一个微信群始终映射到同一个 Hermes session，群里的管理员和普通成员共享群会话记忆；xbot 只在每次工具调用前按当前触发者权限做硬拦截。
+
+普通成员默认允许：
+
+- 公网搜索和公开网页读取。
+- 授权目录内的文件读取、写入、搜索和补丁。
+- 授权目录内的终端开发命令。
+- Hermes memory、todo、skills 查看/管理等低风险能力。
+
+普通成员默认禁止：
+
+- 访问 `localhost`、内网 IP、私有网段和 `.local` 主机。
+- 扫描网段或探测同网段设备，例如 `nmap`、`masscan`、`arp -a`、`net view`、`ipconfig /all`、`Test-NetConnection` 等。
+- 读取或写入授权目录外的文件。
+- `execute_code`、`delegate_task`、`cronjob`、`process`、主动 `send_message`、浏览器控制、智能家居控制等高风险工具。
+
+授权目录通过 `.env` 设置：
+
+```env
+XBOT_AGENT_MEMBER_POLICY_ENABLED=true
+XBOT_AGENT_MEMBER_WORKSPACE_ROOTS=workspace,.agent-workspace
+XBOT_AGENT_MEMBER_ALLOW_TERMINAL=true
+XBOT_AGENT_MEMBER_ALLOW_PUBLIC_WEB=true
+XBOT_AGENT_MEMBER_BLOCK_PRIVATE_NETWORK=true
+```
+
+`XBOT_AGENT_MEMBER_WORKSPACE_ROOTS` 支持多个目录，用英文逗号分隔。相对路径按 xbot 启动时的项目根目录解析；绝对路径可以直接写 Windows 路径，例如：
+
+```env
+XBOT_AGENT_MEMBER_WORKSPACE_ROOTS=workspace,D:\projects\allowed,C:\Users\Administrator\Desktop\agent-work
+```
 
 ## 持久化
 

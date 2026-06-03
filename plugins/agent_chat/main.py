@@ -95,7 +95,8 @@ class AgentChatPlugin(PluginBase):
             summaries, history = await self._conversation_context(message, ctx)
         else:
             summaries, history = "", ""
-        agent_input = self._build_agent_input(message, content, history, summaries)
+        tool_permission = self._tool_permission_profile(message, ctx)
+        agent_input = self._build_agent_input(message, content, history, summaries, tool_permission)
         logger.info(
             "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={}",
             message.id,
@@ -103,14 +104,14 @@ class AgentChatPlugin(PluginBase):
             len(history),
             len(summaries),
         )
-        source = self._source_for_message(message)
+        source = self._source_for_message(message, ctx)
         attachments = self._llm_attachments(message)
         if self._agent_accepts_attachments(ctx.agent):
             return await ctx.agent.run_task(agent_input, source=source, attachments=attachments)
         return await ctx.agent.run_task(agent_input, source=source)
 
     async def _handle_new_session_command(self, message: Message, ctx) -> None:
-        source = self._source_for_message(message)
+        source = self._source_for_message(message, ctx)
         try:
             result = ctx.agent.clear_session_history(source)
             if inspect.isawaitable(result):
@@ -141,8 +142,12 @@ class AgentChatPlugin(PluginBase):
         command = content.strip().split(maxsplit=1)[0].lower()
         return command in {"/new", "/reset"}
 
-    def _source_for_message(self, message: Message) -> str:
-        return f"channel:{message.platform}:{message.adapter}:{message.conversation_id}"
+    def _source_for_message(self, message: Message, ctx=None) -> str:
+        source = f"channel:{message.platform}:{message.adapter}:{message.conversation_id}"
+        profile = self._tool_permission_profile(message, ctx)
+        if profile in {"member", "guest"}:
+            return f"{source}:{profile}"
+        return source
 
     def _should_use_xbot_context(self, ctx) -> bool:
         settings = getattr(ctx, "settings", None)
@@ -263,6 +268,7 @@ class AgentChatPlugin(PluginBase):
         content: str,
         history: str = "",
         summaries: str = "",
+        tool_permission: str = "allowed",
     ) -> str:
         scope = message.raw.get("scope") or "unknown"
         conversation_id = message.conversation_id
@@ -288,6 +294,7 @@ class AgentChatPlugin(PluginBase):
             f"group_member_wxid: {group_member_wxid}\n"
             f"message_id: {message.id}\n"
             f"mentions_bot: {bool(message.raw.get('mentions_bot'))}\n"
+            f"tool_permission: {tool_permission}\n"
             "memory_scope: Hermes owns long-term memory, session history, context compression, and task trajectory. "
             "Only the current triggered message, its attachments/quote, and the assistant reply should affect memory. "
             "Do not infer durable memory from unrelated channel traffic.\n"
@@ -303,9 +310,57 @@ class AgentChatPlugin(PluginBase):
             "For private chat, reply_target_wxid equals private_wxid.\n"
             "For group chat, reply_target_wxid equals group_wxid, and group_member_wxid is the sender in the group.\n"
             "Do not ask the user for wxid/chatroom id when these fields are already present.\n"
+            "Tool permission profiles: admin can use the full Hermes toolset; member can use tools only inside the configured member workspace roots and must not inspect unrelated local files, scan LAN/private network targets, access localhost/internal IPs, manage processes, create cron jobs, delegate tasks, execute arbitrary Python, or send proactive messages; guest must not call tools. "
+            "If a member task needs files, keep all reads/writes under the authorized workspace roots. If a request needs broader host/network access, explain that it requires an 869 administrator.\n"
             "If the content asks about real project files, directories, plugins, skills, config, or runtime state, use tools before answering.\n"
             "Reply to the user in Chinese unless the user clearly asks for another language."
         )
+
+    def _is_restricted_channel_user(self, message: Message, ctx=None) -> bool:
+        return self._tool_permission_profile(message, ctx) != "admin"
+
+    def _tool_permission_profile(self, message: Message, ctx=None) -> str:
+        if message.adapter != "wechat869":
+            return "admin"
+        admin_wxids = self._wechat869_admin_wxids(ctx)
+        candidates = {
+            str(message.sender_id or "").strip(),
+            str(message.raw.get("sender_wxid") or "").strip(),
+            str(message.raw.get("group_member_wxid") or "").strip(),
+            str(message.raw.get("private_wxid") or "").strip(),
+        }
+        candidates.discard("")
+        if admin_wxids and candidates.intersection(admin_wxids):
+            return "admin"
+        member_wxids = self._wechat869_member_wxids(ctx)
+        if member_wxids:
+            return "member" if candidates.intersection(member_wxids) else "guest"
+        return self._wechat869_default_profile(ctx)
+
+    def _wechat869_admin_wxids(self, ctx=None) -> set[str]:
+        settings = getattr(ctx, "settings", None)
+        adapters = getattr(settings, "adapters", None)
+        wechat869 = getattr(adapters, "wechat869", None)
+        configured = getattr(wechat869, "admin_wxids", None)
+        if configured is None:
+            return set()
+        return {str(item).strip() for item in configured if str(item).strip()}
+
+    def _wechat869_member_wxids(self, ctx=None) -> set[str]:
+        settings = getattr(ctx, "settings", None)
+        adapters = getattr(settings, "adapters", None)
+        wechat869 = getattr(adapters, "wechat869", None)
+        configured = getattr(wechat869, "member_wxids", None)
+        if configured is None:
+            return set()
+        return {str(item).strip() for item in configured if str(item).strip()}
+
+    def _wechat869_default_profile(self, ctx=None) -> str:
+        settings = getattr(ctx, "settings", None)
+        adapters = getattr(settings, "adapters", None)
+        wechat869 = getattr(adapters, "wechat869", None)
+        profile = str(getattr(wechat869, "default_profile", "member") or "member").strip().lower()
+        return profile if profile in {"member", "guest"} else "member"
 
     def _attachments_block(self, message: Message) -> str:
         attachments = message.raw.get("attachments") if isinstance(message.raw, dict) else None

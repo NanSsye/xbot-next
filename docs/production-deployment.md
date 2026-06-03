@@ -2,7 +2,7 @@
 
 这份清单面向长期运行的 xbot 实例。个人电脑试用可以使用 SQLite + memory queue；面向真实用户或团队时建议按下面方式部署。
 
-更新时间：2026-06-02
+更新时间：2026-06-03
 
 ## 基础拓扑
 
@@ -65,12 +65,34 @@ XBOT_API_CORS_ORIGINS=https://console.example.com
 
 ## 权限建议
 
-- `XBOT_AGENT_MODE=developer`：默认建议值。
-- `XBOT_AGENT_ALLOW_SHELL=false`：生产默认关闭 shell。
-- `XBOT_AGENT_MAX_TOOL_ITERATIONS=0`：默认不限制单轮工具循环，适合长任务；重复后台任务由 runtime 单独收口。
-- `XBOT_AGENT_AUTO_DELEGATE_CHANNEL_TASKS=true`：通道里的复杂开发任务自动交给后台子 Agent 持续完成，完成后回发。
-- 不建议生产环境启用 `XBOT_AGENT_MODE=admin`。
+- Agent 执行核心由 Hermes 接管，旧版 `XBOT_AGENT_MODE`、`XBOT_AGENT_ALLOW_SHELL`、`XBOT_AGENT_MAX_TOOL_ITERATIONS` 不再控制 Hermes 的工具循环。
+- 869 通道必须配置 `XBOT_WECHAT869_ADMIN_WXIDS`，管理员拥有完整 Hermes 工具权限。
+- 非管理员默认按 `XBOT_WECHAT869_DEFAULT_PROFILE` 处理，建议生产使用 `member`，让普通用户能在授权目录内完成代码和文件任务。
+- 如果只允许白名单成员使用受限工具，配置 `XBOT_WECHAT869_MEMBER_WXIDS`；未命中成员名单的用户会成为 `guest`。
+- 普通成员授权目录必须明确配置 `XBOT_AGENT_MEMBER_WORKSPACE_ROOTS`，不要把整个磁盘根目录加入授权。
 - 不把 `.env`、`data/`、`logs/`、用户上传文件和通道媒体目录提交到 Git。
+
+869 普通成员工具策略建议：
+
+```env
+XBOT_WECHAT869_ADMIN_WXIDS=管理员wxid
+XBOT_WECHAT869_MEMBER_WXIDS=
+XBOT_WECHAT869_DEFAULT_PROFILE=member
+
+XBOT_AGENT_MEMBER_POLICY_ENABLED=true
+XBOT_AGENT_MEMBER_WORKSPACE_ROOTS=workspace,.agent-workspace
+XBOT_AGENT_MEMBER_ALLOW_TERMINAL=true
+XBOT_AGENT_MEMBER_ALLOW_PUBLIC_WEB=true
+XBOT_AGENT_MEMBER_BLOCK_PRIVATE_NETWORK=true
+```
+
+`XBOT_AGENT_MEMBER_WORKSPACE_ROOTS` 是普通成员可读写的固定目录列表。多个目录用英文逗号分隔。相对路径按 xbot 项目根目录解析；绝对路径可以直接写：
+
+```env
+XBOT_AGENT_MEMBER_WORKSPACE_ROOTS=workspace,D:\projects\customer-a,C:\Users\Administrator\Desktop\agent-work
+```
+
+普通成员会被拒绝访问授权目录外的文件、localhost/内网/私有 IP、网段扫描命令、高风险工具和主动发消息工具。
 
 ## 通道数据
 
@@ -100,6 +122,8 @@ XBOT_WECHAT869_TOKEN_KEY=固定token key
 XBOT_WECHAT869_DEVICE_TYPE=ipad
 XBOT_WECHAT869_MEDIA_ENABLED=true
 XBOT_WECHAT869_TEXT_ONLY=false
+XBOT_WECHAT869_ADMIN_WXIDS=管理员wxid
+XBOT_WECHAT869_DEFAULT_PROFILE=member
 ```
 
 规则：

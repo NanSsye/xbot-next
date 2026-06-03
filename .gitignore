@@ -43,3 +43,29 @@ skills/**/wechat-869.json
 ui/node_modules/
 ui/dist/
 ui/tsconfig.tsbuildinfo
+
+# Embedded Hermes: keep runtime source, tools, skills, plugins and config code.
+# Ignore standalone distribution assets that are not used by xbot embedded mode.
+vendor/hermes/.env.example
+vendor/hermes/.envrc
+vendor/hermes/.github/
+vendor/hermes/.plans/
+vendor/hermes/apps/
+vendor/hermes/datagen-config-examples/
+vendor/hermes/docs/
+vendor/hermes/infographic/
+vendor/hermes/nix/
+vendor/hermes/packaging/
+vendor/hermes/plans/
+vendor/hermes/tests/
+vendor/hermes/**/tests/
+vendor/hermes/**/docs/
+vendor/hermes/ui-tui/
+vendor/hermes/web/
+vendor/hermes/website/
+vendor/hermes/package-lock.json
+vendor/hermes/uv.lock
+vendor/hermes/scripts/*LIVETEST*
+vendor/hermes/scripts/*livetest*
+vendor/hermes/scripts/whatsapp-bridge/package-lock.json
+vendor/hermes/__pycache__/

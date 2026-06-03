@@ -3,8 +3,10 @@ import {
   Bot,
   CalendarClock,
   CheckCircle2,
+  ChevronRight,
   Circle,
   Clock3,
+  FileText,
   KeyRound,
   LogIn,
   Monitor,
@@ -20,11 +22,13 @@ import {
   Search,
   Send,
   Settings,
+  Sparkles,
   Sun,
   Trash2,
+  Wrench,
   XCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiBase, clearApiToken, getApiToken, setApiToken, wsUrl } from "../api";
 import type {
   AdapterInfo,
@@ -33,6 +37,8 @@ import type {
   AgentMemoryInfo,
   AgentTask,
   AgentTaskDetail,
+  AgentTaskTimelineItem,
+  AgentTaskToolCall,
   AgentToolInfo,
   BackgroundTask,
   Conversation,
@@ -45,7 +51,7 @@ import type {
   UiEvent,
 } from "../types";
 
-type View = "chat" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
+type View = "agentChat" | "chat" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
 type DeliveryMode = "console" | "channel";
 type ThemeMode = "system" | "light" | "dark";
 type ConsoleMessage = {
@@ -56,6 +62,7 @@ type ConsoleMessage = {
 };
 
 const navItems: Array<{ id: View; label: string; icon: typeof MessagesSquare }> = [
+  { id: "agentChat", label: "Agent 对话", icon: Bot },
   { id: "chat", label: "对话", icon: MessagesSquare },
   { id: "overview", label: "总览", icon: Activity },
   { id: "agent", label: "Agent", icon: Bot },
@@ -76,7 +83,7 @@ function readThemeMode(): ThemeMode {
 }
 
 export function App() {
-  const [view, setView] = useState<View>("chat");
+  const [view, setView] = useState<View>("agentChat");
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapterStatuses, setAdapterStatuses] = useState<Record<string, AdapterStatus>>({});
@@ -134,6 +141,16 @@ export function App() {
   const loadAll = useCallback(async () => {
     setError("");
     try {
+      const load = async <T,>(label: string, promise: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          return await promise;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.toLowerCase().includes("unauthorized")) throw err;
+          console.warn(`[xbot-ui] ${label} load failed:`, message);
+          return fallback;
+        }
+      };
       const [
         nextStatus,
         nextAdapters,
@@ -148,21 +165,20 @@ export function App() {
         nextMemories,
         nextBackground,
         nextSchedules,
-      ] =
-        await Promise.all([
-          api.status(),
-          api.adapters(),
-          api.plugins(),
-          api.skills(),
-          api.conversations(),
-          api.agentEvents(80),
-          api.agentTasks(80),
-          api.tools(),
-          api.llmStatus(),
-          api.mcpStatus(),
-          api.memories(50),
-          api.backgroundTasks(50),
-          api.scheduledJobs(100),
+      ] = await Promise.all([
+          load("system/status", api.status(), null),
+          load("adapters", api.adapters(), []),
+          load("plugins", api.plugins(), []),
+          load("skills", api.skills(), []),
+          load("conversations", api.conversations(), []),
+          load("agent/events", api.agentEvents(80), []),
+          load("agent/tasks", api.agentTasks(80), []),
+          load("agent/tools", api.tools(), []),
+          load("agent/llm/status", api.llmStatus(), null),
+          load("agent/mcp/status", api.mcpStatus(), null),
+          load("agent/memories", api.memories(50), []),
+          load("agent/background-tasks", api.backgroundTasks(50), []),
+          load("agent/scheduled-jobs", api.scheduledJobs(100), []),
         ]);
       setStatus(nextStatus);
       setAdapters(nextAdapters);
@@ -181,7 +197,7 @@ export function App() {
         setSelectedConversationId(nextConversations[0].id);
       }
       if (!selectedTaskId && nextTasks.length > 0) {
-        setSelectedTaskId(nextTasks[0].task_id);
+        setSelectedTaskId(taskIdOf(nextTasks[0]));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -259,7 +275,7 @@ export function App() {
     socket.onerror = () => {
       setLiveEvents((current) => [
         {
-          id: crypto.randomUUID(),
+          id: makeClientId(),
           type: "ui.websocket_error",
           topic: "ui",
           data: {},
@@ -281,14 +297,20 @@ export function App() {
     setError("");
     const contextKey = selectedConversationId || "control-ui";
     const userMessage: ConsoleMessage = {
-      id: crypto.randomUUID(),
+      id: makeClientId(),
       role: "user",
       content: text,
       created_at: new Date().toISOString(),
     };
+    const pendingMessage: ConsoleMessage = {
+      id: makeClientId(),
+      role: "assistant",
+      content: "正在交给 Hermes Agent 执行...",
+      created_at: new Date().toISOString(),
+    };
     setConsoleMessagesByContext((current) => ({
       ...current,
-      [contextKey]: [...(current[contextKey] ?? []), userMessage],
+      [contextKey]: [...(current[contextKey] ?? []), userMessage, pendingMessage],
     }));
     const contextBlock = selectedConversation
       ? [
@@ -310,15 +332,18 @@ export function App() {
       : text;
     try {
       const result = await api.sendAgentTask(contextBlock, "terminal:control-ui");
+      setSelectedTaskId(result.task_id);
       const assistantMessage: ConsoleMessage = {
-        id: result.task_id,
+        id: pendingMessage.id,
         role: "assistant",
         content: result.output || "Agent 没有返回文本结果，请查看右侧活动流。",
         created_at: result.created_at,
       };
       setConsoleMessagesByContext((current) => ({
         ...current,
-        [contextKey]: [...(current[contextKey] ?? []), assistantMessage],
+        [contextKey]: (current[contextKey] ?? []).map((message) =>
+          message.id === pendingMessage.id ? assistantMessage : message,
+        ),
       }));
       setEvents((current) => [
         {
@@ -329,8 +354,18 @@ export function App() {
         },
         ...current,
       ]);
+      api.agentTaskDetail(result.task_id).then(setSelectedTaskDetail).catch(() => undefined);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setConsoleMessagesByContext((current) => ({
+        ...current,
+        [contextKey]: (current[contextKey] ?? []).map((item) =>
+          item.id === pendingMessage.id
+            ? { ...item, content: `执行失败：${message}`, created_at: new Date().toISOString() }
+            : item,
+        ),
+      }));
     } finally {
       setBusy(false);
       void loadAll();
@@ -604,7 +639,7 @@ export function App() {
           <small>{selectedConversation ? selectedConversation.id : "xbot backend"}</small>
         </div>
         <div className="topbar__actions">
-          <StatusPill label={status?.engine.state ?? "unknown"} tone={status?.engine.state === "running" ? "ok" : "warn"} />
+          <StatusPill label={status?.engine?.state ?? "unknown"} tone={status?.engine?.state === "running" ? "ok" : "warn"} />
           <StatusPill label={`${adapters.length} adapters`} tone="neutral" />
           <ThemeToggle value={themeMode} onChange={setThemeMode} />
           <button className="icon-button" onClick={() => void loadAll()} title="刷新">
@@ -630,6 +665,29 @@ export function App() {
             }}
           />
         ) : null}
+        <PageErrorBoundary resetKey={view}>
+        {view === "agentChat" && (
+          <AgentConsoleView
+            consoleMessages={consoleMessages}
+            input={input}
+            setInput={setInput}
+            sendMessage={sendMessage}
+            busy={busy}
+            selectedConversation={selectedConversation}
+            clearConversationContext={() => setSelectedConversationId("")}
+            detail={selectedTaskDetail}
+            tasks={agentTasks}
+            selectedTaskId={selectedTaskId}
+            setSelectedTaskId={setSelectedTaskId}
+            events={events}
+            liveEvents={liveEvents}
+            refreshTasks={async () => {
+              const next = await api.agentTasks(80);
+              setAgentTasks(next);
+              if (selectedTaskId) setSelectedTaskDetail(await api.agentTaskDetail(selectedTaskId));
+            }}
+          />
+        )}
         {view === "chat" && (
           <ChatView
             conversations={filteredConversations}
@@ -754,6 +812,7 @@ export function App() {
             }}
           />
         )}
+        </PageErrorBoundary>
       </main>
     </div>
   );
@@ -802,6 +861,159 @@ function AuthGate({
           清除
         </button>
       </div>
+    </section>
+  );
+}
+
+function AgentConsoleView({
+  consoleMessages,
+  input,
+  setInput,
+  sendMessage,
+  busy,
+  selectedConversation,
+  clearConversationContext,
+  detail,
+  tasks,
+  selectedTaskId,
+  setSelectedTaskId,
+  events,
+  liveEvents,
+  refreshTasks,
+}: {
+  consoleMessages: ConsoleMessage[];
+  input: string;
+  setInput: (value: string) => void;
+  sendMessage: () => void;
+  busy: boolean;
+  selectedConversation?: Conversation;
+  clearConversationContext: () => void;
+  detail: AgentTaskDetail | null;
+  tasks: AgentTask[];
+  selectedTaskId: string;
+  setSelectedTaskId: (value: string) => void;
+  events: AgentEvent[];
+  liveEvents: UiEvent[];
+  refreshTasks: () => Promise<void>;
+}) {
+  const currentTask = detail?.task;
+  const taskStatus = currentTask?.status ?? (busy ? "running" : "idle");
+  const toolCount = detail?.tool_calls?.length ?? 0;
+  const timelineCount = detail?.timeline?.length ?? 0;
+  const recentEvents = events.filter((event) => !currentTask || event.task_id === taskIdOf(currentTask)).slice(0, 8);
+
+  return (
+    <section className="hermes-workspace">
+      <aside className="panel hermes-session-pane">
+        <div className="hermes-pane-head">
+          <div>
+            <span>最近运行</span>
+            <small>{tasks.length} 个 Agent 任务</small>
+          </div>
+          <button className="icon-button" onClick={() => void refreshTasks()} title="刷新任务">
+            <RefreshCw size={15} />
+          </button>
+        </div>
+        <div className="hermes-session-scroll">
+          <button
+            className={`hermes-session-card hermes-session-card--new ${!selectedTaskId ? "hermes-session-card--active" : ""}`}
+            onClick={() => setSelectedTaskId("")}
+          >
+            <div className="hermes-session-card__head">
+              <span>新任务</span>
+              <Sparkles size={15} />
+            </div>
+            <p>从页面直接发给 Hermes Agent，结果会绑定到新的任务轨迹。</p>
+          </button>
+          {tasks.map((task) => {
+            const taskId = taskIdOf(task);
+            return (
+              <button
+                key={taskId}
+                className={`hermes-session-card ${selectedTaskId === taskId ? "hermes-session-card--active" : ""}`}
+                onClick={() => setSelectedTaskId(taskId)}
+              >
+                <div className="hermes-session-card__head">
+                  <span>{shortId(taskId)}</span>
+                  <StatusPill label={task.status} tone={taskTone(task.status)} />
+                </div>
+                <p>{task.input || task.output || task.result || "-"}</p>
+                <small>{formatDate(task.created_at)}</small>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      <main className="panel hermes-chat-pane">
+        <header className="hermes-chat-header">
+          <div className="hermes-avatar">
+            <Bot size={19} />
+          </div>
+          <div className="hermes-chat-title">
+            <strong>Hermes Agent</strong>
+            <span>
+              {selectedConversation
+                ? `${selectedConversation.platform}/${selectedConversation.adapter}/${selectedConversation.scope}`
+                : "控制台会话，不自动回发通道"}
+            </span>
+          </div>
+          <div className="hermes-chat-header__meta">
+            <StatusPill label={taskStatus} tone={taskTone(taskStatus)} />
+            <span>{toolCount} tools</span>
+            <span>{timelineCount} events</span>
+          </div>
+        </header>
+
+        {selectedConversation ? (
+          <div className="hermes-context-bar">
+            <div>
+              已带入通道上下文：{selectedConversation.raw_id}
+            </div>
+            <button className="ghost-button" onClick={clearConversationContext}>
+              取消上下文
+            </button>
+          </div>
+        ) : null}
+
+        <div className="hermes-message-scroll">
+          {consoleMessages.length === 0 ? (
+            <div className="hermes-welcome">
+              <div className="hermes-welcome__mark">
+                <Sparkles size={26} />
+              </div>
+              <h2>和 Agent 直接对话</h2>
+              <p>页面只负责把消息交给内嵌 Hermes；工具调用、产物和失败修复会在右侧独立显示。</p>
+            </div>
+          ) : (
+            consoleMessages.map((message) => <HermesMessageBubble key={message.id} message={message} />)
+          )}
+        </div>
+
+        <footer className="hermes-composer">
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder="输入任务或问题，Ctrl/Cmd + Enter 发送"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                void sendMessage();
+              }
+            }}
+          />
+          <div className="hermes-composer__actions">
+            <span>{selectedConversation ? "带通道上下文" : "仅控制台"}</span>
+            <button className="primary-button" disabled={busy || !input.trim()} onClick={() => void sendMessage()}>
+              <Send size={16} />
+              {busy ? "执行中" : "发送"}
+            </button>
+          </div>
+        </footer>
+      </main>
+
+      <aside className="panel hermes-tool-pane">
+        <ToolTracePanel detail={detail} recentEvents={recentEvents} liveEvents={liveEvents} refresh={refreshTasks} />
+      </aside>
     </section>
   );
 }
@@ -911,6 +1123,22 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
+function HermesMessageBubble({ message }: { message: ConsoleMessage }) {
+  const isAssistant = message.role === "assistant";
+  return (
+    <article className={`hermes-message ${isAssistant ? "hermes-message--assistant" : "hermes-message--user"}`}>
+      <div className="hermes-message__avatar">{isAssistant ? <Bot size={16} /> : "你"}</div>
+      <div className="hermes-message__main">
+        <div className="hermes-message__meta">
+          <span>{isAssistant ? "Agent" : "你"}</span>
+          <small>{formatDate(message.created_at)}</small>
+        </div>
+        <div className="hermes-message__body">{message.content}</div>
+      </div>
+    </article>
+  );
+}
+
 function ConsoleMessageBubble({ message }: { message: ConsoleMessage }) {
   return (
     <article className={`message ${message.role === "assistant" ? "message--agent" : "message--user"}`}>
@@ -920,6 +1148,158 @@ function ConsoleMessageBubble({ message }: { message: ConsoleMessage }) {
       </div>
       <div className="message__body">{message.content}</div>
     </article>
+  );
+}
+
+function ToolTracePanel({
+  detail,
+  recentEvents,
+  liveEvents,
+  refresh,
+}: {
+  detail: AgentTaskDetail | null;
+  recentEvents: AgentEvent[];
+  liveEvents: UiEvent[];
+  refresh: () => Promise<void>;
+}) {
+  const task = detail?.task;
+  const taskId = task ? taskIdOf(task) : "";
+  const toolCalls = detail?.tool_calls ?? [];
+  const repairs = detail?.repairs ?? [];
+  const artifacts = detail?.artifacts ?? [];
+  const timeline = detail?.timeline ?? [];
+
+  return (
+    <>
+      <div className="hermes-tool-header">
+        <div>
+          <span>工具与轨迹</span>
+          <small>{taskId ? shortId(taskId) : "等待任务"}</small>
+        </div>
+        <button className="icon-button" onClick={() => void refresh()} title="刷新轨迹">
+          <RefreshCw size={15} />
+        </button>
+      </div>
+
+      {!detail ? (
+        <div className="hermes-tool-empty">
+          <Wrench size={28} />
+          <strong>暂无任务轨迹</strong>
+          <p>发送消息或从左侧选择任务后，工具调用会在这里单独显示。</p>
+        </div>
+      ) : (
+        <div className="hermes-tool-scroll">
+          <section className="hermes-task-card">
+            <div className="hermes-task-card__top">
+              <div>
+                <strong>{shortId(taskId)}</strong>
+                <span>{task?.source}</span>
+              </div>
+              <StatusPill label={task?.status || "unknown"} tone={taskTone(task?.status || "")} />
+            </div>
+            {task?.output ? <p>{task.output}</p> : <p className="muted">Agent 还没有返回最终文本。</p>}
+            <div className="hermes-task-card__stats">
+              <span>{toolCalls.length} 工具</span>
+              <span>{timeline.length} 事件</span>
+              <span>{repairs.length} 修复</span>
+            </div>
+          </section>
+
+          <section className="hermes-tool-section">
+            <div className="hermes-tool-section__title">
+              <Wrench size={15} />
+              <span>工具调用</span>
+            </div>
+            {toolCalls.length === 0 ? (
+              <div className="hermes-mini-empty">本任务没有工具调用。</div>
+            ) : (
+              toolCalls.map((call, index) => {
+                const status = toolCallStatus(call);
+                const content = eventContent(call);
+                return (
+                  <details
+                    key={`${toolCallName(call)}-${index}`}
+                    className={`hermes-tool-call hermes-tool-call--${status}`}
+                    open={index === toolCalls.length - 1 || status === "failed"}
+                  >
+                    <summary>
+                      <div>
+                        <ChevronRight size={14} />
+                        <span>{toolCallName(call)}</span>
+                      </div>
+                      <StatusPill label={status} tone={taskTone(status)} />
+                    </summary>
+                    <div className="hermes-tool-call__body">
+                      <div className="hermes-tool-meta">
+                        <span>开始 {formatDate(call.started_at ?? eventTimestamp(call))}</span>
+                        <span>结束 {formatDate(call.finished_at)}</span>
+                      </div>
+                      {toolCallError(call) ? <div className="tool-error">{toolCallError(call)}</div> : null}
+                      <label>输入</label>
+                      <pre>{stringify(call.input ?? content?.input ?? content?.payload ?? content?.arguments ?? {})}</pre>
+                      <label>输出</label>
+                      <pre>{stringify(call.output ?? call.fallback ?? content?.output ?? content?.result ?? content ?? {})}</pre>
+                    </div>
+                  </details>
+                );
+              })
+            )}
+          </section>
+
+          {artifacts.length > 0 ? (
+            <section className="hermes-tool-section">
+              <div className="hermes-tool-section__title">
+                <FileText size={15} />
+                <span>产物</span>
+              </div>
+              {artifacts.map((artifact) => (
+                <article key={artifact.id} className="hermes-artifact">
+                  <strong>{artifact.kind}</strong>
+                  <p>{artifact.summary || artifact.path}</p>
+                  <small>{formatDate(artifact.created_at)}</small>
+                </article>
+              ))}
+            </section>
+          ) : null}
+
+          {repairs.length > 0 ? (
+            <section className="hermes-tool-section">
+              <div className="hermes-tool-section__title">
+                <RotateCcw size={15} />
+                <span>自动修复</span>
+              </div>
+              {repairs.map((repair, index) => (
+                <article key={`${repair.tool}-${index}`} className="hermes-repair">
+                  <strong>{repair.tool || repair.error_type || "repair"}</strong>
+                  <p>{repair.guidance || repair.error}</p>
+                </article>
+              ))}
+            </section>
+          ) : null}
+
+          <section className="hermes-tool-section">
+            <div className="hermes-tool-section__title">
+              <Activity size={15} />
+              <span>实时事件</span>
+            </div>
+            {[...recentEvents, ...liveEvents.map((event) => ({
+              task_id: event.id,
+              type: event.type,
+              content: event.data,
+              created_at: event.created_at,
+            } satisfies AgentEvent))].slice(0, 10).map((event, index) => (
+              <details key={`${event.task_id}-${event.type}-${index}`} className="hermes-event-line">
+                <summary>
+                  <span>{event.type}</span>
+                  <small>{formatDate(event.created_at)}</small>
+                </summary>
+                <pre>{stringify(event.content)}</pre>
+              </details>
+            ))}
+          </section>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1457,16 +1837,16 @@ function TaskMonitor({
           ) : (
             tasks.map((task) => (
               <button
-                key={task.task_id}
-                className={`task-list-item ${selectedTaskId === task.task_id ? "task-list-item--active" : ""}`}
-                onClick={() => setSelectedTaskId(task.task_id)}
+                key={taskIdOf(task)}
+                className={`task-list-item ${selectedTaskId === taskIdOf(task) ? "task-list-item--active" : ""}`}
+                onClick={() => setSelectedTaskId(taskIdOf(task))}
               >
                 <div className="task-list-item__head">
-                  <strong>{shortId(task.task_id)}</strong>
+                  <strong>{shortId(taskIdOf(task))}</strong>
                   <StatusPill label={task.status} tone={taskTone(task.status)} />
                 </div>
                 <span>{task.source}</span>
-                <p>{task.input || task.output || "-"}</p>
+                <p>{task.input || task.output || task.result || "-"}</p>
                 <small>{formatDate(task.created_at)}</small>
               </button>
             ))
@@ -1475,125 +1855,151 @@ function TaskMonitor({
       </div>
 
       <div className="panel task-detail-panel">
-        {!detail ? (
-          <EmptyState title="未选择任务" text="选择左侧任务后，这里会展示工具调用、时间线和失败修复建议。" />
-        ) : (
-          <>
-            <div className="panel-title task-detail-title">
-              <div>
-                <span>{shortId(detail.task.task_id)}</span>
-                <small>{detail.task.source}</small>
-              </div>
-              <div className="row-actions">
-                <StatusPill label={detail.task.status} tone={taskTone(detail.task.status)} />
-                <button
-                  className="ghost-button"
-                  onClick={async () => {
-                    await api.resumeAgentTask(detail.task.task_id);
-                    await refresh();
-                  }}
-                >
-                  <Play size={14} />
-                  继续
-                </button>
-              </div>
-            </div>
-            <div className="task-summary-grid">
-              <Metric label="事件" value={String(detail.summary.event_count ?? 0)} />
-              <Metric label="工具调用" value={String(detail.summary.tool_started ?? 0)} />
-              <Metric label="失败" value={String(detail.summary.tool_failed ?? 0)} />
-              <Metric label="LLM 轮次" value={String(detail.summary.llm_iterations ?? 0)} />
-            </div>
-            <div className="task-detail-scroll">
-              <section className="task-section">
-                <h3>工具流</h3>
-                {detail.tool_calls.length === 0 ? (
-                  <p className="muted">这个任务没有工具调用。</p>
-                ) : (
-                  detail.tool_calls.map((call, index) => (
-                    <details key={`${call.tool}-${index}`} className={`tool-call-card tool-call-card--${call.status}`} open={index === detail.tool_calls.length - 1}>
-                      <summary>
-                        <span>{call.tool}</span>
-                        <StatusPill label={call.status} tone={taskTone(call.status)} />
-                      </summary>
-                      <div className="tool-call-card__body">
-                        <KeyValue label="开始" value={formatDate(call.started_at)} />
-                        <KeyValue label="结束" value={formatDate(call.finished_at)} />
-                        {call.error ? <div className="tool-error">{call.error}</div> : null}
-                        <div className="tool-json-grid">
-                          <pre>{stringify(call.input ?? {})}</pre>
-                          <pre>{stringify(call.output ?? call.fallback ?? {})}</pre>
-                        </div>
-                      </div>
-                    </details>
-                  ))
-                )}
-              </section>
-
-              {detail.repairs.length > 0 ? (
-                <section className="task-section">
-                  <h3>失败修复建议</h3>
-                  <div className="repair-list">
-                    {detail.repairs.map((repair, index) => (
-                      <article key={`${repair.tool}-${index}`} className="repair-card">
-                        <div className="repair-card__head">
-                          <strong>{repair.tool || "-"}</strong>
-                          <StatusPill label={repair.error_type || "failed"} tone="warn" />
-                        </div>
-                        <p>{repair.guidance || repair.error}</p>
-                        {repair.repair_steps?.length ? (
-                          <ol>
-                            {repair.repair_steps.map((step) => (
-                              <li key={step}>{step}</li>
-                            ))}
-                          </ol>
-                        ) : null}
-                        {repair.suggested_tool ? (
-                          <pre>{stringify({ tool: repair.suggested_tool, payload: repair.suggested_payload })}</pre>
-                        ) : null}
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-
-              {detail.artifacts.length > 0 ? (
-                <section className="task-section">
-                  <h3>产物</h3>
-                  <div className="repair-list">
-                    {detail.artifacts.map((artifact) => (
-                      <article key={artifact.id} className="repair-card">
-                        <div className="repair-card__head">
-                          <strong>{artifact.kind}</strong>
-                          <small>{formatDate(artifact.created_at)}</small>
-                        </div>
-                        <p>{artifact.summary || artifact.path}</p>
-                        <pre>{stringify({ path: artifact.path, hash: artifact.content_hash, metadata: artifact.metadata })}</pre>
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-
-              <section className="task-section">
-                <h3>时间线</h3>
-                <div className="timeline-list">
-                  {detail.timeline.map((item, index) => (
-                    <details key={`${item.type}-${index}`} className="timeline-item">
-                      <summary>
-                        <span>{item.title}</span>
-                        <small>{formatDate(item.created_at)}</small>
-                      </summary>
-                      <pre>{stringify(item.content)}</pre>
-                    </details>
-                  ))}
-                </div>
-              </section>
-            </div>
-          </>
-        )}
+        <TaskDetailContent detail={detail} refresh={refresh} />
       </div>
     </section>
+  );
+}
+
+function TaskDetailContent({ detail, refresh }: { detail: AgentTaskDetail | null; refresh: () => Promise<void> }) {
+  if (!detail) {
+    return <EmptyState title="未选择任务" text="选择任务后，这里会展示对话结果、工具调用、时间线和失败修复建议。" />;
+  }
+  const timeline = Array.isArray(detail.timeline) ? detail.timeline : [];
+  const toolCalls = Array.isArray(detail.tool_calls) ? detail.tool_calls : [];
+  const repairs = Array.isArray(detail.repairs) ? detail.repairs : [];
+  const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
+  const summary = detail.summary ?? {};
+  const task = detail.task;
+  const taskId = taskIdOf(task);
+  const toolFailed = summary.tool_failed ?? toolCalls.filter((call) => toolCallStatus(call) === "failed").length;
+  const llmIterations = summary.llm_iterations ?? timeline.filter((item) => String(item.type ?? "").startsWith("llm.")).length;
+
+  return (
+    <>
+      <div className="panel-title task-detail-title">
+        <div>
+          <span>{shortId(taskId)}</span>
+          <small>{task.source}</small>
+        </div>
+        <div className="row-actions">
+          <StatusPill label={task.status || "unknown"} tone={taskTone(task.status)} />
+          <button
+            className="ghost-button"
+            onClick={async () => {
+              await api.resumeAgentTask(taskId);
+              await refresh();
+            }}
+          >
+            <Play size={14} />
+            继续
+          </button>
+        </div>
+      </div>
+      <div className="task-summary-grid">
+        <Metric label="事件" value={String(summary.event_count ?? timeline.length)} />
+        <Metric label="工具调用" value={String(summary.tool_started ?? toolCalls.length)} />
+        <Metric label="失败" value={String(toolFailed)} />
+        <Metric label="LLM 轮次" value={String(llmIterations)} />
+      </div>
+      <div className="task-detail-scroll">
+        {task.output ? (
+          <section className="task-section">
+            <h3>Agent 回复</h3>
+            <div className="assistant-output">{task.output}</div>
+          </section>
+        ) : null}
+
+        <section className="task-section">
+          <h3>工具流</h3>
+          {toolCalls.length === 0 ? (
+            <p className="muted">这个任务没有工具调用。</p>
+          ) : (
+            toolCalls.map((call, index) => {
+              const status = toolCallStatus(call);
+              const content = eventContent(call);
+              return (
+                <details key={`${toolCallName(call)}-${index}`} className={`tool-call-card tool-call-card--${status}`} open={index === toolCalls.length - 1 || status === "failed"}>
+                  <summary>
+                    <span>{toolCallName(call)}</span>
+                    <StatusPill label={status} tone={taskTone(status)} />
+                  </summary>
+                  <div className="tool-call-card__body">
+                    <KeyValue label="开始" value={formatDate(call.started_at ?? eventTimestamp(call))} />
+                    <KeyValue label="结束" value={formatDate(call.finished_at)} />
+                    {toolCallError(call) ? <div className="tool-error">{toolCallError(call)}</div> : null}
+                    <div className="tool-json-grid">
+                      <pre>{stringify(call.input ?? content?.input ?? content?.payload ?? content?.arguments ?? {})}</pre>
+                      <pre>{stringify(call.output ?? call.fallback ?? content?.output ?? content?.result ?? content ?? {})}</pre>
+                    </div>
+                  </div>
+                </details>
+              );
+            })
+          )}
+        </section>
+
+        {repairs.length > 0 ? (
+          <section className="task-section">
+            <h3>失败修复建议</h3>
+            <div className="repair-list">
+              {repairs.map((repair, index) => (
+                <article key={`${repair.tool}-${index}`} className="repair-card">
+                  <div className="repair-card__head">
+                    <strong>{repair.tool || "-"}</strong>
+                    <StatusPill label={repair.error_type || "failed"} tone="warn" />
+                  </div>
+                  <p>{repair.guidance || repair.error}</p>
+                  {repair.repair_steps?.length ? (
+                    <ol>
+                      {repair.repair_steps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ol>
+                  ) : null}
+                  {repair.suggested_tool ? (
+                    <pre>{stringify({ tool: repair.suggested_tool, payload: repair.suggested_payload })}</pre>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {artifacts.length > 0 ? (
+          <section className="task-section">
+            <h3>产物</h3>
+            <div className="repair-list">
+              {artifacts.map((artifact) => (
+                <article key={artifact.id} className="repair-card">
+                  <div className="repair-card__head">
+                    <strong>{artifact.kind}</strong>
+                    <small>{formatDate(artifact.created_at)}</small>
+                  </div>
+                  <p>{artifact.summary || artifact.path}</p>
+                  <pre>{stringify({ path: artifact.path, hash: artifact.content_hash, metadata: artifact.metadata })}</pre>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        <section className="task-section">
+          <h3>时间线</h3>
+          <div className="timeline-list">
+            {timeline.map((item, index) => (
+              <details key={`${item.type}-${index}`} className="timeline-item">
+                <summary>
+                  <span>{item.title || item.type || "event"}</span>
+                  <small>{formatDate(item.created_at)}</small>
+                </summary>
+                <pre>{stringify(item.content)}</pre>
+              </details>
+            ))}
+          </div>
+        </section>
+      </div>
+    </>
   );
 }
 
@@ -1943,6 +2349,13 @@ function formatDate(value?: string | null): string {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+function makeClientId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function stringify(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value, null, 2);
@@ -1952,8 +2365,85 @@ function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 8)}...` : value;
 }
 
+function taskIdOf(task: Pick<AgentTask, "task_id" | "id">): string {
+  return task.task_id || task.id || "";
+}
+
 function taskTone(status: string): "ok" | "warn" | "neutral" {
   if (["completed", "success"].includes(status)) return "ok";
-  if (["running", "pending"].includes(status)) return "warn";
+  if (["running", "pending", "started"].includes(status)) return "warn";
   return "neutral";
+}
+
+function eventContent(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  const maybeContent = (value as { content?: unknown }).content;
+  if (maybeContent && typeof maybeContent === "object") return maybeContent as Record<string, unknown>;
+  return value as Record<string, unknown>;
+}
+
+function toolCallName(call: AgentTaskToolCall | AgentTaskTimelineItem): string {
+  const content = eventContent(call);
+  const direct = "tool" in call ? call.tool : undefined;
+  const type = "type" in call ? call.type : undefined;
+  return String(direct || content?.tool || content?.name || type || "tool");
+}
+
+function toolCallStatus(call: AgentTaskToolCall | AgentTaskTimelineItem): string {
+  const content = eventContent(call);
+  const type = String(("type" in call ? call.type : "") || "");
+  const status = "status" in call ? call.status : undefined;
+  if (status) return String(status);
+  if (content?.status) return String(content.status);
+  if (type.includes("failed") || type.includes("error")) return "failed";
+  if (type.includes("completed") || type.includes("finished")) return "completed";
+  if (type.includes("started")) return "started";
+  return "event";
+}
+
+function toolCallError(call: AgentTaskToolCall | AgentTaskTimelineItem): string {
+  const content = eventContent(call);
+  const direct = "error" in call ? call.error : undefined;
+  return String(direct || content?.error || content?.message || "");
+}
+
+function eventTimestamp(call: AgentTaskToolCall | AgentTaskTimelineItem): string | null {
+  return "created_at" in call ? call.created_at : null;
+}
+
+type PageErrorBoundaryProps = {
+  resetKey: string;
+  children: ReactNode;
+};
+
+type PageErrorBoundaryState = {
+  error: string;
+  resetKey: string;
+};
+
+class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErrorBoundaryState> {
+  state: PageErrorBoundaryState = { error: "", resetKey: this.props.resetKey };
+
+  static getDerivedStateFromError(error: unknown): Partial<PageErrorBoundaryState> {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  static getDerivedStateFromProps(props: PageErrorBoundaryProps, state: PageErrorBoundaryState): Partial<PageErrorBoundaryState> | null {
+    if (props.resetKey !== state.resetKey) {
+      return { error: "", resetKey: props.resetKey };
+    }
+    return null;
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="panel page-error">
+          <div className="panel-title">页面渲染失败</div>
+          <p>{this.state.error}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
