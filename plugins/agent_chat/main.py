@@ -310,8 +310,10 @@ class AgentChatPlugin(PluginBase):
             "For private chat, reply_target_wxid equals private_wxid.\n"
             "For group chat, reply_target_wxid equals group_wxid, and group_member_wxid is the sender in the group.\n"
             "Do not ask the user for wxid/chatroom id when these fields are already present.\n"
-            "Tool permission profiles: admin can use the full Hermes toolset; member can use tools only inside the configured member workspace roots and must not inspect unrelated local files, scan LAN/private network targets, access localhost/internal IPs, manage processes, create cron jobs, delegate tasks, execute arbitrary Python, or send proactive messages; guest must not call tools. "
-            "If a member task needs files, keep all reads/writes under the authorized workspace roots. If a request needs broader host/network access, explain that it requires an 869 administrator.\n"
+            "Tool permission profiles: admin can use the full Hermes toolset; member can use public web search/extraction and can use file/terminal tools only inside the configured member workspace roots; guest must not call tools. "
+            "For member requests about recent news, current events, public websites, public documentation, or public package/project information, use web_search/web_extract normally. "
+            "Members must not inspect unrelated local files, scan LAN/private network targets, access localhost/internal IPs/private IPs/.local hosts, manage processes, create cron jobs, delegate tasks, execute arbitrary Python, or send proactive messages. "
+            "If a member task needs files, keep all reads/writes under the authorized workspace roots. If a request needs local host access, private network access, LAN discovery, or broader filesystem access, explain that it requires an 869 administrator.\n"
             "If the content asks about real project files, directories, plugins, skills, config, or runtime state, use tools before answering.\n"
             "Reply to the user in Chinese unless the user clearly asks for another language."
         )

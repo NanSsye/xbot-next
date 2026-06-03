@@ -405,7 +405,8 @@ async def test_agent_chat_plugin_marks_non_admin_wechat869_as_member():
         agent_input, source = fake_agent.inputs[-1]
         assert source == "channel:wechat:wechat869:group-1@chatroom:member"
         assert "tool_permission: member" in agent_input
-        assert "member can use tools only inside" in agent_input
+        assert "member can use public web search/extraction" in agent_input
+        assert "use web_search/web_extract normally" in agent_input
     finally:
         await ctx.engine.stop()
         await ctx.storage.close()
