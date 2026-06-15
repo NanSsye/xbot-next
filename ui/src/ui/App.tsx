@@ -100,6 +100,7 @@ export function App() {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [selectedAgentSessionSource, setSelectedAgentSessionSource] = useState("terminal:control-ui");
   const [selectedTaskDetail, setSelectedTaskDetail] = useState<AgentTaskDetail | null>(null);
   const [tools, setTools] = useState<AgentToolInfo[]>([]);
   const [llmStatus, setLlmStatus] = useState<Record<string, unknown> | null>(null);
@@ -127,7 +128,8 @@ export function App() {
 
   const selectedConversation = conversations.find((item) => item.id === selectedConversationId);
   const consoleContextKey = selectedConversationId || "control-ui";
-  const consoleMessages = consoleMessagesByContext[consoleContextKey] ?? [];
+  const directConsoleMessages = consoleMessagesByContext[agentConsoleContextKey(selectedAgentSessionSource)] ?? [];
+  const channelConsoleMessages = consoleMessagesByContext[consoleContextKey] ?? [];
   const filteredConversations = useMemo(() => {
     const text = query.trim().toLowerCase();
     if (!text) return conversations;
@@ -195,9 +197,6 @@ export function App() {
       setScheduledJobs(nextSchedules);
       if (!selectedConversationId && nextConversations.length > 0) {
         setSelectedConversationId(nextConversations[0].id);
-      }
-      if (!selectedTaskId && nextTasks.length > 0) {
-        setSelectedTaskId(taskIdOf(nextTasks[0]));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -295,7 +294,11 @@ export function App() {
     setBusy(true);
     setInput("");
     setError("");
-    const contextKey = selectedConversationId || "control-ui";
+    const isDirectAgentChat = view === "agentChat";
+    const directSource = selectedAgentSessionSource || "terminal:control-ui";
+    const contextKey = isDirectAgentChat ? agentConsoleContextKey(directSource) : selectedConversationId || "control-ui";
+    const previousConsoleMessages = consoleMessagesByContext[contextKey] ?? [];
+    if (isDirectAgentChat) setSelectedAgentSessionSource(directSource);
     const userMessage: ConsoleMessage = {
       id: makeClientId(),
       role: "user",
@@ -312,7 +315,9 @@ export function App() {
       ...current,
       [contextKey]: [...(current[contextKey] ?? []), userMessage, pendingMessage],
     }));
-    const contextBlock = selectedConversation
+    const contextBlock = isDirectAgentChat
+      ? text
+      : selectedConversation
       ? [
           "Control UI console message.",
           "Use the selected channel conversation only as context.",
@@ -331,8 +336,9 @@ export function App() {
         ].join("\n")
       : text;
     try {
-      const result = await api.sendAgentTask(contextBlock, "terminal:control-ui");
+      const result = await api.sendAgentTask(contextBlock, isDirectAgentChat ? directSource : "terminal:control-ui");
       setSelectedTaskId(result.task_id);
+      if (isDirectAgentChat) setSelectedAgentSessionSource(result.source || directSource);
       const assistantMessage: ConsoleMessage = {
         id: pendingMessage.id,
         role: "assistant",
@@ -355,6 +361,7 @@ export function App() {
         ...current,
       ]);
       api.agentTaskDetail(result.task_id).then(setSelectedTaskDetail).catch(() => undefined);
+      api.agentTasks(80).then(setAgentTasks).catch(() => undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -668,16 +675,18 @@ export function App() {
         <PageErrorBoundary resetKey={view}>
         {view === "agentChat" && (
           <AgentConsoleView
-            consoleMessages={consoleMessages}
+            consoleMessages={directConsoleMessages}
             input={input}
             setInput={setInput}
             sendMessage={sendMessage}
             busy={busy}
-            selectedConversation={selectedConversation}
-            clearConversationContext={() => setSelectedConversationId("")}
+            selectedConversation={undefined}
+            clearConversationContext={() => undefined}
             detail={selectedTaskDetail}
             tasks={agentTasks}
             selectedTaskId={selectedTaskId}
+            selectedAgentSessionSource={selectedAgentSessionSource}
+            setSelectedAgentSessionSource={setSelectedAgentSessionSource}
             setSelectedTaskId={setSelectedTaskId}
             events={events}
             liveEvents={liveEvents}
@@ -697,7 +706,7 @@ export function App() {
             setSelectedConversationId={setSelectedConversationId}
             deleteConversation={deleteConversation}
             messages={messages}
-            consoleMessages={consoleMessages}
+            consoleMessages={channelConsoleMessages}
             input={input}
             setInput={setInput}
             sendMessage={sendMessage}
@@ -865,6 +874,7 @@ function AuthGate({
   );
 }
 
+
 function AgentConsoleView({
   consoleMessages,
   input,
@@ -876,6 +886,8 @@ function AgentConsoleView({
   detail,
   tasks,
   selectedTaskId,
+  selectedAgentSessionSource,
+  setSelectedAgentSessionSource,
   setSelectedTaskId,
   events,
   liveEvents,
@@ -891,54 +903,58 @@ function AgentConsoleView({
   detail: AgentTaskDetail | null;
   tasks: AgentTask[];
   selectedTaskId: string;
+  selectedAgentSessionSource: string;
+  setSelectedAgentSessionSource: (value: string) => void;
   setSelectedTaskId: (value: string) => void;
   events: AgentEvent[];
   liveEvents: UiEvent[];
   refreshTasks: () => Promise<void>;
 }) {
   const currentTask = detail?.task;
-  const taskStatus = currentTask?.status ?? (busy ? "running" : "idle");
+  const sessionSources = agentSessionSources(tasks);
+  const activeSessionSource = selectedAgentSessionSource || "terminal:control-ui";
+  const sessionTasks = tasks
+    .filter((task) => (task.source || "terminal:control-ui") === activeSessionSource)
+    .slice()
+    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  const latestSessionTask = sessionTasks[sessionTasks.length - 1];
+  const taskStatus = latestSessionTask?.status ?? currentTask?.status ?? (busy ? "running" : "idle");
   const toolCount = detail?.tool_calls?.length ?? 0;
   const timelineCount = detail?.timeline?.length ?? 0;
   const recentEvents = events.filter((event) => !currentTask || event.task_id === taskIdOf(currentTask)).slice(0, 8);
+  const transcriptTurns = buildSessionTranscriptTurns(sessionTasks, detail, consoleMessages);
 
   return (
     <section className="hermes-workspace">
       <aside className="panel hermes-session-pane">
         <div className="hermes-pane-head">
           <div>
-            <span>最近运行</span>
-            <small>{tasks.length} 个 Agent 任务</small>
+            <span>会话</span>
+            <small>{sessionSources.length} 个 Agent 会话</small>
           </div>
           <button className="icon-button" onClick={() => void refreshTasks()} title="刷新任务">
             <RefreshCw size={15} />
           </button>
         </div>
         <div className="hermes-session-scroll">
-          <button
-            className={`hermes-session-card hermes-session-card--new ${!selectedTaskId ? "hermes-session-card--active" : ""}`}
-            onClick={() => setSelectedTaskId("")}
-          >
-            <div className="hermes-session-card__head">
-              <span>新任务</span>
-              <Sparkles size={15} />
-            </div>
-            <p>从页面直接发给 Hermes Agent，结果会绑定到新的任务轨迹。</p>
-          </button>
-          {tasks.map((task) => {
-            const taskId = taskIdOf(task);
+          {sessionSources.map((source) => {
+            const sourceTasks = tasks.filter((task) => (task.source || "terminal:control-ui") === source);
+            const latest = sourceTasks[0];
             return (
               <button
-                key={taskId}
-                className={`hermes-session-card ${selectedTaskId === taskId ? "hermes-session-card--active" : ""}`}
-                onClick={() => setSelectedTaskId(taskId)}
+                key={source}
+                className={`hermes-session-card ${activeSessionSource === source ? "hermes-session-card--active" : ""}`}
+                onClick={() => {
+                  setSelectedAgentSessionSource(source);
+                  setSelectedTaskId(latest ? taskIdOf(latest) : "");
+                }}
               >
                 <div className="hermes-session-card__head">
-                  <span>{shortId(taskId)}</span>
-                  <StatusPill label={task.status} tone={taskTone(task.status)} />
+                  <span>{sessionLabel(source)}</span>
+                  <StatusPill label={`${sourceTasks.length} 轮`} tone="neutral" />
                 </div>
-                <p>{task.input || task.output || task.result || "-"}</p>
-                <small>{formatDate(task.created_at)}</small>
+                <p>{latest?.input || latest?.output || latest?.result || "独立 Agent 对话"}</p>
+                <small>{source}</small>
               </button>
             );
           })}
@@ -955,13 +971,13 @@ function AgentConsoleView({
             <span>
               {selectedConversation
                 ? `${selectedConversation.platform}/${selectedConversation.adapter}/${selectedConversation.scope}`
-                : "控制台会话，不自动回发通道"}
+                : `${sessionLabel(activeSessionSource)} · 直接对话`}
             </span>
           </div>
           <div className="hermes-chat-header__meta">
             <StatusPill label={taskStatus} tone={taskTone(taskStatus)} />
-            <span>{toolCount} tools</span>
-            <span>{timelineCount} events</span>
+            <span>{toolCount} 工具</span>
+            <span>{timelineCount} 轨迹</span>
           </div>
         </header>
 
@@ -977,16 +993,24 @@ function AgentConsoleView({
         ) : null}
 
         <div className="hermes-message-scroll">
-          {consoleMessages.length === 0 ? (
+          {transcriptTurns.length === 0 ? (
             <div className="hermes-welcome">
               <div className="hermes-welcome__mark">
                 <Sparkles size={26} />
               </div>
               <h2>和 Agent 直接对话</h2>
-              <p>页面只负责把消息交给内嵌 Hermes；工具调用、产物和失败修复会在右侧独立显示。</p>
+              <p>像终端一样直接发给 Agent；工具调用、产物和轨迹会嵌在对话流里。</p>
             </div>
           ) : (
-            consoleMessages.map((message) => <HermesMessageBubble key={message.id} message={message} />)
+            <>
+              {transcriptTurns.map((turn) => (
+                <section key={turn.id} className="hermes-turn">
+                  <HermesMessageBubble message={turn.user} />
+                  <HermesInlineTrace detail={turn.detail} recentEvents={turn.recentEvents ?? []} liveEvents={turn.liveEvents ?? []} />
+                  {turn.assistant ? <HermesMessageBubble message={turn.assistant} /> : null}
+                </section>
+              ))}
+            </>
           )}
         </div>
 
@@ -1002,7 +1026,7 @@ function AgentConsoleView({
             }}
           />
           <div className="hermes-composer__actions">
-            <span>{selectedConversation ? "带通道上下文" : "仅控制台"}</span>
+            <span>{selectedConversation ? "仅引用通道上下文，不回发" : `当前会话 · ${activeSessionSource}`}</span>
             <button className="primary-button" disabled={busy || !input.trim()} onClick={() => void sendMessage()}>
               <Send size={16} />
               {busy ? "执行中" : "发送"}
@@ -1010,10 +1034,6 @@ function AgentConsoleView({
           </div>
         </footer>
       </main>
-
-      <aside className="panel hermes-tool-pane">
-        <ToolTracePanel detail={detail} recentEvents={recentEvents} liveEvents={liveEvents} refresh={refreshTasks} />
-      </aside>
     </section>
   );
 }
@@ -1133,10 +1153,267 @@ function HermesMessageBubble({ message }: { message: ConsoleMessage }) {
           <span>{isAssistant ? "Agent" : "你"}</span>
           <small>{formatDate(message.created_at)}</small>
         </div>
-        <div className="hermes-message__body">{message.content}</div>
+        <div className="hermes-message__body chat-text">{renderChatContent(message.content)}</div>
       </div>
     </article>
   );
+}
+
+
+
+
+type HermesTranscriptTurn = {
+  id: string;
+  user: ConsoleMessage;
+  assistant?: ConsoleMessage;
+  detail: AgentTaskDetail | null;
+  recentEvents?: AgentEvent[];
+  liveEvents?: UiEvent[];
+};
+
+function buildSessionTranscriptTurns(
+  tasks: AgentTask[],
+  selectedDetail: AgentTaskDetail | null,
+  liveMessages: ConsoleMessage[],
+): HermesTranscriptTurn[] {
+  const turns: HermesTranscriptTurn[] = tasks.map((task) => {
+    const taskId = taskIdOf(task);
+    const detail = selectedDetail?.task && taskIdOf(selectedDetail.task) === taskId ? selectedDetail : taskDetailFromTask(task);
+    const output = task.output || task.result || "";
+    return {
+      id: taskId,
+      user: { id: `${taskId}-input`, role: "user" as const, content: task.input || "", created_at: task.created_at },
+      assistant: output || task.status === "running"
+        ? { id: `${taskId}-output`, role: "assistant" as const, content: output || "任务仍在执行中...", created_at: task.updated_at || task.created_at }
+        : undefined,
+      detail,
+    };
+  }).filter((turn) => turn.user.content || turn.assistant);
+  const pendingUserIndex = liveMessages.findIndex((message) => message.role === "user" && !turns.some((turn) => turn.user.content === message.content));
+  if (pendingUserIndex >= 0) {
+    const user = liveMessages[pendingUserIndex];
+    if (user?.role === "user") {
+      const assistant = liveMessages.slice(pendingUserIndex + 1).find((message) => message.role === "assistant");
+      turns.push({ id: user.id, user, assistant, detail: selectedDetail });
+    }
+  }
+  return turns;
+}
+
+function taskDetailFromTask(task: AgentTask): AgentTaskDetail {
+  return { task, events: [], timeline: [], tool_calls: [], repairs: [], artifacts: [], summary: {} };
+}
+
+function agentConsoleContextKey(source: string): string {
+  return `agent:${source || "terminal:control-ui"}`;
+}
+
+function agentSessionSources(tasks: AgentTask[]): string[] {
+  const sources = new Set<string>(["terminal:control-ui"]);
+  for (const task of tasks) sources.add(task.source || "terminal:control-ui");
+  return [...sources];
+}
+
+function sessionLabel(source: string): string {
+  if (source === "terminal:control-ui") return "页面直接对话";
+  return source.replace(/^terminal:/, "");
+}
+
+function tasksToConsoleMessages(tasks: AgentTask[]): ConsoleMessage[] {
+  return tasks.flatMap((task) => taskToConsoleMessages(task));
+}
+
+function taskToConsoleMessages(task: AgentTask): ConsoleMessage[] {
+  const taskId = taskIdOf(task);
+  const messages: ConsoleMessage[] = [];
+  if (task.input) messages.push({ id: `${taskId}-input`, role: "user", content: task.input, created_at: task.created_at });
+  const output = task.output || task.result || "";
+  if (output || task.status === "running") {
+    messages.push({ id: `${taskId}-output`, role: "assistant", content: output || "任务仍在执行中...", created_at: task.updated_at || task.created_at });
+  }
+  return messages;
+}
+
+function mergeConsoleMessages(persisted: ConsoleMessage[], live: ConsoleMessage[]): ConsoleMessage[] {
+  if (live.length === 0) return persisted;
+  const seen = new Set(persisted.map((message) => `${message.role}:${message.content}`));
+  const merged = [...persisted];
+  for (const message of live) {
+    const key = `${message.role}:${message.content}`;
+    if (!seen.has(key) || message.content.includes("正在交给 Hermes Agent 执行")) merged.push(message);
+  }
+  return merged;
+}
+
+function taskDetailToConsoleMessages(detail: AgentTaskDetail): ConsoleMessage[] {
+  const task = detail.task;
+  const taskId = taskIdOf(task);
+  const messages: ConsoleMessage[] = [];
+  if (task.input) {
+    messages.push({ id: `${taskId}-input`, role: "user", content: task.input, created_at: task.created_at });
+  }
+  for (const [index, event] of (detail.events ?? detail.timeline ?? []).entries()) {
+    if (event.type === "task.continue_requested") {
+      messages.push({ id: `${taskId}-continue-user-${index}`, role: "user", content: String(event.content || ""), created_at: event.created_at });
+    }
+    if (event.type === "task.continue_completed" || event.type === "task.completed") {
+      const content = String(event.content || "");
+      if (content && !messages.some((message) => message.role === "assistant" && message.content === content)) {
+        messages.push({ id: `${taskId}-assistant-${index}`, role: "assistant", content, created_at: event.created_at });
+      }
+    }
+  }
+  if (!messages.some((message) => message.role === "assistant")) {
+    messages.push({
+      id: `${taskId}-output`,
+      role: "assistant",
+      content: task.output || task.result || (task.status === "running" ? "任务仍在执行中..." : "Agent 没有返回文本结果。"),
+      created_at: task.updated_at || task.created_at,
+    });
+  }
+  return messages;
+}
+
+function HermesInlineTrace({
+  detail,
+  recentEvents,
+  liveEvents,
+}: {
+  detail: AgentTaskDetail | null;
+  recentEvents: AgentEvent[];
+  liveEvents: UiEvent[];
+}) {
+  if (!detail) return null;
+  const task = detail.task;
+  const toolCalls = detail.tool_calls ?? [];
+  const artifacts = detail.artifacts ?? [];
+  const repairs = detail.repairs ?? [];
+  const live = liveEvents.map((event) => ({
+    task_id: event.id,
+    type: event.type,
+    content: event.data,
+    created_at: event.created_at,
+  } satisfies AgentEvent));
+  return (
+    <section className="hermes-trace-stream" aria-label="工具与轨迹">
+      <div className="hermes-trace-stream__rail">
+        <Wrench size={15} />
+        <span>Agent 工具轨迹</span>
+        <StatusPill label={task.status || "unknown"} tone={taskTone(task.status || "")} />
+      </div>
+      {toolCalls.map((call, index) => <InlineToolCall key={`${toolCallName(call)}-${index}`} call={call} index={index} latest={index === toolCalls.length - 1} />)}
+      {artifacts.map((artifact) => (
+        <article key={artifact.id} className="hermes-inline-artifact">
+          <FileText size={15} />
+          <div><strong>{artifact.kind}</strong><p>{artifact.summary || artifact.path}</p></div>
+        </article>
+      ))}
+      {repairs.map((repair, index) => (
+        <article key={`${repair.tool}-${index}`} className="hermes-inline-artifact hermes-inline-artifact--repair">
+          <RotateCcw size={15} />
+          <div><strong>{repair.tool || repair.error_type || "repair"}</strong><p>{repair.guidance || repair.error}</p></div>
+        </article>
+      ))}
+      {[...recentEvents, ...live].slice(0, 6).map((event, index) => (
+        <details key={`${event.task_id}-${event.type}-${index}`} className="hermes-inline-event">
+          <summary><span>{event.type}</span><small>{formatDate(event.created_at)}</small></summary>
+          <pre>{stringify(event.content)}</pre>
+        </details>
+      ))}
+    </section>
+  );
+}
+
+function InlineToolCall({ call, index, latest }: { call: AgentTaskToolCall; index: number; latest: boolean }) {
+  const status = toolCallStatus(call);
+  const content = eventContent(call);
+  return (
+    <details className={`hermes-inline-tool hermes-inline-tool--${status}`} open={latest || status === "failed"}>
+      <summary>
+        <span className="hermes-inline-tool__prompt">$ tool run</span>
+        <strong>{toolCallName(call)}</strong>
+        <StatusPill label={status} tone={taskTone(status)} />
+      </summary>
+      <div className="hermes-inline-tool__body">
+        <div className="hermes-tool-meta"><span>#{index + 1}</span><span>{formatDate(call.started_at ?? eventTimestamp(call))}</span></div>
+        {toolCallError(call) ? <div className="tool-error">{toolCallError(call)}</div> : null}
+        <label>输入</label><pre>{stringify(call.input ?? content?.input ?? content?.payload ?? content?.arguments ?? {})}</pre>
+        <label>输出</label><pre>{stringify(call.output ?? call.fallback ?? content?.output ?? content?.result ?? content ?? {})}</pre>
+      </div>
+    </details>
+  );
+}
+
+
+function renderChatContent(text: string): ReactNode[] {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const nodes: ReactNode[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i += 1; continue; }
+    const fence = line.match(/^```(\w+)?\s*$/);
+    if (fence) {
+      const code: string[] = [];
+      i += 1;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) code.push(lines[i++]);
+      i += i < lines.length ? 1 : 0;
+      nodes.push(<pre key={`code-${i}`}><code>{code.join("\n")}</code></pre>);
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      nodes.push(
+        level === 1 ? <h1 key={`h-${i}`}>{renderInline(heading[2])}</h1> :
+        level === 2 ? <h2 key={`h-${i}`}>{renderInline(heading[2])}</h2> :
+        <h3 key={`h-${i}`}>{renderInline(heading[2])}</h3>,
+      );
+      i += 1;
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      const quote: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) quote.push(lines[i++].replace(/^>\s?/, ""));
+      nodes.push(<blockquote key={`q-${i}`}>{renderChatContent(quote.join("\n"))}</blockquote>);
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*+]\s+/, ""));
+      nodes.push(<ul key={`ul-${i}`}>{items.map((item, n) => <li key={n}>{renderInline(item)}</li>)}</ul>);
+      continue;
+    }
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ""));
+      nodes.push(<ol key={`ol-${i}`}>{items.map((item, n) => <li key={n}>{renderInline(item)}</li>)}</ol>);
+      continue;
+    }
+    const para: string[] = [];
+    while (i < lines.length && lines[i].trim() && !/^```/.test(lines[i]) && !/^(#{1,3})\s+/.test(lines[i]) && !/^>\s?/.test(lines[i]) && !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) para.push(lines[i++]);
+    nodes.push(<p key={`p-${i}`}>{renderInline(para.join("\n"))}</p>);
+  }
+  return nodes.length ? nodes : [<span key="empty" className="markdown-plain-text-fallback">{text}</span>];
+}
+
+function renderInline(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index! > last) parts.push(text.slice(last, match.index));
+    const raw = match[0];
+    if (raw.startsWith("**")) parts.push(<strong key={match.index}>{raw.slice(2, -2)}</strong>);
+    else if (raw.startsWith("`")) parts.push(<code key={match.index}>{raw.slice(1, -1)}</code>);
+    else {
+      const m = raw.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+      parts.push(<a key={match.index} href={m?.[2]} target="_blank" rel="noreferrer">{m?.[1] || raw}</a>);
+    }
+    last = match.index! + raw.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
 }
 
 function ConsoleMessageBubble({ message }: { message: ConsoleMessage }) {

@@ -99,6 +99,11 @@ export const api = {
     }),
   agentTasks: (limit = 50) => request<AgentTask[]>(`/agent/tasks?limit=${limit}`),
   agentTaskDetail: (taskId: string) => request<AgentTaskDetail>(`/agent/tasks/${encodeURIComponent(taskId)}`),
+  continueAgentTask: (taskId: string, input: string, source = "terminal:control-ui") =>
+    request<AgentTask>(`/agent/tasks/${encodeURIComponent(taskId)}/continue`, {
+      method: "POST",
+      body: JSON.stringify({ input, source }),
+    }),
   resumeAgentTask: (taskId: string) =>
     request<AgentTask>(`/agent/tasks/${encodeURIComponent(taskId)}/resume`, {
       method: "POST",

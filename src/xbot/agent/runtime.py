@@ -149,16 +149,27 @@ class AgentRuntime:
         await self._add_event(task_id, "task.completed", result.output)
         return result
 
-    async def continue_task(self, task_id: str, user_input: str) -> AgentResult:
-        output = await self._run_llm(task_id, user_input, source="api")
+    async def continue_task(self, task_id: str, user_input: str, *, source: str = "api") -> AgentResult:
+        detail = await self.get_task_detail(task_id)
+        if not detail:
+            raise XBotError(f"Agent task not found: {task_id}")
+        await self._add_event(task_id, "task.continue_requested", user_input)
+        if self.repository_provider:
+            async with self.repository_provider() as repo:
+                await repo.mark_task_running(task_id)
+        output = await self._run_llm(task_id, user_input, source=source)
         result = AgentResult(
             task_id=task_id,
-            source="api",
+            source=source,
             status="completed",
             output=output,
             suppress_channel_reply=task_id in self._suppress_channel_reply_task_ids,
         )
+        if self.repository_provider:
+            async with self.repository_provider() as repo:
+                await repo.finish_task(result)
         self._suppress_channel_reply_task_ids.discard(task_id)
+        await self._add_event(task_id, "task.continue_completed", output)
         return result
 
     async def cancel_task(self, task_id: str) -> None:

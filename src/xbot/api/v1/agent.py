@@ -19,6 +19,11 @@ class AgentTaskResumeRequest(BaseModel):
     source: str | None = None
 
 
+class AgentTaskContinueRequest(BaseModel):
+    input: str
+    source: str | None = None
+
+
 class AgentToolExecuteRequest(BaseModel):
     payload: dict = {}
     task_id: str | None = None
@@ -134,6 +139,19 @@ async def create_task(payload: AgentTaskRequest, ctx: AppContext = Depends(get_c
 @router.get("/tasks")
 async def list_tasks(limit: int = 50, ctx: AppContext = Depends(get_context)) -> dict:
     return {"success": True, "data": await ctx.agent.list_tasks(limit=limit)}
+
+
+@router.post("/tasks/{task_id}/continue")
+async def continue_task(
+    task_id: str,
+    payload: AgentTaskContinueRequest,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    try:
+        result = await ctx.agent.continue_task(task_id, payload.input, source=payload.source or "api")
+    except XBotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"success": True, "data": result.model_dump(mode="json")}
 
 
 @router.get("/tasks/{task_id}")
