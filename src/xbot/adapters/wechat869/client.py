@@ -5,6 +5,7 @@ import asyncio
 import uuid
 import time
 from typing import Any
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 
@@ -93,6 +94,50 @@ class Wechat869Client:
         }
         data = await self.call_path("/message/SendTextMessage", body=payload)
         return self._extract_send_tuple(data)
+
+
+    async def send_image_message(self, wxid: str, image_path: str) -> Any:
+        data = base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
+        payload = {"MsgItem": [{"ToUserName": wxid, "MsgType": 2, "ImageContent": data}]}
+        try:
+            return await self.call_path("/message/SendImageMessage", body=payload)
+        except Exception:
+            return await self.call_path("/message/SendImageNewMessage", body=payload)
+
+    async def send_file_message(self, wxid: str, file_path: str) -> Any:
+        path = Path(file_path)
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        upload = await self.call_path("/other/UploadAppAttach", body={"fileData": data})
+        info = upload if isinstance(upload, dict) else {}
+        media_id = str(info.get("mediaId") or info.get("MediaId") or info.get("media_id") or "")
+        total_len = int(info.get("totalLen") or info.get("TotalLen") or path.stat().st_size)
+        file_name = path.name
+        ext = path.suffix.lstrip(".")
+        xml = (
+            "<appmsg appid='' sdkver='0'>"
+            f"<title>{file_name}</title><des></des><type>6</type>"
+            f"<appattach><totallen>{total_len}</totallen><attachid>{media_id}</attachid><fileext>{ext}</fileext></appattach>"
+            "</appmsg>"
+        )
+        payload = {"AppList": [{"ToUserName": wxid, "ContentType": 6, "ContentXML": xml}]}
+        return await self.call_path("/message/SendAppMessage", body=payload)
+
+
+    async def send_app_message(self, wxid: str, content_xml: str, content_type: int = 6) -> Any:
+        payload = {"AppList": [{"ToUserName": wxid, "ContentType": int(content_type), "ContentXML": content_xml}]}
+        return await self.call_path("/message/SendAppMessage", body=payload)
+
+    async def send_video_message(self, wxid: str, video_path: str) -> Any:
+        return await self.send_file_message(wxid, video_path)
+
+    async def send_voice_message(self, wxid: str, voice_bytes: bytes, *, format: str = "wav", seconds: int = 0) -> Any:
+        payload = {
+            "ToUserName": wxid,
+            "VoiceData": base64.b64encode(voice_bytes).decode("ascii"),
+            "VoiceFormat": 0 if str(format).lower() == "amr" else 3,
+            "VoiceSecond": int(seconds or 0),
+        }
+        return await self.call_path("/message/SendVoice", body=payload)
 
     async def call_path(
         self,

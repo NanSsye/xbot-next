@@ -29,6 +29,7 @@ class Reply(BaseModel):
     conversation_id: str
     type: ReplyType = "text"
     content: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
     quote_message_id: str | None = None
 
 

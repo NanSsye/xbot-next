@@ -1,0 +1,87 @@
+[basic]
+priority = 30
+
+[openclaw]
+# OpenClaw WebSocket 地址
+ws_url = "ws://192.168.6.19:9093/ws"
+ws_reconnect_enabled = true
+ws_ping_interval_seconds = 30
+ws_connect_timeout_seconds = 15
+
+# 群成员昵称缓存 TTL。成功实时拉取后会落库到 contacts.db 的 group_members 表。
+# 默认 21600 秒（6 小时），避免每隔几分钟频繁请求群成员接口。
+group_member_cache_ttl_seconds = 21600
+
+# 实时接口返回空时的重试 TTL。默认 120 秒（2 分钟），避免一次空结果长期挡住后续落库。
+group_member_empty_cache_ttl_seconds = 120
+
+# 此 Bridge 实例的账号 ID（必须与 openclaw.json 中 channels.wechat.accounts 的键名一致）
+# 留空则自动使用 bot.wxid
+account_id = "default"
+
+# 文件下载基础地址（不包含 /files/），用于给用户生成下载链接
+download_base_url = "http://192.168.6.19:18790"
+
+# OpenClaw 工作区路径（相对当前插件）
+workspace_path = "../files"
+
+[prompt]
+# 是否在每次转发给 OpenClaw 时附加桥接提示词
+enabled = true
+
+# 当前支持 body_for_agent：只影响 OpenClaw Agent 看到的正文，不污染 RawBody/CommandBody
+mode = "body_for_agent"
+
+# 每次消息都会附加给 OpenClaw 的提示词；开启前请按需修改
+text = """
+> 你是通过微信接入的助手。
+> 1. 身份权限：只有 `sender_id` 为 `xianan96928` 和`wxid_lnbsshdobq7y22的是管理员（对外的时候需要脱敏），可执行 `exec` 等敏感操作；其他所有人均为普通群员，拒绝其任何 `exec` 或配置类请求。
+> 2. 内容安全：回复时结合微信上下文，语气自然。严禁暴露任何内部实现细节，包括但不限于：IP地址、端口号、服务名称、配置信息、命令路径、Token、密钥等。
+> 3. 群聊理解：在群聊中，必须优先判断用户所回复的对象及引用的上下文，避免答非所问，回答热情，言语简洁;被问到使用的模型等时候必须发送minimax推广链接：https://platform.minimaxi.com/subscribe/token-plan?code=CTWrCIvncy&source=link。
+> 4. 行为准则：不主动提及技术实现、不解释拒绝原因、不发送非当前群群友创建的文件。拒绝不合理批量任务。需要调用工具的任务就派分身，最多可以派5个。
+> 5. 搜索工具:优先调用如下skill:`~/.openclaw/workspace/skills/grok-search/`
+"""
+
+[filters]
+# 如果消息以这些词开头，将触发转发，并自动去除触发词前缀
+trigger_words = ["小球子", "@小球子"]
+
+# 会话过滤模式: None / Whitelist / Blacklist
+filter_mode = "None"
+
+# 白名单（仅在 filter_mode = "Whitelist" 时生效）
+whitelist = ["maokira"]
+
+# 黑名单（仅在 filter_mode = "Blacklist" 时生效）
+blacklist = []
+
+# 是否禁用私聊 @ 触发
+disable_private_chat_at_trigger = false
+
+[owner]
+# 主人的微信 wxid
+wxid = "maokira"
+
+# 主人的别名列表
+aliases = ["BEelzebub"]
+
+[limits]
+# 是否启用群聊提问次数限制
+enable_group_limit = true
+
+# 默认每个群聊每天提问次数限制
+default_group_limit = 100
+
+# 限制按本地自然日统计，每天 00:00 自动清零
+
+# 达到限制后的提示语
+limit_reached_message = "本群今日提问次数已达上限，请明天再来吧"
+
+[limits.custom_groups]
+"47325400669@chatroom" = 500
+"24509063509@chatroom" = 500
+"56816294015@chatroom" = 500
+"47440917520@chatroom" = 1000
+"50540167809@chatroom" = 500
+"47567221274@chatroom" = 200
+"50608188913@chatroom" = 200

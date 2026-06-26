@@ -4,10 +4,16 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        INSTALL_PLAYWRIGHT: ${INSTALL_PLAYWRIGHT:-true}
+        INSTALL_PLAYWRIGHT: ${INSTALL_PLAYWRIGHT:-false}
+        APT_MIRROR: ${APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: xbot-next:local
     pull_policy: build
-    container_name: xbot-next
+    container_name: xbot-next-app
     restart: unless-stopped
     env_file:
       - .env
@@ -22,6 +28,8 @@ services:
       XBOT_REDIS_URL: redis://redis:6379/15
       XBOT_DATABASE_AUTO_BOOTSTRAP: "true"
       XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP: "true"
+      XBOT_DOCKER_INSTALL_DEPS_ON_START: "false"
+      XBOT_DOCKER_BUILD_UI_ON_START: "false"
     ports:
       - "8548:8548"
     extra_hosts:
@@ -39,9 +47,19 @@ services:
       redis:
         condition: service_healthy
 
+  files:
+    image: xbot-next:local
+    container_name: xbot-next-files
+    restart: unless-stopped
+    command: ["python", "-m", "http.server", "18790", "--directory", "/app"]
+    ports:
+      - "18790:18790"
+    volumes:
+      - ./files:/app/files:ro
+
   postgres:
     image: postgres:16-alpine
-    container_name: xbot-postgres
+    container_name: xbot-next-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -57,7 +75,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: xbot-redis
+    container_name: xbot-next-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:

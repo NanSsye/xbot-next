@@ -7,11 +7,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     XBOT_CONFIG_FILE=/app/configs/xbot.toml \
     XBOT_LOAD_DOTENV=true
 
-ARG INSTALL_PLAYWRIGHT=true
+ARG INSTALL_PLAYWRIGHT=false
+ARG APT_MIRROR=
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g; s|http://deb.debian.org/debian-security|$APT_MIRROR-security|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && if [ -n "$HTTP_PROXY" ]; then \
+        echo "Acquire::http::Proxy \"$HTTP_PROXY\";" > /etc/apt/apt.conf.d/99proxy; \
+        echo "Acquire::https::Proxy \"$HTTPS_PROXY\";" >> /etc/apt/apt.conf.d/99proxy; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -32,10 +45,11 @@ COPY ui ./ui
 COPY docker/entrypoint.sh /usr/local/bin/xbot-docker-entrypoint
 
 RUN chmod +x /usr/local/bin/xbot-docker-entrypoint \
-    && python -m pip install --upgrade pip \
-    && python -m pip install -e . \
-    && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then python -m playwright install --with-deps chromium; fi \
+    && python -m pip install -i "$PIP_INDEX_URL" --upgrade pip \
+    && python -m pip install -i "$PIP_INDEX_URL" -e . \
+    && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then python -m pip install -i "$PIP_INDEX_URL" -e ".[browser]" && python -m playwright install --with-deps chromium; fi \
     && cd /app/ui \
+    && npm config set registry "$NPM_REGISTRY" \
     && npm ci \
     && npm run build \
     && mkdir -p /app/data /app/logs /app/workspace

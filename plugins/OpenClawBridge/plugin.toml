@@ -1,0 +1,19 @@
+name = "OpenClawBridge"
+version = "0.2.0"
+entry = "main:OpenClawBridgePlugin"
+author = "xbot"
+description = "xbot-next OpenClaw 微信桥：引用、媒体入站、OpenClaw 回发媒体。"
+enabled = true
+
+[routing]
+enabled = true
+priority = 15
+exclusive = true
+message_types = ["text", "image", "file"]
+platforms = ["wechat"]
+adapters = ["wechat869"]
+
+[permissions]
+network = true
+filesystem = true
+admin = false

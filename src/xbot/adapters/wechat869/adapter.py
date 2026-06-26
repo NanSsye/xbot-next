@@ -108,12 +108,18 @@ class Wechat869Adapter(BaseAdapter):
             self._task = None
 
     async def send(self, reply: Reply) -> None:
-        if reply.type != "text":
-            logger.warning("Wechat869Adapter 当前只支持文本回复: {}", reply.type)
-            return
         client = self.client or self._create_client()
         conversation_id = self._raw_conversation_id(reply.conversation_id)
-        await client.send_text_message(conversation_id, reply.content)
+        if reply.type == "text":
+            await client.send_text_message(conversation_id, reply.content)
+            return
+        if reply.type == "image":
+            await client.send_image_message(conversation_id, reply.content)
+            return
+        if reply.type == "file":
+            await client.send_file_message(conversation_id, reply.content)
+            return
+        logger.warning("Wechat869Adapter 不支持回复类型: {}", reply.type)
 
     def public_status(self) -> dict[str, Any]:
         return {
@@ -541,18 +547,26 @@ class Wechat869Adapter(BaseAdapter):
 
     def _content_with_media_summary(self, content: str, msg_type: int, raw: dict) -> str:
         content = content.strip() if content else ""
-        lines = [content] if content and (msg_type == 1 or not content.lstrip().startswith("<")) else []
-        for attachment in raw.get("attachments") or []:
-            lines.append(self._attachment_line(attachment))
+        lines = []
+        if content and (msg_type == 1 or not content.lstrip().startswith("<")):
+            lines.append(content)
+        elif content and content.lstrip().startswith("<"):
+            title = self._extract_xml_display_text(content)
+            if title:
+                lines.append(title)
+        # 直接发送图片/文件只作为附件保存，不拼进文本，避免普通媒体自动进入 OpenClaw。
         quote = raw.get("quote")
         if isinstance(quote, dict):
+            quote_attachments = [a for a in quote.get("attachments") or [] if isinstance(a, dict)]
             quote_content = str(quote.get("content") or "").strip()
             sender = str(quote.get("sender_name") or quote.get("sender_wxid") or "").strip()
-            prefix = f"[引用] {sender}: {quote_content}" if sender and quote_content else f"[引用] {quote_content or sender}".strip()
-            if prefix and prefix != "[引用]":
-                lines.append(prefix)
-            for attachment in quote.get("attachments") or []:
-                lines.append("[引用" + self._attachment_line(attachment).lstrip("["))
+            if quote_attachments:
+                for attachment in quote_attachments:
+                    lines.append("[引用" + self._attachment_line(attachment, include_local_path=False).lstrip("["))
+            else:
+                prefix = f"[引用] {sender}: {quote_content}" if sender and quote_content else f"[引用] {quote_content or sender}".strip()
+                if prefix and prefix != "[引用]":
+                    lines.append(prefix)
         if not lines:
             if msg_type == 3:
                 lines.append("[图片]")
@@ -562,7 +576,20 @@ class Wechat869Adapter(BaseAdapter):
                 lines.append(f"[非文本消息 MsgType={msg_type}]")
         return "\n".join(lines)
 
-    def _attachment_line(self, attachment: dict) -> str:
+    def _extract_xml_display_text(self, content: str) -> str:
+        text = str(content or "")
+        for tag in ("title", "des", "content"):
+            match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.IGNORECASE | re.DOTALL)
+            if not match:
+                continue
+            value = re.sub(r"<[^>]+>", " ", match.group(1))
+            value = value.replace("<![CDATA[", "").replace("]]>", "")
+            value = " ".join(value.split()).strip()
+            if value and not value.startswith("<?xml") and len(value) <= 500:
+                return value
+        return ""
+
+    def _attachment_line(self, attachment: dict, *, include_local_path: bool = True) -> str:
         kind = "图片" if attachment.get("kind") == "image" else "文件"
         filename = str(attachment.get("filename") or "")
         status = str(attachment.get("download_status") or "")
@@ -573,7 +600,7 @@ class Wechat869Adapter(BaseAdapter):
             parts.append(f"filename={filename}")
         if size:
             parts.append(f"size={size}")
-        if local_path:
+        if local_path and include_local_path:
             parts.append(f"local_path={local_path}")
         elif status:
             parts.append(f"status={status}")
