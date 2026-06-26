@@ -1,12 +1,18 @@
 # Hermes Agent Integration
 
-更新时间：2026-06-03
+更新时间：2026-06-26
 
 `xbot-next` 现在内嵌 Hermes Agent，默认不再使用自研 Agent 工具循环作为生产执行核心。
 
 ## 运行方式
 
-用户不需要单独下载安装 Hermes，也不需要单独启动 Hermes。
+如果只使用通道和插件，用户不需要安装内置 Agent/Hermes 额外依赖。需要使用内置 Agent 时，安装可选依赖：
+
+```bash
+pip install -e .[agent]
+```
+
+Hermes 源码随项目放在 `vendor/hermes/`，不需要单独启动 Hermes。
 
 正常启动 xbot 即可：
 
@@ -63,7 +69,21 @@ XBOT_LLM_MODEL=MiniMax-M3
 XBOT_LLM_API_KEY=...
 ```
 
-如果 `XBOT_LLM_PROVIDER=anthropic`，或者 `XBOT_LLM_BASE_URL` 以 `/anthropic` 结尾，xbot 会让 Hermes 使用 Anthropic Messages 格式。
+如果使用 OpenAI-compatible 接口，例如 MiniMax `/v1`：
+
+```env
+XBOT_LLM_PROVIDER=openai_compatible
+XBOT_LLM_BASE_URL=https://api.minimaxi.com/v1
+```
+
+如果使用 Anthropic Messages 兼容接口，例如 MiniMax Anthropic：
+
+```env
+XBOT_LLM_PROVIDER=anthropic
+XBOT_LLM_BASE_URL=https://api.minimaxi.com/anthropic
+```
+
+`XBOT_LLM_PROVIDER=anthropic` 会让 Hermes 使用 Anthropic Messages 格式；不要把 `/v1` 地址和 Anthropic provider 混用。
 
 Hermes 自己的持久化能力使用 `data/hermes/`：
 

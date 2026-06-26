@@ -25,7 +25,11 @@ def create_app() -> FastAPI:
         )
     app.add_middleware(ApiTokenAuthMiddleware, settings=settings)
     app.include_router(api_v1_router, prefix="/api/v1")
-    ui_dist = Path(__file__).resolve().parents[3] / "ui" / "dist"
+    project_root = Path(__file__).resolve().parents[3]
+    files_dir = project_root / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/files", StaticFiles(directory=str(files_dir)), name="files")
+    ui_dist = project_root / "ui" / "dist"
     if ui_dist.exists():
         app.mount("/", StaticFiles(directory=str(ui_dist), html=True), name="ui")
     return app

@@ -203,7 +203,8 @@ def _ensure_hermes_home_files(home_dir: Path) -> None:
 
 
 def _provider_for_config(config: AgentConfig) -> str | None:
-    if config.llm.provider == "anthropic" and "api.anthropic.com" in (config.llm.base_url or ""):
+    # Anthropic-compatible providers may not use api.anthropic.com, e.g. MiniMax Anthropic endpoint.
+    if config.llm.provider == "anthropic":
         return "anthropic"
     return "custom"
 

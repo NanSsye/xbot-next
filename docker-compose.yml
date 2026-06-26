@@ -15,23 +15,15 @@ services:
     pull_policy: build
     container_name: xbot-next-app
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
+      # 不使用 env_file 注入 .env；应用在启动时读取 /app/.env。
+      # 这样修改宿主机 .env 后，只需 docker compose restart xbot 即可生效。
       XBOT_SERVER_HOST: 0.0.0.0
-      XBOT_SERVER_PORT: 8548
-      XBOT_STORAGE_TYPE: postgresql
-      XBOT_DATABASE_URL: postgresql+asyncpg://xbot:xbot@postgres:5432/xbot
-      XBOT_ADMIN_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
-      XBOT_CONVERSATION_STORE: postgresql
-      XBOT_QUEUE_TYPE: redis
-      XBOT_REDIS_URL: redis://redis:6379/15
-      XBOT_DATABASE_AUTO_BOOTSTRAP: "true"
-      XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP: "true"
       XBOT_DOCKER_INSTALL_DEPS_ON_START: "false"
       XBOT_DOCKER_BUILD_UI_ON_START: "false"
     ports:
       - "8548:8548"
+      - "18790:8548"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -47,15 +39,6 @@ services:
       redis:
         condition: service_healthy
 
-  files:
-    image: xbot-next:local
-    container_name: xbot-next-files
-    restart: unless-stopped
-    command: ["python", "-m", "http.server", "18790", "--directory", "/app"]
-    ports:
-      - "18790:18790"
-    volumes:
-      - ./files:/app/files:ro
 
   postgres:
     image: postgres:16-alpine

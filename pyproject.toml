@@ -40,6 +40,7 @@ dependencies = [
 
 [project.optional-dependencies]
 agent = [
+  "anthropic==0.87.0",
   "mcp>=1.0.0",
   "openai>=2.24.0",
   "prompt-toolkit>=3.0.43",
@@ -49,6 +50,7 @@ browser = [
   "playwright>=1.45.0"
 ]
 full = [
+  "anthropic==0.87.0",
   "mcp>=1.0.0",
   "openai>=2.24.0",
   "prompt-toolkit>=3.0.43",

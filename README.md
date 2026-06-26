@@ -79,7 +79,7 @@ http://localhost:8548
 docker compose restart xbot
 ```
 
-说明：Docker 会映射整个项目目录，内嵌 Hermes 源码位于 `vendor/hermes/`，运行期 session、memory、skills 和轨迹默认写入 `data/hermes/`，都会随项目目录保留。只有 `Dockerfile` 或系统依赖变化时才需要重新 `docker compose up -d --build`。
+说明：Docker 默认只安装通道、插件、API 和 Web 控制台所需依赖，不安装内置 Agent/Hermes 额外依赖，也不下载 Playwright Chromium。OpenClawBridge、WeChat 869 和普通插件可直接使用。只有需要内置 Agent 或浏览器工具时，才安装可选 extra。Docker 会映射整个项目目录，运行期数据会随项目目录保留。只有 `Dockerfile`、依赖或前端构建变化时才需要重新 `docker compose up -d --build`。
 
 ### 一键安装
 
@@ -188,11 +188,20 @@ cd D:\项目\项目\xbot\xbot-next
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -U pip
-pip install -e .[dev]
-python -m playwright install chromium
+pip install -e .
 ```
 
-说明：`pip install -e .[dev]` 会安装运行所需主依赖、MCP SDK、Playwright SDK 和测试依赖。`playwright install chromium` 用于下载浏览器内核，浏览器截图工具需要它。
+说明：默认安装只包含通道、插件、API、数据库、队列和 Web 运行所需依赖，不安装内置 Agent/Hermes 额外依赖，也不下载 Playwright 浏览器。
+
+可选安装：
+
+```bat
+pip install -e .[agent]     # 内置 Agent/Hermes/MCP/LLM 相关
+pip install -e .[browser]   # Playwright Python SDK
+pip install -e .[full]      # agent + browser
+pip install -e .[dev]       # 测试/格式化工具
+python -m playwright install chromium  # 仅 browser 工具需要
+```
 
 ### 2. 创建本地配置
 
@@ -294,7 +303,15 @@ python -m pytest -q
 
 ## Agent 使用说明
 
-`xbot-next` 当前内嵌 Hermes Agent。用户不需要单独安装或启动 Hermes；xbot 负责通道、插件、API、消息队列、任务记录和前端，Agent 对话循环、工具调用、上下文压缩、长期记忆、skill 自进化和轨迹由 Hermes 执行。
+`xbot-next` 支持内嵌 Hermes Agent，但默认依赖集面向“通道 + 插件”轻量部署。若只使用 WeChat 869、OpenClawBridge 和普通插件，不需要安装内置 Agent 依赖。
+
+需要启用内置 Agent 时，先安装：
+
+```bash
+pip install -e .[agent]
+```
+
+Docker 默认不安装 Agent extra；需要内置 Agent 的镜像请把 Dockerfile 中安装命令改为 `pip install -e .[agent]` 或 `pip install -e .[full]`。启用后，xbot 负责通道、插件、API、消息队列、任务记录和前端，Agent 对话循环、工具调用、上下文压缩、长期记忆、skill 自进化和轨迹由 Hermes 执行。
 
 主模型仍统一配置在项目根目录 `.env`：
 
