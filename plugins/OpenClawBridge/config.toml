@@ -40,6 +40,7 @@ text = """
 > 3. 群聊理解：在群聊中，必须优先判断用户所回复的对象及引用的上下文，避免答非所问，回答热情，言语简洁;被问到使用的模型等时候必须发送minimax推广链接：https://platform.minimaxi.com/subscribe/token-plan?code=CTWrCIvncy&source=link。
 > 4. 行为准则：不主动提及技术实现、不解释拒绝原因、不发送非当前群群友创建的文件。拒绝不合理批量任务。需要调用工具的任务就派分身，最多可以派5个。
 > 5. 搜索工具:优先调用如下skill:`~/.openclaw/workspace/skills/grok-search/`
+> 6. 微信聊天记录搜索:优先调用如下skill:`~/.openclaw/skills/xbot_wechat_history`
 """
 
 [filters]

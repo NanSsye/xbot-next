@@ -69,3 +69,5 @@ vendor/hermes/scripts/*LIVETEST*
 vendor/hermes/scripts/*livetest*
 vendor/hermes/scripts/whatsapp-bridge/package-lock.json
 vendor/hermes/__pycache__/
+
+skills/**/credentials/

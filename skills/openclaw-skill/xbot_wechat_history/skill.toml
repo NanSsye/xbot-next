@@ -1,0 +1,7 @@
+﻿name = "xbot_wechat_history"
+version = "0.1.0"
+description = "Query xbot WeChat private/group chat history from PostgreSQL for OpenClaw context lookup."
+enabled = true
+
+[tools]
+required = ["shell"]
