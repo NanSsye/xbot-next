@@ -440,6 +440,31 @@ class Wechat869Client:
         encoded = self._extract_base64_from_payload(payload)
         return base64.b64decode(encoded) if encoded else b""
 
+
+    async def get_chatroom_member_list(self, group_wxid: str) -> list[dict[str, Any]]:
+        """实时获取群成员列表，兼容 869 多种返回结构。"""
+        attempts = (
+            ("/group/GetChatroomMemberDetail", {"ChatRoomName": group_wxid}),
+            ("/group/GetChatroomMemberDetail", {"ChatRoomWxid": group_wxid}),
+            ("/group/GetChatroomMemberDetail", {"ChatRoomWxId": group_wxid}),
+            ("/group/GetChatroomMemberList", {"ChatRoomName": group_wxid}),
+            ("/group/GetChatroomMemberList", {"ChatRoomWxid": group_wxid}),
+            ("/group/GetChatRoomInfo", {"ChatRoomWxIdList": [group_wxid]}),
+            ("/group/GetChatRoomInfo", {"ChatRoomName": group_wxid}),
+        )
+        for path, body in attempts:
+            try:
+                data = await self.call_path(path, body=body)
+            except Exception:
+                continue
+            members = self._extract_chatroom_members(data)
+            if members:
+                return [self._normalize_chatroom_member_item(item) for item in members]
+        return []
+
+    async def get_chatroom_members(self, group_wxid: str) -> list[dict[str, Any]]:
+        return await self.get_chatroom_member_list(group_wxid)
+
     async def request(
         self,
         path: str,
@@ -512,6 +537,65 @@ class Wechat869Client:
             nested = cls._pick(value, ("str", "Str", "string", "String", "value", "Value", "text", "Text"), default)
             return nested
         return value
+
+
+    @classmethod
+    def _normalize_chatroom_member_item(cls, item: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(item)
+        wxid = str(cls._pick_nested(item, ("UserName", "UserNameStr", "userName", "user_name", "Wxid", "WxId", "wxid", "MemberWxid", "member_wxid", "MemberId", "memberId"), "") or "").strip()
+        nickname = str(cls._pick_nested(item, ("NickName", "NickNameStr", "nickName", "nickname", "nick_name", "DisplayName", "display_name", "Remark", "RemarkName"), "") or "").strip()
+        big_avatar = str(cls._pick_nested(item, ("BigHeadImgUrl", "bigHeadImgUrl", "big_head_img_url"), "") or "").strip()
+        small_avatar = str(cls._pick_nested(item, ("SmallHeadImgUrl", "smallHeadImgUrl", "small_head_img_url"), "") or "").strip()
+        if wxid:
+            normalized.setdefault("UserName", wxid)
+            normalized.setdefault("Wxid", wxid)
+            normalized.setdefault("wxid", wxid)
+        if nickname:
+            normalized.setdefault("NickName", nickname)
+            normalized.setdefault("nickname", nickname)
+        if big_avatar:
+            normalized.setdefault("BigHeadImgUrl", big_avatar)
+        if small_avatar:
+            normalized.setdefault("SmallHeadImgUrl", small_avatar)
+        if not normalized.get("avatar"):
+            normalized["avatar"] = big_avatar or small_avatar
+        return normalized
+
+    @classmethod
+    def _extract_chatroom_members(cls, payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            direct = [x for x in payload if isinstance(x, dict) and cls._chatroom_member_id(x)]
+            if direct:
+                return direct
+            for item in payload:
+                members = cls._extract_chatroom_members(item)
+                if members:
+                    return members
+            return []
+        if not isinstance(payload, dict):
+            return []
+        for key in ("Data", "data", "member_data", "NewChatroomData", "newChatroomData"):
+            members = cls._extract_chatroom_members(payload.get(key))
+            if members:
+                return members
+        for key in ("chatroom_member_list", "ChatRoomMember", "MemberList", "memberList", "member_list", "ChatRoomMemberList"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                direct = [x for x in value if isinstance(x, dict) and cls._chatroom_member_id(x)]
+                if direct:
+                    return direct
+        for key in ("ChatRoomInfo", "chatroomInfo", "ContactList", "contactList"):
+            members = cls._extract_chatroom_members(payload.get(key))
+            if members:
+                return members
+        return []
+
+    @classmethod
+    def _chatroom_member_id(cls, item: dict[str, Any]) -> str:
+        wxid = str(cls._pick_nested(item, ("UserName", "UserNameStr", "userName", "user_name", "Wxid", "WxId", "wxid", "MemberWxid", "member_wxid", "MemberId", "memberId"), "") or "").strip()
+        if not wxid or wxid.endswith("@chatroom"):
+            return ""
+        return wxid
 
     @classmethod
     def _extract_auth_keys(cls, payload: Any) -> list[str]:

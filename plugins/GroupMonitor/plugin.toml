@@ -1,0 +1,14 @@
+name = "GroupMonitor"
+version = "1.2.0"
+entry = "main:GroupMonitorPlugin"
+author = "BEelzebub/xbot"
+description = "微信群成员监控：周期同步群成员并提醒退群。"
+enabled = true
+
+[routing]
+enabled = false
+priority = 80
+exclusive = false
+message_types = ["text", "event"]
+platforms = ["wechat"]
+adapters = ["wechat869"]

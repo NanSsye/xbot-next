@@ -1,4 +1,4 @@
-[xbot]
+﻿[xbot]
 name = "xbot"
 timezone = "Asia/Shanghai"
 debug = false
@@ -9,7 +9,7 @@ port = 8548
 
 [storage]
 type = "postgresql"
-url = "postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot"
+url = "postgresql+asyncpg://xbot:xbot@postgres:5432/xbot"
 echo = false
 persist_runtime_events = true
 auto_bootstrap = true
@@ -19,7 +19,7 @@ run_migrations_on_startup = true
 
 [queue]
 type = "memory"
-redis_url = "redis://192.168.6.41:6379/15"
+redis_url = "redis://redis:6379/15"
 main_queue = "xbot:messages"
 reply_queue = "xbot:replies"
 event_queue = "xbot:events"
@@ -154,3 +154,5 @@ auto_download_images = true
 auto_download_files = true
 max_image_bytes = 20971520
 max_file_bytes = 104857600
+
+

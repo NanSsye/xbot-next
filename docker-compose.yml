@@ -21,6 +21,7 @@ services:
       XBOT_SERVER_HOST: 0.0.0.0
       XBOT_DOCKER_INSTALL_DEPS_ON_START: "false"
       XBOT_DOCKER_BUILD_UI_ON_START: "false"
+      TZ: Asia/Shanghai
     ports:
       - "8548:8548"
       - "18790:8548"
@@ -50,6 +51,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
+      TZ: Asia/Shanghai
     volumes:
       - ./docker-data/postgres:/var/lib/postgresql/data
     healthcheck:

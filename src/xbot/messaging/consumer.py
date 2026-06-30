@@ -43,7 +43,15 @@ class MessageConsumer:
         message = await self.pipeline.process(envelope.message)
         await self.conversations.touch(message)
         await self.conversations.append_message(message.conversation_id, message)
-        await self.engine.dispatch_message(message)
+        try:
+            await self.engine.dispatch_message(message)
+        except Exception as exc:
+            logger.exception(
+                "消息已入库，但插件分发失败: message_id={} conversation={} error={}",
+                message.id,
+                message.conversation_id,
+                exc,
+            )
         return True
 
     async def run(self, queue: MessageQueue) -> None:

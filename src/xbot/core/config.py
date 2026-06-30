@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import tomllib
@@ -27,7 +27,7 @@ class ApiConfig(BaseModel):
 
 class StorageConfig(BaseModel):
     type: Literal["postgresql", "sqlite"] = "postgresql"
-    url: str = "postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot"
+    url: str = "postgresql+asyncpg://xbot:xbot@postgres:5432/xbot"
     echo: bool = False
     persist_runtime_events: bool = True
     auto_bootstrap: bool = True
@@ -39,7 +39,7 @@ class StorageConfig(BaseModel):
 
 class QueueConfig(BaseModel):
     type: Literal["memory", "redis"] = "memory"
-    redis_url: str = "redis://192.168.6.41:6379/15"
+    redis_url: str = "redis://redis:6379/15"
     main_queue: str = "xbot:messages"
     reply_queue: str = "xbot:replies"
     event_queue: str = "xbot:events"
@@ -525,3 +525,5 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
     settings = Settings.model_validate(data)
     settings.config_file = path
     return settings
+
+

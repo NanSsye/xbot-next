@@ -6,6 +6,11 @@ import argparse
 import json
 import os
 import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -14,7 +19,7 @@ try:
 except Exception:
     psycopg = None
 
-DEFAULT_DSN = "postgresql://xbot:xbot@host.docker.internal:5433/xbot"
+DEFAULT_DSN = "postgresql://xbot:xbot@host.docker.internal:8549/xbot"
 
 CREDENTIALS_PATH = os.path.expanduser("~/.openclaw/credentials/xbot_db.json")
 
@@ -118,3 +123,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+

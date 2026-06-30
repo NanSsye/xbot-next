@@ -1,4 +1,4 @@
-from xbot.plugins.base import PluginBase
+﻿from xbot.plugins.base import PluginBase
 from xbot.plugins.context import PluginContext
 from xbot.messaging.models import Message, Reply
 try:
@@ -76,9 +76,9 @@ def get_group_member_from_db(group_wxid, member_wxid):
     except Exception:
         return None
 def get_all_contacts(*args, **kwargs):
-    return []
+    return group_members_db_module.get_all_contacts()
 def get_contacts_from_db(*args, **kwargs):
-    return []
+    return group_members_db_module.get_all_contacts()
 
 class group_members_db_module:
     DB_PATH = GROUP_MEMBERS_DB_PATH
@@ -155,6 +155,45 @@ class group_members_db_module:
             )
             conn.commit()
             return True
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_all_contacts():
+        conn = group_members_db_module._connect()
+        try:
+            contacts = {}
+            for row in conn.execute("SELECT wxid, nickname, remark, alias, type FROM contacts"):
+                wxid, nickname, remark, alias, contact_type = row
+                if wxid:
+                    contacts[wxid] = {
+                        "wxid": wxid,
+                        "nickname": nickname or "",
+                        "remark": remark or "",
+                        "alias": alias or "",
+                        "type": contact_type or ("group" if str(wxid).endswith("@chatroom") else "friend"),
+                    }
+            for row in conn.execute(
+                "SELECT group_wxid, member_wxid, nickname, remark, display_name FROM group_members"
+            ):
+                group_wxid, member_wxid, nickname, remark, display_name = row
+                if group_wxid and group_wxid not in contacts:
+                    contacts[group_wxid] = {
+                        "wxid": group_wxid,
+                        "nickname": group_wxid,
+                        "remark": "",
+                        "alias": "",
+                        "type": "group",
+                    }
+                if member_wxid and member_wxid not in contacts:
+                    contacts[member_wxid] = {
+                        "wxid": member_wxid,
+                        "nickname": nickname or display_name or member_wxid,
+                        "remark": remark or "",
+                        "alias": "",
+                        "type": "friend",
+                    }
+            return list(contacts.values())
         finally:
             conn.close()
 
@@ -3558,3 +3597,4 @@ class _InMemoryRequest:
 
 
 OpenClawBridge = OpenClawBridgePlugin
+

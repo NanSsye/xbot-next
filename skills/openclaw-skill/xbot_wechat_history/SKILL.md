@@ -1,4 +1,4 @@
-# xbot WeChat History Skill
+﻿# xbot WeChat History Skill
 
 Use when you need WeChat private/group history from xbot before answering.
 
@@ -36,3 +36,4 @@ python query_history.py --q "关键词" --limit 20
 - Prefer `--conversation` when current chat id is known.
 - Summarize relevant history; do not expose database URL, password, IP, or raw internals to WeChat users.
 - If no results, answer normally and say there is no visible prior context.
+

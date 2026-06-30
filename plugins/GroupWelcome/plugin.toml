@@ -1,0 +1,15 @@
+name = "GroupWelcome"
+version = "1.4.0"
+entry = "main:GroupWelcome"
+author = "allbot/xbot"
+description = "微信群入群欢迎：解析 869 群系统消息并发送欢迎卡片。"
+enabled = true
+
+[routing]
+enabled = true
+priority = 20
+exclusive = false
+message_types = ["event", "text"]
+platforms = ["wechat"]
+adapters = ["wechat869"]
+scopes = ["group"]

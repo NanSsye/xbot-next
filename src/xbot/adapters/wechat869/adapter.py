@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import re
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -30,6 +31,7 @@ SENDER_KEYS = (
 TO_KEYS = ("ToUserName", "to_user_name", "ToWxid", "to_wxid")
 MSG_ID_KEYS = ("MsgId", "msg_id", "NewMsgId", "new_msg_id", "message_id", "id")
 MSG_TYPE_KEYS = ("MsgType", "msg_type", "msgType", "type")
+CREATE_TIME_KEYS = ("CreateTime", "create_time", "createTime", "Createtime")
 MSG_SOURCE_KEYS = ("MsgSource", "msg_source", "msgSource", "message_source")
 GROUP_SENDER_KEYS = ("ActualSender", "actual_sender", "SenderWxid", "sender_wxid", "ChatUser")
 AT_USER_KEYS = ("beAtUser", "BeAtUser", "atUser", "AtUser", "at_user", "AtWxidList", "at_wxid_list")
@@ -222,6 +224,9 @@ class Wechat869Adapter(BaseAdapter):
         raw_scope = "group" if is_group else "private"
         raw["scope"] = raw_scope
         raw["message_id"] = raw_id
+        raw["Content"] = content
+        raw["content"] = clean_content
+        raw["raw_content"] = content
         raw["sender_wxid"] = sender_id or sender or ""
         raw["sender_name"] = sender_name
         raw["conversation_wxid"] = conversation_id or ""
@@ -256,7 +261,23 @@ class Wechat869Adapter(BaseAdapter):
         }
         if raw_id:
             message_data["id"] = raw_id
+        created_at = self._extract_message_time(message)
+        if created_at is not None:
+            message_data["timestamp"] = created_at
         return Message(**message_data)
+
+    def _extract_message_time(self, message: dict[str, Any]) -> datetime | None:
+        raw_value = self._pick_text(message, CREATE_TIME_KEYS)
+        if not raw_value:
+            return None
+        try:
+            ts = float(raw_value)
+            if ts > 10_000_000_000:
+                ts = ts / 1000
+            # 业务要求：数据库直接保存北京时间的无时区 datetime。
+            return datetime.utcfromtimestamp(ts) + timedelta(hours=8)
+        except (TypeError, ValueError, OSError):
+            return None
 
     async def _listen_loop(self) -> None:
         while self.started:
@@ -344,6 +365,8 @@ class Wechat869Adapter(BaseAdapter):
         raw_type = self._pick_int(message.raw, MSG_TYPE_KEYS, default=1)
         if message.raw.get("scope") == "private" and message.sender_id == message.conversation_id and message.sender_id == bot_wxid:
             return True
+        if raw_type in {10000, 10002} and message.raw.get("scope") == "group":
+            return False
         if raw_type in {51, 10000, 10002}:
             return True
         return False
