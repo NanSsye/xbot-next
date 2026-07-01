@@ -21,6 +21,7 @@ class MessageConsumer:
         max_message_tasks: int = 1,
         per_conversation_serial: bool = True,
         max_active_conversations: int = 1000,
+        event_bus=None,
     ) -> None:
         self.dedupe = dedupe
         self.pipeline = pipeline
@@ -33,6 +34,7 @@ class MessageConsumer:
         self._semaphore = asyncio.Semaphore(self.max_message_tasks)
         self._tasks: set[asyncio.Task] = set()
         self._conversation_locks: dict[str, asyncio.Lock] = {}
+        self.event_bus = event_bus
 
     async def handle(self, envelope: MessageEnvelope) -> bool:
         if self.message_store:
@@ -43,6 +45,8 @@ class MessageConsumer:
         message = await self.pipeline.process(envelope.message)
         await self.conversations.touch(message)
         await self.conversations.append_message(message.conversation_id, message)
+        if self.event_bus:
+            await self.event_bus.publish("message.created", {"message": message.model_dump(mode="json")})
         try:
             await self.engine.dispatch_message(message)
         except Exception as exc:

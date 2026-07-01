@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+SC:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --card-width: 920px;
+        --bg-page: #f2f2f7;
+        --card-bg: #ffffff;
+        
+        --text: #1d1d1f;
+        --muted: #86868b;
+        --faint: #c7c7cc;
+        --border: #e5e5ea;
+        
+        --accent: #0071e3;
+        --accent-bg: rgba(0, 113, 227, 0.08);
+
+        --shadow: 0 20px 40px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0,0,0,0.02);
+        
+        --font-body: "IBM Plex Sans SC", system-ui, -apple-system, sans-serif;
+        --font-mono: "JetBrains Mono", monospace;
+
+        --r-lg: 24px;
+        --r-md: 16px;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+
+      body {
+        margin: 0;
+        padding: 24px 20px;
+        color: var(--text);
+        font-family: var(--font-body);
+        background: var(--bg-page);
+      }
+
+      #card {
+        width: 100%;
+        max-width: var(--card-width);
+        margin: 0 auto;
+        background: var(--card-bg);
+        border-radius: var(--r-lg);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        border: 1px solid rgba(0,0,0,0.04);
+      }
+
+      .signal {
+        height: 6px;
+        background: linear-gradient(90deg, #34c759, #5ac8fa, #007aff);
+      }
+
+      .frame { padding: 26px 28px; }
+
+      .top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+      }
+
+      .kicker {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--accent);
+        letter-spacing: 0.05em;
+        font-weight: 600;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      
+      .kicker .dot {
+        width: 6px; height: 6px;
+        background: var(--accent);
+        border-radius: 50%;
+      }
+
+      .title {
+        font-size: 42px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin: 0 0 6px 0;
+        color: var(--text);
+      }
+
+      .subtitle {
+        margin: 0;
+        font-size: 16px;
+        color: var(--muted);
+      }
+
+      .meta {
+        text-align: right;
+        font-family: var(--font-mono);
+        font-size: 14px;
+        color: var(--muted);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .meta .group {
+        font-family: var(--font-body);
+        font-weight: 600;
+        color: var(--text);
+        font-size: 16px;
+        background: var(--bg-page);
+        padding: 4px 12px;
+        border-radius: 8px;
+      }
+
+      .divider {
+        height: 1px;
+        background: var(--border);
+        margin: 18px 0;
+      }
+
+      .vibe {
+        background: var(--accent-bg);
+        border-radius: var(--r-md);
+        padding: 14px 20px;
+        position: relative;
+        border: 1px solid rgba(0, 113, 227, 0.15);
+      }
+
+      .vibe p {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.6;
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 16px;
+      }
+
+      .panel {
+        background: #fafafa;
+        border-radius: var(--r-md);
+        padding: 14px;
+        border: 1px solid var(--border);
+      }
+
+      .panel__hd {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .panel__title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .panel__hint {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .speakers {
+        list-style: none; padding: 0; margin: 0;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+
+      .speaker {
+        display: flex; justify-content: space-between; align-items: center;
+        background: #fff;
+        padding: 10px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+      }
+
+      .speaker__left { display: flex; align-items: center; gap: 12px; }
+
+      .rank {
+        width: 24px; height: 24px;
+        background: var(--bg-page);
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px; font-weight: 600; color: var(--muted);
+      }
+
+      .name { font-size: 14px; font-weight: 500; }
+      .count { font-size: 13px; color: var(--muted); font-family: var(--font-mono); }
+
+      .tips {
+        margin: 0; font-size: 14px; line-height: 1.8; color: var(--muted);
+      }
+
+      .overview-greeting {
+        font-size: 18px; font-weight: 700; color: var(--accent); margin: 0 0 8px 0;
+      }
+      .overview-date {
+        font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin: 0 0 10px 0; letter-spacing: 0.04em;
+      }
+      .overview-stats {
+        font-size: 14px; line-height: 1.7; color: var(--muted); margin: 0 0 10px 0;
+      }
+      .overview-stats .highlight { color: var(--accent); font-weight: 600; }
+      .overview-quote {
+        font-size: 13px; line-height: 1.6; color: var(--muted); margin: 8px 0 0 0;
+        padding-top: 8px; border-top: 1px dashed var(--border); font-style: italic;
+      }
+      .overview-nightowl { font-size: 13px; color: #ff9500; margin: 8px 0 0 0; font-weight: 500; }
+
+      .topics { margin-top: 18px; }
+
+      .topics__hd {
+        margin-bottom: 12px;
+        display: flex; align-items: baseline; justify-content: space-between;
+      }
+      .topics__title { margin: 0; font-size: 22px; font-weight: 700; }
+      .topics__sub { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+
+      .topic {
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: var(--r-md);
+        padding: 14px 16px;
+        display: grid;
+        grid-template-columns: 70px 1fr;
+        gap: 14px;
+        margin-bottom: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.02);
+      }
+
+      .topic__left { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+
+      .topic__index {
+        width: 48px; height: 48px;
+        background: var(--bg-page);
+        border-radius: 14px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 20px; font-weight: 700; color: var(--accent);
+      }
+
+      .topic__heat { display: flex; gap: 2px; }
+      .flame { font-size: 14px; line-height: 1; font-family: "Segoe UI Emoji", "Apple Color Emoji", sans-serif; }
+
+      .topic__title { margin: 0 0 8px 0; font-size: 19px; font-weight: 600; line-height: 1.25; }
+      
+      .topic__meta { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+      .pill {
+        background: var(--bg-page);
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--muted);
+        font-family: var(--font-mono);
+      }
+
+      .topic__process { margin: 0 0 8px 0; font-size: 15px; line-height: 1.6; color: #333; }
+      .topic__rating { margin: 0; font-size: 14px; color: var(--accent); font-weight: 500; background: var(--accent-bg); padding: 8px 12px; border-radius: 8px; }
+
+      .footer {
+        padding: 14px 28px;
+        background: #fafafa;
+        border-top: 1px solid var(--border);
+        display: flex; justify-content: space-between; align-items: center;
+      }
+
+      .header { display: flex; align-items: center; gap: 10px; }
+      .logo { width: 28px; height: 28px; border-radius: 8px; }
+      .brand-name { font-weight: 600; font-size: 14px; color: var(--text); }
+      .footer__note { font-size: 12px; color: var(--muted); font-family: var(--font-mono); }
+    </style>
+  </head>
+  <body>
+    <div id="card">
+      <div class="signal"></div>
+      <div class="frame">
+        <div class="top">
+          <div class="brand">
+            <div class="kicker"><span class="dot"></span> GROUP CHAT DAILY BRIEF</div>
+            <h1 class="title">群聊总结</h1>
+            <p class="subtitle">把今天的"吵点 / 知识点 / 梗点"压缩成一张卡片。</p>
+          </div>
+          <div class="meta">
+            <div class="date">日期：{{report_date}}</div>
+            <div class="group">{{group_name}}</div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="vibe">
+          <p>{{vibe_line}}</p>
+        </div>
+
+        <div class="row">
+          <div class="panel">
+            <div class="panel__hd">
+              <h3 class="panel__title">Top 发言者</h3>
+              <div class="panel__hint">MOST ACTIVE</div>
+            </div>
+            <ul class="speakers">{{top_speakers_html}}</ul>
+          </div>
+
+          <div class="panel">
+            <div class="panel__hd">
+              <h3 class="panel__title">群聊速览</h3>
+            </div>
+            {{overview_html}}
+          </div>
+        </div>
+
+        <div class="topics">
+          <div class="topics__hd">
+            <h2 class="topics__title">今日话题</h2>
+            <div class="topics__sub">TOPICS / TIMELINE</div>
+          </div>
+          <div>{{topics_html}}</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="footer__note">{{footer_note}}</div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -15,6 +15,10 @@ import type {
   SkillInfo,
   SystemStatus,
   IlinkQrCode,
+  WechatConversation,
+  WechatMember,
+  WechatMessage,
+  WechatUserDetail,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_XBOT_API_BASE ?? "/api/v1";
@@ -44,12 +48,12 @@ export function clearApiToken(): void {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getApiToken();
   const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
     headers: {
-      "content-type": "application/json",
+      ...(!(init?.body instanceof FormData) ? { "content-type": "application/json" } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
-    ...init,
   });
   if (!response.ok) {
     const text = await response.text();
@@ -90,6 +94,26 @@ export const api = {
   conversations: (limit = 100) => request<Conversation[]>(`/conversations?limit=${limit}`),
   messages: (conversationId: string, limit = 80) =>
     request<Message[]>(`/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`),
+  wechatConversations: (limit = 100) => request<WechatConversation[]>(`/wechat/conversations?limit=${limit}`),
+  wechatMessages: (conversationId: string, limit = 200) =>
+    request<WechatMessage[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`),
+  wechatMembers: (conversationId: string) =>
+    request<WechatMember[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/members`),
+  wechatUsers: (limit = 500, q = "") =>
+    request<WechatUserDetail[]>(`/wechat/users?limit=${limit}&q=${encodeURIComponent(q)}`),
+  wechatUser: (userId: string, conversationId?: string) => {
+    const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
+    return request<WechatUserDetail>(`/wechat/users/${encodeURIComponent(userId)}${query}`);
+  },
+  updateWechatProfile: (userId: string, payload: { conversation_id?: string | null; summary: string; tags: string[] }) =>
+    request<WechatUserDetail>(`/wechat/users/${encodeURIComponent(userId)}/profile`, { method: "PUT", body: JSON.stringify(payload) }),
+  sendWechatMessage: (conversationId: string, payload: { text?: string; file?: File | null }) => {
+    const form = new FormData();
+    form.set("text", payload.text ?? "");
+    if (payload.file) form.set("file", payload.file);
+    return request<WechatMessage>(`/wechat/conversations/${encodeURIComponent(conversationId)}/send`, { method: "POST", body: form });
+  },
+  syncWechatMetadata: () => request<Record<string, number>>("/wechat/sync", { method: "POST" }),
   deleteConversation: (conversationId: string) =>
     request(`/conversations/${encodeURIComponent(conversationId)}`, { method: "DELETE" }),
   sendAgentTask: (input: string, source: string) =>

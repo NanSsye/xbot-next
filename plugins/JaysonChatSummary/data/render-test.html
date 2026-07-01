@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+SC:wght@200;400;600;700&family=JetBrains+Mono:wght@200;400;700&family=Space+Grotesk:wght@300;500;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      :root {
+        --card-width: 920px;
+        --bg-0: #07080d;
+        --bg-1: #0b1020;
+        --panel: rgba(12, 16, 28, 0.78);
+        --panel-strong: rgba(12, 16, 28, 0.92);
+        --border: rgba(255, 255, 255, 0.10);
+
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.62);
+        --faint: rgba(255, 255, 255, 0.44);
+
+        --a-cyan: #35f6ff;
+        --a-lime: #9dff5b;
+        --a-violet: #b197ff;
+        --a-amber: #ffce3a;
+
+        --shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
+
+        --font-title: "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-body: "IBM Plex Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+        --r-lg: 26px;
+        --r-md: 16px;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+
+      body {
+        margin: 0;
+        padding: 38px 28px 44px;
+        color: var(--text);
+        font-family: var(--font-body);
+        background:
+          radial-gradient(1200px 720px at 8% 10%, rgba(53, 246, 255, 0.18), transparent 60%),
+          radial-gradient(900px 640px at 92% 22%, rgba(177, 151, 255, 0.18), transparent 60%),
+          radial-gradient(920px 560px at 40% 92%, rgba(157, 255, 91, 0.12), transparent 55%),
+          linear-gradient(180deg, var(--bg-0), var(--bg-1));
+        overflow-x: hidden;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.09;
+        mix-blend-mode: overlay;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E");
+      }
+
+      body::after {
+        content: "";
+        position: fixed;
+        inset: -2px;
+        pointer-events: none;
+        opacity: 0.22;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+        background-size: 44px 44px;
+        mask-image: radial-gradient(900px 620px at 50% 22%, #000 55%, transparent 100%);
+      }
+
+      #card {
+        width: 100%;
+        max-width: var(--card-width);
+        margin: 0 auto;
+        border-radius: var(--r-lg);
+        background: linear-gradient(180deg, var(--panel-strong), var(--panel));
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        position: relative;
+      }
+
+      .signal {
+        height: 10px;
+        background: linear-gradient(90deg, var(--a-cyan), var(--a-violet), var(--a-lime));
+        filter: saturate(115%);
+      }
+
+      .frame { padding: 26px 28px 28px; }
+
+      .top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .brand { display: grid; gap: 10px; }
+
+      .kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-family: var(--font-mono);
+        font-size: 14px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .kicker .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--a-cyan);
+        box-shadow: 0 0 0 4px rgba(53, 246, 255, 0.14);
+        animation: pulse 1.8s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0% { transform: scale(0.86); opacity: 0.65; }
+        50% { transform: scale(1.08); opacity: 1; }
+        100% { transform: scale(0.86); opacity: 0.65; }
+      }
+
+      .title {
+        font-family: var(--font-title);
+        font-weight: 700;
+        font-size: 52px;
+        letter-spacing: -0.03em;
+        line-height: 1.02;
+        margin: 0;
+      }
+
+      .subtitle {
+        margin: 0;
+        font-size: 18px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .meta {
+        display: grid;
+        gap: 10px;
+        text-align: right;
+        padding-top: 2px;
+      }
+
+      .meta .date {
+        font-family: var(--font-mono);
+        color: var(--text);
+        font-size: 14px;
+        opacity: 0.92;
+      }
+
+      .meta .group {
+        font-family: var(--font-title);
+        font-weight: 500;
+        font-size: 16px;
+        color: var(--a-cyan);
+        letter-spacing: 0.02em;
+      }
+
+      .divider {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+        margin: 20px 0;
+      }
+
+      .vibe {
+        position: relative;
+        border-radius: var(--r-md);
+        border: 1px solid rgba(53, 246, 255, 0.22);
+        background:
+          radial-gradient(500px 220px at 12% 20%, rgba(53, 246, 255, 0.13), transparent 55%),
+          radial-gradient(520px 260px at 88% 70%, rgba(177, 151, 255, 0.10), transparent 55%),
+          rgba(0, 0, 0, 0.18);
+        padding: 16px;
+        overflow: hidden;
+      }
+
+      .vibe::before {
+        content: "VIBE";
+        position: absolute;
+        right: 14px;
+        top: 10px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        letter-spacing: 0.22em;
+        color: rgba(255, 255, 255, 0.18);
+      }
+
+      .vibe p {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.7;
+        color: var(--text);
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 16px;
+        margin-top: 16px;
+      }
+
+      .panel {
+        border-radius: var(--r-md);
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.18);
+        padding: 14px 14px 12px;
+      }
+
+      .panel__hd {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .panel__title {
+        margin: 0;
+        font-family: var(--font-title);
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .panel__hint {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--faint);
+        letter-spacing: 0.06em;
+      }
+
+      .speakers {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 8px;
+      }
+
+      .speaker {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .speaker__left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .rank {
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        background: rgba(53, 246, 255, 0.14);
+        border: 1px solid rgba(53, 246, 255, 0.38);
+        color: var(--a-cyan);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 26px;
+      }
+
+      .name {
+        font-size: 14px;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 220px;
+      }
+
+      .count {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .tips {
+        font-size: 14px;
+        line-height: 1.55;
+        color: var(--muted);
+        margin: 0;
+      }
+
+      .overview-greeting {
+        font-family: var(--font-title);
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--a-cyan);
+        margin: 0 0 8px 0;
+      }
+
+      .overview-date {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--faint);
+        margin: 0 0 10px 0;
+        letter-spacing: 0.04em;
+      }
+
+      .overview-stats {
+        font-size: 14px;
+        line-height: 1.7;
+        color: var(--muted);
+        margin: 0 0 10px 0;
+      }
+
+      .overview-stats .highlight {
+        color: var(--a-lime);
+        font-weight: 600;
+      }
+
+      .overview-quote {
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--faint);
+        margin: 8px 0 0 0;
+        padding-top: 8px;
+        border-top: 1px dashed rgba(255, 255, 255, 0.12);
+        font-style: italic;
+      }
+
+      .overview-nightowl {
+        font-size: 13px;
+        color: var(--a-amber);
+        margin: 8px 0 0 0;
+      }
+
+      .topics { margin-top: 18px; }
+
+      .topics__hd {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 12px;
+      }
+
+      .topics__title {
+        margin: 0;
+        font-family: var(--font-title);
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+
+      .topics__sub {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--faint);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .topic {
+        --topic-accent: var(--a-cyan);
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 14px;
+        padding: 16px 14px;
+        border-radius: var(--r-md);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        background:
+          radial-gradient(520px 220px at 18% 22%, color-mix(in srgb, var(--topic-accent) 18%, transparent), transparent 60%),
+          rgba(0, 0, 0, 0.22);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .topic + .topic { margin-top: 12px; }
+
+      .topic__left {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+      }
+
+      .topic__index {
+        width: 56px;
+        height: 56px;
+        border-radius: 18px;
+        border: 1px solid color-mix(in srgb, var(--topic-accent) 50%, transparent);
+        background: color-mix(in srgb, var(--topic-accent) 14%, rgba(0, 0, 0, 0.35));
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+        display: grid;
+        place-items: center;
+        font-family: var(--font-title);
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--topic-accent);
+      }
+
+      .topic__heat {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+        padding-left: 2px;
+        opacity: 0.98;
+      }
+
+      .flame {
+        font-size: 16px;
+        line-height: 1;
+        font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+        filter: drop-shadow(0 6px 12px rgba(255, 206, 58, 0.16));
+      }
+      .topic__title {
+        font-family: var(--font-title);
+        font-weight: 700;
+        font-size: 22px;
+        letter-spacing: -0.01em;
+        line-height: 1.2;
+        margin: 0 0 10px 0;
+      }
+
+      .topic__meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        background: rgba(255, 255, 255, 0.04);
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .topic__process {
+        font-size: 16px;
+        line-height: 1.75;
+        color: rgba(255, 255, 255, 0.86);
+        margin: 0 0 10px 0;
+      }
+
+      .topic__rating {
+        font-size: 14px;
+        line-height: 1.6;
+        color: var(--muted);
+        margin: 0;
+        padding-top: 8px;
+        border-top: 1px dashed rgba(255, 255, 255, 0.16);
+      }
+
+      .footer {
+        padding: 14px 28px 18px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: rgba(0, 0, 0, 0.14);
+      }
+
+      .footer__left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .logo {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        object-fit: cover;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 16px 30px rgba(0, 0, 0, 0.32);
+      }
+
+      .brand-name {
+        font-family: var(--font-title);
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        color: rgba(255, 255, 255, 0.86);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 520px;
+      }
+
+      .badge {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background:
+          radial-gradient(14px 14px at 30% 30%, rgba(53, 246, 255, 0.35), transparent 55%),
+          radial-gradient(18px 18px at 70% 72%, rgba(157, 255, 91, 0.22), transparent 60%),
+          rgba(255, 255, 255, 0.04);
+        box-shadow: 0 16px 30px rgba(0, 0, 0, 0.32);
+      }
+
+      .footer__brand {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .footer__brand strong {
+        font-family: var(--font-title);
+        font-size: 14px;
+        letter-spacing: 0.01em;
+      }
+
+      .footer__brand span {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--faint);
+        letter-spacing: 0.08em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 520px;
+      }
+
+      .footer__note {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.30);
+        letter-spacing: 0.06em;
+        text-align: right;
+      }
+
+      .stagger { opacity: 1; transform: translateY(0); }
+    </style>
+  </head>
+
+  <body>
+    <div id="card">
+      <div class="signal"></div>
+
+      <div class="frame">
+        <div class="top">
+          <div class="brand">
+            <div class="kicker stagger d1"><span class="dot"></span> GROUP CHAT DAILY BRIEF</div>
+            <h1 class="title stagger d2">群聊总结</h1>
+            <p class="subtitle stagger d3">把今天的"吵点 / 知识点 / 梗点"压缩成一张卡片。</p>
+          </div>
+
+          <div class="meta stagger d2">
+            <div class="date">日期：2026年07月01日，星期三</div>
+            <div class="group">群聊：人工智能技术测试</div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="vibe stagger d2">
+          <p>技术创业者群聊，讨论AI系统开发、创业经历与商业模式，氛围轻松互相调侃</p>
+        </div>
+
+        <div class="row">
+          <div class="panel stagger d3">
+            <div class="panel__hd">
+              <h3 class="panel__title">Top 发言者</h3>
+              <div class="panel__hint">MOST ACTIVE</div>
+            </div>
+            <ul class="speakers"><li class='speaker'><div class='speaker__left'><span class='rank'>1</span><span class='name'>禅落</span></div><span class='count'>8 msgs</span></li><li class='speaker'><div class='speaker__left'><span class='rank'>2</span><span class='name'>NCYXF</span></div><span class='count'>8 msgs</span></li><li class='speaker'><div class='speaker__left'><span class='rank'>3</span><span class='name'>Interesting Sou</span></div><span class='count'>8 msgs</span></li><li class='speaker'><div class='speaker__left'><span class='rank'>4</span><span class='name'>小球子</span></div><span class='count'>8 msgs</span></li><li class='speaker'><div class='speaker__left'><span class='rank'>5</span><span class='name'>xxx</span></div><span class='count'>8 msgs</span></li></ul>
+          </div>
+
+          <div class="panel stagger d3">
+            <div class="panel__hd">
+              <h3 class="panel__title">群聊速览</h3>
+            </div>
+            <p class='overview-greeting'>下午好，</p><p class='overview-date'>2026年07月01日</p><p class='overview-stats'>最近 24 小时，群内共有 <b>5</b> 人参与，沉淀 <b>40</b> 条可总结消息。</p><p class='overview-quote'>「仅总结，不代表观点」</p>
+          </div>
+        </div>
+
+        <div class="topics">
+          <div class="topics__hd stagger d3">
+            <h2 class="topics__title">今日话题</h2>
+            <div class="topics__sub">TOPICS / TIMELINE</div>
+          </div>
+          <div class="stagger d4"><section class='topic' style='--topic-accent:#22c55e'><div class='topic__left'><div class='topic__index'>1</div><div class='topic__heat'><span class='flame'>🔥</span> <span class='flame'>🔥</span> <span class='flame'>🔥</span> <span class='flame'>🔥</span></div></div><div class='topic__main'><h3 class='topic__title'>xbot系统开发与收费模式讨论</h3><div class='topic__meta'><span class='pill'>Time&nbsp; 15:20-18:40</span><span class='pill'>People&nbsp; 小球子 / 禅落 / Interesting Sou</span></div><p class='topic__process'>大家讨论系统功能、客户管理、标签、群管理以及手机端适配，产品商业化思路逐渐清晰。</p><p class='topic__rating'><b>评价：</b>技术交流氛围好，产品商业化思路清晰</p></div></section></div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="footer__left"></div>
+        <div class="footer__note">最近 24 小时 · 40 条记录 · 11:46-12:25 · 12:25 生成</div>
+      </div>
+    </div>
+  </body>
+</html>

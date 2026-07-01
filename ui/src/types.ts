@@ -66,6 +66,8 @@ export type Conversation = {
   scope: string;
   raw_id: string;
   title?: string | null;
+  avatar_url?: string | null;
+  avatar_members?: string[];
   created_at: string;
   updated_at: string;
 };
@@ -215,4 +217,57 @@ export type AgentMemoryInfo = {
   kind: string;
   summary: string;
   created_at: string;
+};
+
+
+export type WechatAttachment = {
+  id: number;
+  message_id: string;
+  conversation_id: string;
+  sender_id: string;
+  kind: string;
+  filename?: string | null;
+  mime?: string | null;
+  size: number;
+  local_path?: string | null;
+  url?: string | null;
+  sha256?: string | null;
+  download_status: string;
+  quoted: boolean;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type WechatMessage = Message & {
+  attachments: WechatAttachment[];
+  sender_avatar_url?: string | null;
+};
+
+export type WechatConversation = Conversation & {
+  message_count: number;
+  avatar_members?: string[];
+  last_message?: WechatMessage | null;
+};
+
+export type WechatMember = {
+  user_id: string;
+  nickname: string;
+  remark?: string | null;
+  avatar_url?: string | null;
+  conversation_id?: string;
+  message_count: number;
+  last_active_at?: string | null;
+};
+
+export type WechatUserDetail = {
+  contact: {
+    user_id: string;
+    nickname: string;
+    remark?: string | null;
+    avatar_url?: string | null;
+  };
+  stats: { message_count: number; image_count: number };
+  profile: { summary: string; tags: string[]; updated_at?: string | null };
+  recent_messages: WechatMessage[];
+  images: WechatAttachment[];
 };

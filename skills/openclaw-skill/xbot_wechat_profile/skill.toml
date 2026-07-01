@@ -1,0 +1,7 @@
+name = "xbot_wechat_profile"
+version = "0.1.0"
+description = "Read xbot WeChat history and save AI-generated user persona/tags into user_profiles."
+enabled = true
+
+[tools]
+required = ["shell"]

@@ -11,10 +11,16 @@ class EventBus:
     def __init__(self) -> None:
         self._handlers: dict[str, list[EventHandler]] = defaultdict(list)
 
-    def subscribe(self, event_type: str, handler: EventHandler) -> None:
+    def subscribe(self, event_type: str, handler: EventHandler):
         self._handlers[event_type].append(handler)
+        def unsubscribe() -> None:
+            try:
+                self._handlers[event_type].remove(handler)
+            except ValueError:
+                pass
+        return unsubscribe
 
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
-        for handler in self._handlers.get(event_type, []):
+        for handler in list(self._handlers.get(event_type, [])):
             await handler(payload)
 

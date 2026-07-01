@@ -17,6 +17,7 @@ class Conversation(BaseModel):
     scope: ConversationScope = "private"
     raw_id: str
     title: str | None = None
+    avatar_url: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

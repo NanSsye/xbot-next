@@ -32,7 +32,7 @@ class InMemoryConversationStore:
         existing = self.conversations.get(conversation_id)
         if existing:
             existing.updated_at = datetime.utcnow()
-            if title:
+            if title and title != raw_id:
                 existing.title = title
             return existing
         conversation = Conversation(

@@ -5,8 +5,9 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_PLAYWRIGHT: ${INSTALL_PLAYWRIGHT:-false}
-        APT_MIRROR: ${APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        # 固定阿里 Debian 源，避免宿主机 APT_MIRROR 环境变量把构建覆盖回清华源导致 403。
+        APT_MIRROR: https://mirrors.aliyun.com/debian
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -20,7 +21,8 @@ services:
       # 这样修改宿主机 .env 后，只需 docker compose restart xbot 即可生效。
       XBOT_SERVER_HOST: 0.0.0.0
       XBOT_DOCKER_INSTALL_DEPS_ON_START: "false"
-      XBOT_DOCKER_BUILD_UI_ON_START: "false"
+      # 项目目录挂载会覆盖镜像内 ui/dist；开启后改前端代码只需重启容器，hash 未变不会重复构建。
+      XBOT_DOCKER_BUILD_UI_ON_START: "true"
       TZ: Asia/Shanghai
     ports:
       - "8548:8548"

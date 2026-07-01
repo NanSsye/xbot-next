@@ -134,6 +134,7 @@ def build_context(settings: Settings) -> AppContext:
         max_message_tasks=settings.runtime.concurrency.max_message_tasks,
         per_conversation_serial=settings.conversation.concurrency.per_conversation_serial,
         max_active_conversations=settings.conversation.concurrency.max_active_conversations,
+        event_bus=events,
     )
     engine.attach_messaging(consumer=consumer, queue=message_queue)
     return AppContext(

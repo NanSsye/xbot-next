@@ -30,7 +30,7 @@ class ConversationManager:
             adapter=message.adapter,
             scope=scope,
             raw_id=raw_id,
-            title=message.sender_name,
+            title=None,
         )
         if self.repository_provider:
             async with self.repository_provider() as repo:

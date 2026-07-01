@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --card-width: 920px;
+        --bg-page: #d9d4c9;
+        --card-bg: #f4f1ea;
+
+        --text: #1a1a1a;
+        --muted: #555555;
+        --border: #1a1a1a;
+
+        --accent: #d9381e;
+
+        --font-serif: "Noto Serif SC", Georgia, serif;
+        --font-mono: "Space Mono", monospace;
+        --font-sans: system-ui, -apple-system, sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+
+      body {
+        margin: 0;
+        padding: 24px 20px;
+        color: var(--text);
+        font-family: var(--font-serif);
+        background: var(--bg-page);
+        background-image: radial-gradient(#1a1a1a 1px, transparent 1px);
+        background-size: 20px 20px;
+        background-color: var(--bg-page);
+      }
+
+      #card {
+        width: 100%;
+        max-width: var(--card-width);
+        margin: 0 auto;
+        background: var(--card-bg);
+        border: 3px solid var(--border);
+        border-right-width: 12px;
+        border-bottom-width: 12px;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .frame { padding: 28px 30px; }
+
+      .top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        border-bottom: 4px solid var(--border);
+        padding-bottom: 14px;
+        margin-bottom: 18px;
+      }
+
+      .brand { max-width: 60%; }
+
+      .kicker {
+        font-family: var(--font-mono);
+        font-size: 14px;
+        font-weight: 700;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+        display: inline-block;
+        background: var(--text);
+        color: var(--card-bg);
+        padding: 4px 8px;
+      }
+
+      .title {
+        font-size: 46px;
+        font-weight: 900;
+        margin: 0 0 8px 0;
+        line-height: 1;
+        letter-spacing: 2px;
+      }
+
+      .subtitle {
+        margin: 0;
+        font-size: 16px;
+        font-family: var(--font-sans);
+        color: var(--muted);
+      }
+
+      .meta {
+        text-align: right;
+        font-family: var(--font-mono);
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .meta .date { margin-bottom: 8px; }
+      .meta .group { font-size: 18px; color: var(--accent); text-decoration: underline; text-underline-offset: 4px; }
+
+      .vibe {
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1.6;
+        padding: 14px 18px;
+        border: 2px dashed var(--border);
+        margin-bottom: 18px;
+        text-align: center;
+        background: rgba(0,0,0,0.03);
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        margin-bottom: 22px;
+      }
+
+      .panel__hd {
+        border-bottom: 2px solid var(--border);
+        padding-bottom: 6px;
+        margin-bottom: 12px;
+        display: flex; justify-content: space-between; align-items: baseline;
+      }
+
+      .panel__title { margin: 0; font-size: 18px; font-weight: 900; }
+      .panel__hint { font-family: var(--font-mono); font-size: 12px; font-weight: 700; }
+
+      .speakers { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+      .speaker {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 8px 0; border-bottom: 1px dotted var(--muted);
+      }
+      .speaker__left { display: flex; align-items: center; gap: 12px; }
+      .rank {
+        font-family: var(--font-mono); font-weight: 700; font-size: 16px;
+        width: 24px; text-align: center; color: var(--accent);
+      }
+      .name { font-family: var(--font-sans); font-weight: 600; font-size: 15px; }
+      .count { font-family: var(--font-mono); font-size: 14px; }
+
+      .tips { margin: 0; font-family: var(--font-sans); font-size: 14px; line-height: 1.7; }
+
+      .overview-greeting {
+        font-family: var(--font-serif); font-size: 18px; font-weight: 900; color: var(--accent); margin: 0 0 8px 0;
+      }
+      .overview-date {
+        font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin: 0 0 10px 0; letter-spacing: 0.04em;
+      }
+      .overview-stats {
+        font-family: var(--font-sans); font-size: 14px; line-height: 1.7; color: var(--muted); margin: 0 0 10px 0;
+      }
+      .overview-stats .highlight { color: var(--accent); font-weight: 700; }
+      .overview-quote {
+        font-family: var(--font-serif); font-size: 13px; line-height: 1.6; color: var(--muted); margin: 8px 0 0 0;
+        padding-top: 8px; border-top: 2px dotted var(--muted); font-style: italic;
+      }
+      .overview-nightowl { font-family: var(--font-sans); font-size: 13px; color: var(--accent); margin: 8px 0 0 0; font-weight: 700; }
+
+      .topics__hd {
+        border-bottom: 4px solid var(--border);
+        padding-bottom: 8px; margin-bottom: 14px;
+        display: flex; justify-content: space-between; align-items: baseline;
+      }
+      .topics__title { margin: 0; font-size: 24px; font-weight: 900; }
+      .topics__sub { font-family: var(--font-mono); font-weight: 700; }
+
+      .topic {
+        border: 2px solid var(--border);
+        border-right-width: 5px;
+        border-bottom-width: 5px;
+        padding: 16px;
+        margin-bottom: 12px;
+        display: flex;
+        gap: 16px;
+        background: #fff;
+      }
+
+      .topic__left { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 52px; flex-shrink: 0; }
+      .topic__index {
+        width: 40px; height: 40px;
+        background: var(--border); color: var(--card-bg);
+        display: flex; align-items: center; justify-content: center;
+        font-family: var(--font-mono); font-size: 20px; font-weight: 700;
+        border-radius: 50%;
+      }
+      .topic__heat { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; }
+      .flame { font-size: 16px; line-height: 1; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+
+      .topic__body { flex-grow: 1; min-width: 0; }
+      .topic__title { margin: 0 0 8px 0; font-size: 20px; font-weight: 900; }
+
+      .topic__meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; font-family: var(--font-mono); font-size: 12px; }
+      .pill { border: 1px solid var(--border); padding: 4px 8px; font-weight: 700; text-transform: uppercase; }
+
+      .topic__process { margin: 0 0 10px 0; font-family: var(--font-sans); font-size: 15px; line-height: 1.65; }
+      .topic__rating {
+        margin: 0; font-size: 15px; font-weight: 700; color: var(--accent);
+        border-top: 2px dotted var(--border); padding-top: 8px;
+      }
+
+      .footer {
+        border-top: 4px solid var(--border);
+        padding: 14px 30px;
+        display: flex; justify-content: space-between; align-items: center;
+        background: var(--border); color: var(--card-bg);
+      }
+      .header { display: flex; align-items: center; gap: 12px; }
+      .logo { width: 32px; height: 32px; filter: grayscale(100%) contrast(120%); border: 2px solid var(--card-bg); }
+      .brand-name { font-family: var(--font-mono); font-weight: 700; font-size: 16px; }
+      .footer__note { font-family: var(--font-mono); font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div id="card">
+      <div class="frame">
+        <div class="top">
+          <div class="brand">
+            <div class="kicker">Daily Brief</div>
+            <h1 class="title">群聊总结</h1>
+            <p class="subtitle">把今天的"吵点 / 知识点 / 梗点"压缩成一张卡片。</p>
+          </div>
+          <div class="meta">
+            <div class="date">{{report_date}}</div>
+            <div class="group">{{group_name}}</div>
+          </div>
+        </div>
+
+        <div class="vibe">{{vibe_line}}</div>
+
+        <div class="row">
+          <div class="panel">
+            <div class="panel__hd">
+              <h3 class="panel__title">Top 发言者</h3>
+              <div class="panel__hint">ACTIVE</div>
+            </div>
+            <ul class="speakers">{{top_speakers_html}}</ul>
+          </div>
+
+          <div class="panel">
+            <div class="panel__hd">
+              <h3 class="panel__title">群聊速览</h3>
+            </div>
+            {{overview_html}}
+          </div>
+        </div>
+
+        <div class="topics">
+          <div class="topics__hd">
+            <h2 class="topics__title">今日话题</h2>
+            <div class="topics__sub">TIMELINE</div>
+          </div>
+          <div>{{topics_html}}</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="footer__note">{{footer_note}}</div>
+      </div>
+    </div>
+  </body>
+</html>

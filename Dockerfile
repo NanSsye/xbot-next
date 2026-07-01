@@ -12,7 +12,7 @@ ARG APT_MIRROR=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=localhost,127.0.0.1
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 WORKDIR /app
@@ -45,9 +45,8 @@ COPY ui ./ui
 COPY docker/entrypoint.sh /usr/local/bin/xbot-docker-entrypoint
 
 RUN chmod +x /usr/local/bin/xbot-docker-entrypoint \
-    && python -m pip install -i "$PIP_INDEX_URL" --upgrade pip \
-    && python -m pip install -i "$PIP_INDEX_URL" -e . \
-    && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then python -m pip install -i "$PIP_INDEX_URL" -e ".[browser]" && python -m playwright install --with-deps chromium; fi \
+    && python -m pip install --no-build-isolation -i "$PIP_INDEX_URL" -e . \
+    && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then python -m pip install --no-build-isolation -i "$PIP_INDEX_URL" -e ".[browser]" && python -m playwright install --with-deps chromium; fi \
     && cd /app/ui \
     && npm config set registry "$NPM_REGISTRY" \
     && npm ci \

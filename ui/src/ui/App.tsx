@@ -9,6 +9,7 @@ import {
   FileText,
   KeyRound,
   LogIn,
+  ShieldAlert,
   Monitor,
   MessagesSquare,
   Moon,
@@ -25,10 +26,11 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  Users,
   Wrench,
   XCircle,
 } from "lucide-react";
-import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiBase, clearApiToken, getApiToken, setApiToken, wsUrl } from "../api";
 import type {
   AdapterInfo,
@@ -49,9 +51,13 @@ import type {
   SkillInfo,
   SystemStatus,
   UiEvent,
+  WechatConversation,
+  WechatMember,
+  WechatMessage,
+  WechatUserDetail,
 } from "../types";
 
-type View = "agentChat" | "chat" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
+type View = "agentChat" | "chat" | "wechat" | "profiles" | "groupOps" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
 type DeliveryMode = "console" | "channel";
 type ThemeMode = "system" | "light" | "dark";
 type ConsoleMessage = {
@@ -61,9 +67,14 @@ type ConsoleMessage = {
   created_at: string;
 };
 
+const QUICK_EMOJIS = ["😀", "😂", "😊", "😍", "😭", "😅", "👍", "🙏", "🎉", "🔥", "玫瑰", "强", "握手", "OK"];
+
 const navItems: Array<{ id: View; label: string; icon: typeof MessagesSquare }> = [
   { id: "agentChat", label: "Agent 对话", icon: Bot },
   { id: "chat", label: "对话", icon: MessagesSquare },
+  { id: "wechat", label: "微信", icon: MessagesSquare },
+  { id: "profiles", label: "画像", icon: Users },
+  { id: "groupOps", label: "群管", icon: ShieldAlert },
   { id: "overview", label: "总览", icon: Activity },
   { id: "agent", label: "Agent", icon: Bot },
   { id: "tasks", label: "任务", icon: Activity },
@@ -94,6 +105,21 @@ export function App() {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [wechatConversations, setWechatConversations] = useState<WechatConversation[]>([]);
+  const [wechatMessages, setWechatMessages] = useState<WechatMessage[]>([]);
+  const [wechatMembers, setWechatMembers] = useState<WechatMember[]>([]);
+  const [wechatUserDetail, setWechatUserDetail] = useState<WechatUserDetail | null>(null);
+  const [wechatUnread, setWechatUnread] = useState<Record<string, number>>({});
+  const wechatLastMessageRef = useRef<Record<string, string>>({});
+  const [profileConversationId, setProfileConversationId] = useState("__all");
+  const [profileSearch, setProfileSearch] = useState("");
+  const [profileMembers, setProfileMembers] = useState<WechatMember[]>([]);
+  const [profileDetails, setProfileDetails] = useState<Record<string, WechatUserDetail>>({});
+  const [groupOpsConversationId, setGroupOpsConversationId] = useState("");
+  const [groupOpsMembers, setGroupOpsMembers] = useState<WechatMember[]>([]);
+  const [groupOpsDetails, setGroupOpsDetails] = useState<Record<string, WechatUserDetail>>({});
+  const [groupOpsMessages, setGroupOpsMessages] = useState<WechatMessage[]>([]);
+  const [groupOpsFilter, setGroupOpsFilter] = useState("");
   const [selectedConversationId, setSelectedConversationId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [consoleMessagesByContext, setConsoleMessagesByContext] = useState<Record<string, ConsoleMessage[]>>({});
@@ -159,6 +185,7 @@ export function App() {
         nextPlugins,
         nextSkills,
         nextConversations,
+        nextWechatConversations,
         nextEvents,
         nextTasks,
         nextTools,
@@ -173,6 +200,7 @@ export function App() {
           load("plugins", api.plugins(), []),
           load("skills", api.skills(), []),
           load("conversations", api.conversations(), []),
+          load("wechat/conversations", api.wechatConversations(200), []),
           load("agent/events", api.agentEvents(80), []),
           load("agent/tasks", api.agentTasks(80), []),
           load("agent/tools", api.tools(), []),
@@ -187,6 +215,7 @@ export function App() {
       setPlugins(nextPlugins);
       setSkills(nextSkills);
       setConversations(nextConversations);
+      setWechatConversations(nextWechatConversations);
       setEvents(nextEvents);
       setAgentTasks(nextTasks);
       setTools(nextTools);
@@ -229,13 +258,20 @@ export function App() {
   useEffect(() => {
     if (!selectedConversationId) {
       setMessages([]);
+      setWechatMessages([]);
+      setWechatMembers([]);
+      return;
+    }
+    if (view === "wechat") {
+      api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      api.wechatMembers(selectedConversationId).then(setWechatMembers).catch((err) => setError(err instanceof Error ? err.message : String(err)));
       return;
     }
     api
       .messages(selectedConversationId, 100)
       .then(setMessages)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [selectedConversationId]);
+  }, [selectedConversationId, view]);
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -264,6 +300,18 @@ export function App() {
             void api.agentTasks(80).then(setAgentTasks).catch(() => undefined);
           }
         }
+        if (item.type === "message.created") {
+          const payload = item.data as { message?: WechatMessage };
+          const incoming = payload.message;
+          if (incoming?.conversation_id === selectedConversationId) {
+            void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
+            void api.wechatMembers(selectedConversationId).then(setWechatMembers).catch(() => undefined);
+            setMessages((current) => current.some((m) => m.id === incoming.id) ? current : [...current, incoming]);
+          } else if (incoming?.conversation_id) {
+            setWechatUnread((current) => ({ ...current, [incoming.conversation_id]: (current[incoming.conversation_id] || 0) + 1 }));
+          }
+          void api.wechatConversations(200).then(applyWechatConversations).catch(() => undefined);
+        }
         if (item.type === "background_task.updated") {
           void api.backgroundTasks(50).then(setBackgroundTasks).catch(() => undefined);
         }
@@ -284,7 +332,98 @@ export function App() {
       ]);
     };
     return () => socket.close();
-  }, [wsRevision, selectedTaskId]);
+  }, [wsRevision, selectedTaskId, selectedConversationId]);
+
+  useEffect(() => {
+    if (view !== "wechat" || !selectedConversationId) return;
+    const timer = window.setInterval(() => {
+      void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
+      void api.wechatMembers(selectedConversationId).then(setWechatMembers).catch(() => undefined);
+      void api.wechatConversations(200).then(applyWechatConversations).catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [view, selectedConversationId]);
+
+  useEffect(() => {
+    if (view !== "profiles") return;
+    if (!profileConversationId) setProfileConversationId("__all");
+  }, [view, wechatConversations, profileConversationId]);
+
+  useEffect(() => {
+    if (view !== "profiles" || !profileConversationId) return;
+    let cancelled = false;
+    setProfileMembers([]);
+    setProfileDetails({});
+    if (profileConversationId === "__all") {
+      api.wechatUsers(500, profileSearch)
+        .then((users) => {
+          if (cancelled) return;
+          const members = users.map((user) => ({
+            user_id: user.contact.user_id,
+            nickname: user.contact.nickname,
+            remark: user.contact.remark,
+            avatar_url: user.contact.avatar_url,
+            message_count: user.stats.message_count,
+            last_active_at: user.profile.updated_at || null,
+          }));
+          setProfileMembers(members);
+          setProfileDetails(Object.fromEntries(users.map((user) => [user.contact.user_id, user])));
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      return () => { cancelled = true; };
+    }
+    api.wechatMembers(profileConversationId)
+      .then(async (members) => {
+        if (cancelled) return;
+        const ordered = members.slice().sort((a, b) => (b.message_count || 0) - (a.message_count || 0));
+        setProfileMembers(ordered);
+        const details = await Promise.all(
+          ordered.slice(0, 80).map(async (member) => {
+            try {
+              return [member.user_id, await api.wechatUser(member.user_id, profileConversationId)] as const;
+            } catch {
+              return null;
+            }
+          }),
+        );
+        if (!cancelled) setProfileDetails(Object.fromEntries(details.filter(Boolean) as Array<readonly [string, WechatUserDetail]>));
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    return () => { cancelled = true; };
+  }, [view, profileConversationId, profileSearch]);
+
+  useEffect(() => {
+    if (view !== "groupOps") return;
+    const groups = wechatConversations.filter((item) => item.scope === "group");
+    if (!groupOpsConversationId && groups[0]) setGroupOpsConversationId(groups[0].id);
+  }, [view, wechatConversations, groupOpsConversationId]);
+
+  useEffect(() => {
+    if (view !== "groupOps" || !groupOpsConversationId) return;
+    let cancelled = false;
+    setGroupOpsMembers([]);
+    setGroupOpsDetails({});
+    setGroupOpsMessages([]);
+    api.wechatMessages(groupOpsConversationId, 500).then((items) => { if (!cancelled) setGroupOpsMessages(sortWechatMessages(items)); }).catch(() => undefined);
+    api.wechatMembers(groupOpsConversationId)
+      .then(async (members) => {
+        if (cancelled) return;
+        const ordered = members.slice().sort((a, b) => (b.message_count || 0) - (a.message_count || 0));
+        setGroupOpsMembers(ordered);
+        const details = await Promise.all(
+          ordered.slice(0, 100).map(async (member) => {
+            try {
+              return [member.user_id, await api.wechatUser(member.user_id, groupOpsConversationId)] as const;
+            } catch {
+              return null;
+            }
+          }),
+        );
+        if (!cancelled) setGroupOpsDetails(Object.fromEntries(details.filter(Boolean) as Array<readonly [string, WechatUserDetail]>));
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    return () => { cancelled = true; };
+  }, [view, groupOpsConversationId]);
 
   const requiresToken = error.toLowerCase().includes("unauthorized");
 
@@ -613,8 +752,52 @@ export function App() {
     }
   }
 
+  async function saveWechatProfile(userId: string, conversationId: string | null, summary: string, tags: string[]) {
+    const updated = await api.updateWechatProfile(userId, { conversation_id: conversationId, summary, tags });
+    setWechatUserDetail((current) => current?.contact.user_id === userId ? updated : current);
+    setProfileDetails((current) => ({ ...current, [userId]: updated }));
+    setGroupOpsDetails((current) => ({ ...current, [userId]: updated }));
+    return updated;
+  }
+
+  function openWechatConversation(id: string) {
+    setSelectedConversationId(id);
+    setWechatUnread((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function applyWechatConversations(next: WechatConversation[]) {
+    const previous = wechatLastMessageRef.current;
+    const latest: Record<string, string> = {};
+    const increments: Record<string, number> = {};
+    for (const conversation of next) {
+      const lastId = conversation.last_message?.id ? String(conversation.last_message.id) : "";
+      if (!lastId) continue;
+      latest[conversation.id] = lastId;
+      const oldId = previous[conversation.id];
+      const incoming = conversation.last_message;
+      const outgoing = incoming?.raw?.direction === "outgoing";
+      if (oldId && oldId !== lastId && conversation.id !== selectedConversationId && !outgoing) {
+        increments[conversation.id] = (increments[conversation.id] || 0) + 1;
+      }
+    }
+    wechatLastMessageRef.current = { ...previous, ...latest };
+    if (Object.keys(increments).length) {
+      setWechatUnread((current) => {
+        const merged = { ...current };
+        for (const [id, count] of Object.entries(increments)) merged[id] = (merged[id] || 0) + count;
+        return merged;
+      });
+    }
+    setWechatConversations(next);
+  }
+
   return (
-    <div className="shell">
+    <div className={`shell shell--${view}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand__mark">x</div>
@@ -715,6 +898,63 @@ export function App() {
             setDeliveryMode={setDeliveryMode}
             events={events}
             liveEvents={liveEvents}
+          />
+        )}
+        {view === "wechat" && (
+          <WechatWorkbench
+            conversations={wechatConversations.filter((item) => {
+              const text = query.trim().toLowerCase();
+              return !text || [item.id, item.title, item.raw_id, item.last_message?.content].filter(Boolean).some((value) => String(value).toLowerCase().includes(text));
+            })}
+            query={query}
+            setQuery={setQuery}
+            selectedConversationId={selectedConversationId}
+            setSelectedConversationId={openWechatConversation}
+            unread={wechatUnread}
+            messages={wechatMessages}
+            members={wechatMembers}
+            userDetail={wechatUserDetail}
+            loadUser={async (userId) => setWechatUserDetail(await api.wechatUser(userId, selectedConversationId))}
+            clearUser={() => setWechatUserDetail(null)}
+            onSend={async (text, file) => {
+              const sent = await api.sendWechatMessage(selectedConversationId, { text, file });
+              setWechatMessages((current) => sortWechatMessages(current.some((m) => m.id === sent.id) ? current : [...current, sent]));
+              void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
+              applyWechatConversations(await api.wechatConversations(200));
+            }}
+            onSync={async () => {
+              await api.syncWechatMetadata();
+              applyWechatConversations(await api.wechatConversations(200));
+              if (selectedConversationId) {
+                setWechatMessages(sortWechatMessages(await api.wechatMessages(selectedConversationId, 300)));
+                setWechatMembers(await api.wechatMembers(selectedConversationId));
+              }
+            }}
+          />
+        )}
+        {view === "profiles" && (
+          <WechatProfilesView
+            conversations={wechatConversations.filter((item) => item.scope === "group")}
+            selectedConversationId={profileConversationId}
+            setSelectedConversationId={setProfileConversationId}
+            members={profileMembers}
+            details={profileDetails}
+            search={profileSearch}
+            setSearch={setProfileSearch}
+            onSaveProfile={saveWechatProfile}
+          />
+        )}
+        {view === "groupOps" && (
+          <GroupOpsView
+            conversations={wechatConversations.filter((item) => item.scope === "group")}
+            selectedConversationId={groupOpsConversationId}
+            setSelectedConversationId={setGroupOpsConversationId}
+            members={groupOpsMembers}
+            details={groupOpsDetails}
+            messages={groupOpsMessages}
+            filter={groupOpsFilter}
+            setFilter={setGroupOpsFilter}
+            onSaveProfile={saveWechatProfile}
           />
         )}
         {view === "overview" && <Overview status={status} adapters={adapters} jobs={scheduledJobs} tasks={backgroundTasks} />}
@@ -1036,6 +1276,587 @@ function AgentConsoleView({
       </main>
     </section>
   );
+}
+
+
+function WechatProfilesView({
+  conversations,
+  selectedConversationId,
+  setSelectedConversationId,
+  members,
+  details,
+  search,
+  setSearch,
+  onSaveProfile,
+}: {
+  conversations: WechatConversation[];
+  selectedConversationId: string;
+  setSelectedConversationId: (value: string) => void;
+  members: WechatMember[];
+  details: Record<string, WechatUserDetail>;
+  search: string;
+  setSearch: (value: string) => void;
+  onSaveProfile: (userId: string, conversationId: string | null, summary: string, tags: string[]) => Promise<WechatUserDetail>;
+}) {
+  const selected = conversations.find((item) => item.id === selectedConversationId);
+  const isAllProfiles = selectedConversationId === "__all";
+  const [editingProfile, setEditingProfile] = useState<{ member: WechatMember; detail?: WechatUserDetail } | null>(null);
+  const profiled = members.filter((member) => {
+    const detail = details[member.user_id];
+    return detail?.profile?.summary && detail.profile.summary !== "暂无 AI 用户画像。";
+  }).length;
+
+  async function editProfile(member: WechatMember, detail?: WechatUserDetail) {
+    setEditingProfile({ member, detail });
+  }
+
+  async function saveEditingProfile(summary: string, tags: string[]) {
+    if (!editingProfile) return;
+    await onSaveProfile(editingProfile.member.user_id, null, summary, tags);
+    setEditingProfile(null);
+  }
+
+  return (
+    <section className="profile-lab">
+      <aside className="profile-lab__groups">
+        <div className="profile-lab__brand">
+          <span>Profile Atlas</span>
+          <b>群画像库</b>
+          <small>按群查看成员画像、标签和最近活跃。</small>
+        </div>
+        <div className="profile-lab__group-list">
+          <button className={`profile-group ${isAllProfiles ? "active" : ""}`} onClick={() => setSelectedConversationId("__all")}>
+            <div className="wechat-session__avatar">全</div>
+            <div><b>全部画像</b><span>所有用户 · 可搜索标签/画像</span></div>
+          </button>
+          {conversations.map((item) => (
+            <button
+              key={item.id}
+              className={`profile-group ${selectedConversationId === item.id ? "active" : ""}`}
+              onClick={() => setSelectedConversationId(item.id)}
+            >
+              <WechatConversationAvatar conversation={item} />
+              <div>
+                <b>{conversationTitle(item)}</b>
+                <span>{item.message_count} 条消息 · {item.raw_id}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </aside>
+      <main className="profile-lab__main">
+        <header className="profile-lab__hero">
+          <div>
+            <span className="profile-kicker">成员画像工作台</span>
+            <h2>{isAllProfiles ? "全部用户画像" : selected ? conversationTitle(selected) : "选择一个群聊"}</h2>
+            <p>{isAllProfiles ? "汇总全部用户，可按昵称、wxid、标签、画像搜索。" : "左侧选择群聊，右侧查看每个成员的 AI 画像、标签、发言量和图片量。"}</p>
+            <div className="profile-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索昵称、wxid、标签、画像" /></div>
+          </div>
+          <div className="profile-lab__stats">
+            <span><b>{members.length}</b>成员</span>
+            <span><b>{profiled}</b>已画像</span>
+            <span><b>{members.reduce((sum, item) => sum + (item.message_count || 0), 0)}</b>发言</span>
+          </div>
+        </header>
+        {members.length ? (
+          <div className="profile-card-grid">
+            {members.map((member) => {
+              const detail = details[member.user_id];
+              const tags = detail?.profile?.tags || [];
+              const summary = detail?.profile?.summary || "暂无 AI 用户画像。";
+              return (
+                <article className={`profile-card ${summary === "暂无 AI 用户画像。" ? "profile-card--empty" : ""}`} key={member.user_id}>
+                  <div className="profile-card__top">
+                    <WechatAvatar className="profile-card__avatar" src={member.avatar_url || detail?.contact.avatar_url} text={member.nickname || member.user_id} />
+                    <div>
+                      <h3>{member.nickname || detail?.contact.nickname || member.user_id}</h3>
+                      <p>{member.user_id}</p>
+                    </div>
+                    <button className="profile-card__edit" onClick={() => void editProfile(member, detail)}>编辑</button>
+                  </div>
+                  <p className="profile-card__summary">{summary}</p>
+                  <div className="profile-card__tags">
+                    {tags.length ? tags.map((tag) => <span key={tag}>{tag}</span>) : <span>未打标签</span>}
+                  </div>
+                  <div className="profile-card__meta">
+                    <span>发言 {detail?.stats.message_count ?? member.message_count ?? 0}</span>
+                    <span>图片 {detail?.stats.image_count ?? 0}</span>
+                    <span>{detail?.profile.updated_at ? formatDate(detail.profile.updated_at) : "未更新"}</span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <EmptyState title="暂无成员画像" text="选择左侧群聊，或先在微信页同步群成员。" />
+        )}
+      </main>
+      {editingProfile ? <ProfileEditModal member={editingProfile.member} detail={editingProfile.detail} onClose={() => setEditingProfile(null)} onSave={saveEditingProfile} /> : null}
+    </section>
+  );
+}
+
+
+function GroupOpsView({
+  conversations,
+  selectedConversationId,
+  setSelectedConversationId,
+  members,
+  details,
+  messages,
+  filter,
+  setFilter,
+  onSaveProfile,
+}: {
+  conversations: WechatConversation[];
+  selectedConversationId: string;
+  setSelectedConversationId: (value: string) => void;
+  members: WechatMember[];
+  details: Record<string, WechatUserDetail>;
+  messages: WechatMessage[];
+  filter: string;
+  setFilter: (value: string) => void;
+  onSaveProfile: (userId: string, conversationId: string | null, summary: string, tags: string[]) => Promise<WechatUserDetail>;
+}) {
+  const selected = conversations.find((item) => item.id === selectedConversationId);
+  const [opsUserDetail, setOpsUserDetail] = useState<WechatUserDetail | null>(null);
+  const [editingProfile, setEditingProfile] = useState<{ member: WechatMember; detail?: WechatUserDetail } | null>(null);
+  async function openUser(member: WechatMember, detail?: WechatUserDetail) {
+    setOpsUserDetail(detail || await api.wechatUser(member.user_id, selectedConversationId));
+  }
+  const enriched = members.map((member) => {
+    const detail = details[member.user_id];
+    const tags = detail?.profile.tags || [];
+    const text = `${member.nickname} ${member.user_id} ${tags.join(" ")} ${detail?.profile.summary || ""}`.toLowerCase();
+    return { member, detail, tags, risk: groupRiskScore(member, detail), text };
+  });
+  const shown = enriched.filter((item) => !filter.trim() || item.text.includes(filter.trim().toLowerCase()));
+  const riskKeywords = ["广告", "推广", "引流", "私聊", "加我", "代理", "返利", "兼职", "刷单", "投诉", "退款", "骗子", "竞品", "辱骂", "敏感"];
+  const keywordHits = messages.flatMap((message) => {
+    const content = String(message.content || "");
+    const hits = riskKeywords.filter((keyword) => content.includes(keyword));
+    return hits.length ? [{ message, hits }] : [];
+  }).slice(-30).reverse();
+  const msgCountByUser = new Map<string, number>();
+  const hourMap = new Map<string, number>();
+  for (const message of messages) {
+    if (message.sender_id) msgCountByUser.set(message.sender_id, (msgCountByUser.get(message.sender_id) || 0) + 1);
+    const hour = formatDate(message.timestamp).slice(11, 13) || "--";
+    hourMap.set(hour, (hourMap.get(hour) || 0) + 1);
+  }
+  const enrichedWithMessageRisk = enriched.map((item) => {
+    const keywordRisk = keywordHits.filter((hit) => hit.message.sender_id === item.member.user_id).length * 10;
+    return { ...item, risk: Math.min(100, item.risk + keywordRisk) };
+  });
+  const shownWithRisk = enrichedWithMessageRisk.filter((item) => !filter.trim() || item.text.includes(filter.trim().toLowerCase()));
+  const riskUsers = enrichedWithMessageRisk.filter((item) => item.risk >= 60);
+  const silentUsers = enrichedWithMessageRisk.filter((item) => (item.member.message_count || 0) <= 1);
+  const activeUsers = enrichedWithMessageRisk.slice().sort((a, b) => (msgCountByUser.get(b.member.user_id) || b.member.message_count || 0) - (msgCountByUser.get(a.member.user_id) || a.member.message_count || 0)).slice(0, 8);
+  const hourlyTrend = [...hourMap.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-12);
+  const dailyReport = {
+    messages: messages.length,
+    speakers: msgCountByUser.size,
+    images: messages.filter((m) => m.type === "image" || (m.attachments || []).some((a) => a.kind === "image")).length,
+    keywords: keywordHits.length,
+  };
+  const aiAdvice = riskUsers.length
+    ? `建议优先复核 ${riskUsers.slice(0, 3).map((x) => x.member.nickname || x.member.user_id).join("、")} 的命中消息，再决定提醒、观察或私聊。`
+    : keywordHits.length
+      ? `当前无高风险成员，但有 ${keywordHits.length} 条关键词命中，建议查看预警列表。`
+      : "当前群聊风险较低，建议持续观察活跃度和潜水成员。";
+
+  async function editProfile(member: WechatMember, detail?: WechatUserDetail) {
+    setEditingProfile({ member, detail });
+  }
+
+  async function saveEditingProfile(summary: string, tags: string[]) {
+    if (!editingProfile) return;
+    await onSaveProfile(editingProfile.member.user_id, null, summary, tags);
+    setEditingProfile(null);
+  }
+
+  return (
+    <section className="ops-board">
+      <aside className="ops-groups">
+        <div className="ops-groups__head">
+          <ShieldAlert size={20} />
+          <div><b>群管理</b><span>风险、活跃、画像联动</span></div>
+        </div>
+        <div className="ops-group-list">
+          {conversations.map((item) => (
+            <button key={item.id} className={`ops-group ${item.id === selectedConversationId ? "active" : ""}`} onClick={() => setSelectedConversationId(item.id)}>
+              <WechatConversationAvatar conversation={item} />
+              <div><b>{conversationTitle(item)}</b><span>{item.message_count} 条消息</span></div>
+            </button>
+          ))}
+        </div>
+      </aside>
+      <main className="ops-main">
+        <header className="ops-hero">
+          <div>
+            <span>Group Command</span>
+            <h2>{selected ? conversationTitle(selected) : "选择群聊"}</h2>
+            <p>成员画像、风险提示、活跃排行和每日群报集中在这里。</p>
+          </div>
+          <div className="ops-metrics">
+            <span><b>{members.length}</b>成员</span>
+            <span><b>{riskUsers.length}</b>风险</span>
+            <span><b>{dailyReport.keywords}</b>预警</span>
+          </div>
+        </header>
+        <section className="ops-report">
+          <div><b>AI 群管建议</b><p>{aiAdvice}</p></div>
+          <div><b>群日报</b><p>{`消息 ${dailyReport.messages} 条 · 发言 ${dailyReport.speakers} 人 · 图片 ${dailyReport.images} 张 · 预警 ${dailyReport.keywords} 条`}</p></div>
+          <div><b>活跃榜</b><p>{activeUsers.length ? activeUsers.map((x) => `${x.member.nickname || x.member.user_id}(${msgCountByUser.get(x.member.user_id) || x.member.message_count})`).join(" / ") : "暂无数据"}</p></div>
+          <div><b>关键词预警</b><p>{keywordHits.length ? keywordHits.slice(0, 5).map((x) => `${x.hits.join("/")}：${x.message.sender_name || x.message.sender_id}`).join("；") : "暂无关键词命中。"}</p></div>
+          <div><b>活跃趋势</b><p>{hourlyTrend.length ? hourlyTrend.map(([h, n]) => `${h}点 ${n}`).join(" / ") : "暂无趋势数据。"}</p></div>
+          <div><b>成员轨迹</b><p>{silentUsers.length ? `潜水成员 ${silentUsers.length} 人；点击成员卡片可查看发言、图片和画像。` : "成员活跃正常。"}</p></div>
+        </section>
+        <div className="ops-toolbar">
+          <div className="ops-search"><Search size={16} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索昵称、wxid、标签、画像" /></div>
+          <span>{shownWithRisk.length} / {members.length}</span>
+        </div>
+        <div className="ops-table">
+          {shownWithRisk.map(({ member, detail, tags, risk }) => (
+            <article className="ops-member" key={member.user_id} onClick={() => void openUser(member, detail)} title="点击查看聊天记录和风险依据">
+              <WechatAvatar className="ops-member__avatar" src={member.avatar_url || detail?.contact.avatar_url} text={member.nickname || member.user_id} />
+              <div className="ops-member__main">
+                <div className="ops-member__line"><b>{member.nickname || detail?.contact.nickname || member.user_id}</b><small>{member.user_id}</small></div>
+                <p>{detail?.profile.summary || "暂无 AI 用户画像。"}</p>
+                <div className="ops-tags">{tags.length ? tags.map((tag) => <span key={tag}>{tag}</span>) : <span>未打标签</span>}</div>
+              </div>
+              <div className="ops-member__score">
+                <span className={risk >= 60 ? "danger" : risk >= 30 ? "warn" : "ok"}>{risk >= 60 ? "高风险" : risk >= 30 ? "观察" : "正常"}</span>
+                <b>{risk}</b>
+                <small>发言 {detail?.stats.message_count ?? member.message_count ?? 0} · 图 {detail?.stats.image_count ?? 0}</small>
+                <button className="ops-member__edit" onClick={(event) => { event.stopPropagation(); void editProfile(member, detail); }}>编辑画像</button>
+                <button className="ops-member__edit" onClick={(event) => { event.stopPropagation(); navigator.clipboard?.writeText(member.user_id); }}>复制 wxid</button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </main>
+      {opsUserDetail ? <WechatMemberModal detail={opsUserDetail} onClose={() => setOpsUserDetail(null)} /> : null}
+      {editingProfile ? <ProfileEditModal member={editingProfile.member} detail={editingProfile.detail} onClose={() => setEditingProfile(null)} onSave={saveEditingProfile} /> : null}
+    </section>
+  );
+}
+
+function groupRiskScore(member: WechatMember, detail?: WechatUserDetail): number {
+  const text = `${detail?.profile.summary || ""} ${(detail?.profile.tags || []).join(" ")}`;
+  let score = 0;
+  if (/广告|推广|引流|营销|敏感|攻击|竞争|刷屏|异常/.test(text)) score += 55;
+  if ((detail?.stats.image_count || 0) >= 10) score += 18;
+  if ((member.message_count || 0) <= 1) score += 8;
+  if ((member.message_count || 0) >= 80) score += 12;
+  return Math.min(100, score);
+}
+
+
+function WechatWorkbench(props: {
+  conversations: WechatConversation[];
+  query: string;
+  setQuery: (value: string) => void;
+  selectedConversationId: string;
+  setSelectedConversationId: (value: string) => void;
+  unread: Record<string, number>;
+  messages: WechatMessage[];
+  members: WechatMember[];
+  userDetail: WechatUserDetail | null;
+  loadUser: (userId: string) => Promise<void>;
+  clearUser: () => void;
+  onSend: (text: string, file: File | null) => Promise<void>;
+  onSync: () => Promise<void>;
+}) {
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [sending, setSending] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const selectedConversation = props.conversations.find((item) => item.id === props.selectedConversationId);
+  const members = props.members;
+  const forceScrollBottom = useCallback(() => {
+    const node = messageListRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+    messageEndRef.current?.scrollIntoView({ block: "end" });
+  }, []);
+  useEffect(() => {
+    forceScrollBottom();
+    const raf = window.requestAnimationFrame(forceScrollBottom);
+    const timer = window.setTimeout(forceScrollBottom, 120);
+    return () => { window.cancelAnimationFrame(raf); window.clearTimeout(timer); };
+  }, [props.messages.length, props.selectedConversationId, forceScrollBottom]);
+  async function submitWechat() {
+    if (!props.selectedConversationId || sending || (!draft.trim() && !file)) return;
+    setSending(true);
+    try {
+      await props.onSend(draft, file);
+      setDraft("");
+      setFile(null);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function pickEmoji(value: string) {
+    const text = value.length <= 2 ? value : `[${value}]`;
+    setDraft((current) => `${current}${text}`);
+    setEmojiOpen(false);
+  }
+
+  async function syncWechat() {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      await props.onSync();
+    } finally {
+      setSyncing(false);
+    }
+  }
+  return (
+    <section className={`wechat-page ${detailOpen ? "wechat-page--detail" : ""} ${drawerOpen ? "wechat-page--drawer-open" : ""}`}>
+      <aside className="wechat-rail">
+        <div className="wechat-avatar">微</div>
+        <div className="wechat-rail__icon active">💬</div>
+        <div className="wechat-rail__icon">👥</div>
+        <div className="wechat-rail__icon">⚙</div>
+      </aside>
+      {drawerOpen || detailOpen ? <button className="wechat-drawer-backdrop" onClick={() => { setDrawerOpen(false); setDetailOpen(false); }} aria-label="关闭抽屉" /> : null}
+      <aside className="wechat-sessions">
+        <div className="wechat-search"><Search size={16} /><input value={props.query} onChange={(event) => props.setQuery(event.target.value)} placeholder="搜索会话" /></div>
+        <div className="wechat-session-list">
+          {props.conversations.map((item) => (
+            <button key={item.id} className={`wechat-session ${props.selectedConversationId === item.id ? "active" : ""}`} onClick={() => { props.setSelectedConversationId(item.id); setDrawerOpen(false); }}>
+              <div className="wechat-session__avatar-wrap">
+                <WechatConversationAvatar conversation={item} />
+                {props.unread[item.id] ? <span className="wechat-unread-badge">{props.unread[item.id] > 99 ? "99+" : props.unread[item.id]}</span> : null}
+              </div>
+              <div className="wechat-session__main"><b>{conversationTitle(item)}</b><span>{item.scope === "group" ? "群聊" : "私聊"} · {item.raw_id}</span></div>
+              <small>{formatDate(item.updated_at).slice(5, 16)}</small>
+            </button>
+          ))}
+        </div>
+      </aside>
+      <main className="wechat-chat">
+        <header className="wechat-chat__header">
+          <button className="wechat-drawer-button" onClick={() => setDrawerOpen(true)}>会话</button>
+          <div><b>{selectedConversation ? conversationTitle(selectedConversation) : "请选择微信会话"}</b>{selectedConversation?.scope === "group" ? <span>（{members.length}）</span> : null}</div>
+          <div className="wechat-header-actions">
+            <button className="wechat-more" disabled={syncing} onClick={() => void syncWechat()}>{syncing ? "同步中" : "同步"}</button>
+            <button className="wechat-more" onClick={() => setDetailOpen((v) => !v)}>•••</button>
+          </div>
+        </header>
+        <div className="wechat-message-list" ref={messageListRef}>
+          {props.messages.length ? props.messages.map((message) => <WechatMessage key={`${message.id}-${message.timestamp}`} message={message} />) : <EmptyState title="暂无聊天记录" text="选择左侧微信会话后展示消息。" />}<div ref={messageEndRef} />
+        </div>
+        <footer className="wechat-input">
+          <button className="wechat-emoji-toggle" type="button" onClick={() => setEmojiOpen((value) => !value)}>😊</button>
+          {emojiOpen ? <div className="wechat-emoji-panel">{QUICK_EMOJIS.map((emoji) => <button key={emoji} type="button" onClick={() => pickEmoji(emoji)}>{emoji}</button>)}</div> : null}
+          <label className="wechat-file-button">📁<input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
+          <span>✂</span>
+          <input value={file ? `${draft}${draft ? " · " : ""}已选文件：${file.name}` : draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入消息/表情，支持图片/文件" onKeyDown={(event) => { if (event.key === "Enter") void submitWechat(); }} />
+          <button disabled={sending || (!draft.trim() && !file)} onClick={() => void submitWechat()}>{sending ? "发送中" : "发送"}</button>
+        </footer>
+      </main>
+      {detailOpen ? (
+        <aside className="wechat-detail">
+          <div className="wechat-search"><Search size={16} /><input placeholder="搜索群成员" /></div>
+          <div className="wechat-member-grid">
+            {members.slice(0, 24).map((member) => (
+              <button key={member.user_id} className="wechat-member" onClick={() => void props.loadUser(member.user_id)}>
+                <WechatAvatar className="wechat-member__avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><span>{member.nickname || member.user_id}</span>
+              </button>
+            ))}
+            <button className="wechat-member"><div className="wechat-member__avatar dashed">＋</div><span>添加</span></button>
+          </div>
+          <div className="wechat-info-row"><b>群聊名称</b><span>{selectedConversation ? conversationTitle(selectedConversation) : "-"}</span></div>
+          <div className="wechat-info-row"><b>群ID</b><span>{selectedConversation?.raw_id || "-"}</span></div>
+          <div className="wechat-info-row"><b>查找聊天内容</b><span>›</span></div>
+        </aside>
+      ) : null}
+      {props.userDetail ? <WechatMemberModal detail={props.userDetail} onClose={props.clearUser} /> : null}
+    </section>
+  );
+}
+
+function WechatConversationAvatar({ conversation }: { conversation: WechatConversation }) {
+  const avatars = conversation.avatar_members || [];
+  if (conversation.avatar_url) return <img className="wechat-session__avatar" src={conversation.avatar_url} />;
+  if (conversation.scope === "group" && avatars.length) {
+    return <div className="wechat-session__avatar wechat-session__avatar--group">{avatars.slice(0, 4).map((src) => <img key={src} src={src} />)}</div>;
+  }
+  return <div className="wechat-session__avatar">{conversationInitial(conversation)}</div>;
+}
+
+function WechatMessage({ message }: { message: WechatMessage }) {
+  const images = extractMessageImages(message);
+  const emoji = extractWechatEmoji(message);
+  const text = displayMessageContent(message, images.length > 0 || Boolean(emoji));
+  const outgoing = message.raw?.direction === "outgoing";
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  return (
+    <article className={`wechat-message ${outgoing ? "wechat-message--outgoing" : ""}`}>
+      <WechatAvatar className="wechat-message__avatar" src={message.sender_avatar_url} text={message.sender_name || message.sender_id || "?"} />
+      <div className="wechat-message__main">
+        <div className="wechat-message__name">{message.sender_name || message.sender_id}<span>{formatDate(message.timestamp)}</span></div>
+        <div className={`wechat-bubble ${emoji ? "wechat-bubble--emoji" : ""}`}>
+          {text ? <span>{renderEmojiAliases(text)}</span> : null}
+          {emoji ? <WechatEmojiCard emoji={emoji} /> : null}
+          {images.map((src) => <button className="wechat-bubble-image" key={src} onClick={() => setPreviewImage(src)}><img src={src} /></button>)}
+        </div>
+      </div>
+      {previewImage ? <div className="wechat-image-preview" onClick={(event) => { event.stopPropagation(); setPreviewImage(null); }}><img src={previewImage} /></div> : null}
+    </article>
+  );
+}
+
+function WechatAvatar({ className, src, text }: { className: string; src?: string | null; text: string }) {
+  return src ? <img className={className} src={src} /> : <div className={className}>{(text || "?").slice(0, 1).toUpperCase()}</div>;
+}
+
+function ProfileEditModal({
+  member,
+  detail,
+  onClose,
+  onSave,
+}: {
+  member: WechatMember;
+  detail?: WechatUserDetail;
+  onClose: () => void;
+  onSave: (summary: string, tags: string[]) => Promise<void>;
+}) {
+  const [summary, setSummary] = useState(detail?.profile.summary === "暂无 AI 用户画像。" ? "" : (detail?.profile.summary || ""));
+  const [tagsText, setTagsText] = useState((detail?.profile.tags || []).join(", "));
+  const [saving, setSaving] = useState(false);
+  const name = member.nickname || detail?.contact.nickname || member.user_id;
+  async function submit() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const tags = tagsText.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+      await onSave(summary.trim(), tags);
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <div className="wechat-modal-backdrop" onClick={onClose}>
+      <div className="wechat-modal profile-edit-modal" onClick={(event) => event.stopPropagation()}>
+        <button className="wechat-modal__close" onClick={onClose}>×</button>
+        <div className="wechat-profile-head"><WechatAvatar className="wechat-profile-avatar" src={member.avatar_url || detail?.contact.avatar_url} text={name} /><div><h3>编辑画像</h3><p>{name} · {member.user_id}</p></div></div>
+        <label className="profile-edit-field"><span>用户画像</span><textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="输入/修改用户画像" /></label>
+        <label className="profile-edit-field"><span>标签</span><input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="多个标签用逗号分隔，例如：活跃, 潜在客户" /></label>
+        <div className="profile-edit-actions"><button onClick={onClose}>取消</button><button className="primary-button" disabled={saving} onClick={() => void submit()}>{saving ? "保存中" : "保存"}</button></div>
+      </div>
+    </div>
+  );
+}
+
+function WechatMemberModal({ detail, onClose }: { detail: WechatUserDetail; onClose: () => void }) {
+  const member = detail.contact;
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  return (
+    <div className="wechat-modal-backdrop" onClick={onClose}>
+      <div className="wechat-modal" onClick={(event) => event.stopPropagation()}>
+        <button className="wechat-modal__close" onClick={onClose}>×</button>
+        <div className="wechat-profile-head"><WechatAvatar className="wechat-profile-avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><div><h3>{member.nickname || member.user_id}</h3><p>{member.user_id}</p></div></div>
+        <div className="wechat-profile-stats"><span>发言 {detail.stats.message_count}</span><span>图片 {detail.stats.image_count}</span><span>标签 {detail.profile.tags.length}</span></div>
+        <section><b>AI 用户画像</b><p>{detail.profile.summary}</p><div className="wechat-tags">{detail.profile.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></section>
+        <section><b>图片记录</b><div className="wechat-image-grid">{detail.images.slice(0, 24).map((item) => item.url ? <button key={item.id} onClick={() => setPreviewImage(item.url || "")}><img src={item.url} /></button> : null)}</div></section>
+        <section><b>最近发言</b><div className="wechat-profile-messages">{detail.recent_messages.slice(-30).map((m) => <p key={`${m.id}-${m.timestamp}`}>{m.content || `[${m.type}]`}</p>)}</div></section>
+      </div>
+      {previewImage ? <div className="wechat-image-preview" onClick={(event) => { event.stopPropagation(); setPreviewImage(null); }}><img src={previewImage} /></div> : null}
+    </div>
+  );
+}
+
+
+function conversationTitle(item: Conversation): string { return item.title || item.raw_id || item.id; }
+function conversationInitial(item: Conversation): string { return conversationTitle(item).slice(0, 1).toUpperCase(); }
+function sortWechatMessages(items: WechatMessage[]): WechatMessage[] {
+  return [...items].sort((a, b) => {
+    const at = Date.parse(a.timestamp || "") || 0;
+    const bt = Date.parse(b.timestamp || "") || 0;
+    if (at !== bt) return at - bt;
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+function displayMessageContent(message: Message | WechatMessage, hasMedia = false): string {
+  const content = String(message.content || "").trim();
+  if (hasMedia && (!content || /^\[(图片|image|动画表情|表情|非文本消息 MsgType=47)\]$/i.test(content))) return "";
+  if (content.includes("<emoji") || content.includes("<msg")) return hasMedia ? "" : "[动画表情]";
+  return content || (hasMedia ? "" : `[${message.type}]`);
+}
+
+type WechatEmojiInfo = { url?: string; md5?: string; name?: string };
+
+function extractWechatEmoji(message: Message | WechatMessage): WechatEmojiInfo | null {
+  const raw = message.raw || {};
+  const content = String(message.content || "");
+  const rawText = JSON.stringify(raw);
+  const source = [content, rawText].join("\n");
+  if (!source.includes("<emoji") && !source.includes("cdnurl") && !source.includes("emoticonmd5") && !/MsgType[=\": ]+47/i.test(source)) return null;
+  const pick = (names: string[]) => {
+    for (const name of names) {
+      const match = source.match(new RegExp(`${name}=["']([^"']+)["']`, "i"));
+      if (match?.[1]) return decodeXmlAttr(match[1]);
+    }
+    return "";
+  };
+  const url = pick(["cdnurl", "thumburl", "url"]);
+  const md5 = pick(["md5", "emoticonmd5", "encrypturl"]);
+  const name = pick(["name", "desc", "title"]) || "动画表情";
+  return { url, md5, name };
+}
+
+function WechatEmojiCard({ emoji }: { emoji: WechatEmojiInfo }) {
+  return <div className="wechat-emoji-card">{emoji.url ? <img src={emoji.url} /> : <span>😄</span>}<small>{emoji.name || "动画表情"}{emoji.md5 ? ` · ${emoji.md5.slice(0, 8)}` : ""}</small></div>;
+}
+
+function renderEmojiAliases(text: string): ReactNode[] {
+  const map: Record<string, string> = { 微笑: "🙂", 呲牙: "😁", 破涕为笑: "😂", 笑哭: "😂", 强: "👍", 弱: "👎", 玫瑰: "🌹", 爱心: "❤️", 握手: "🤝", OK: "👌", 庆祝: "🎉" };
+  const parts = String(text).split(/(\[[^\]]{1,8}\])/g);
+  return parts.map((part, index) => {
+    const key = part.replace(/^\[|\]$/g, "");
+    return map[key] ? <span className="wechat-inline-emoji" key={index}>{map[key]}</span> : <span key={index}>{part}</span>;
+  });
+}
+
+function decodeXmlAttr(value: string): string {
+  return value.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+}
+
+function extractMessageImages(message: Message | WechatMessage): string[] {
+  const raw = message.raw || {};
+  const values: string[] = [];
+  const attachments = "attachments" in message ? message.attachments : [];
+  for (const item of attachments || []) {
+    if (item.kind === "image" && item.url) values.push(item.url);
+  }
+  const scan = (value: unknown) => {
+    if (!value) return;
+    if (typeof value === "string") {
+      const src = normalizeImageSrc(value);
+      if (src) values.push(src);
+      return;
+    }
+    if (Array.isArray(value)) value.forEach(scan);
+    else if (typeof value === "object") Object.values(value as Record<string, unknown>).forEach(scan);
+  };
+  scan(raw.attachments); scan(raw.quote_attachments); scan(raw.media); scan(raw.media_url); scan(raw.url);
+  return [...new Set(values)].slice(0, 8);
+}
+function normalizeImageSrc(value: string): string {
+  const src = value.trim().replace(/\\/g, "/");
+  if (!src) return "";
+  if (src.startsWith("data:image/") || src.startsWith("/files/") || src.startsWith("/media/") || /^https?:\/\//i.test(src)) {
+    return /\.(png|jpe?g|gif|webp)(\?|$)/i.test(src) || src.startsWith("data:image/") ? src : "";
+  }
+  return "";
 }
 
 function ChatView(props: {

@@ -1,0 +1,15 @@
+name = "JaysonChatSummary"
+version = "2.0.0"
+entry = "main:JaysonChatSummary"
+author = "Jayson/xbot"
+description = "微信群聊总结：基于 xbot-next 数据库生成 AI 总结图片卡片并支持定时发送。"
+enabled = true
+
+[routing]
+enabled = true
+priority = 12
+exclusive = false
+message_types = ["text"]
+platforms = ["wechat"]
+adapters = ["wechat869"]
+scopes = ["group"]

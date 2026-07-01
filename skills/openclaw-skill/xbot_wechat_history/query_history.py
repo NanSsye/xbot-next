@@ -11,7 +11,7 @@ try:
     sys.stderr.reconfigure(encoding="utf-8")
 except Exception:
     pass
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 try:
@@ -43,7 +43,14 @@ def _die(msg: str, code: int = 1) -> None:
 
 
 def _safe_limit(value: int) -> int:
-    return max(1, min(int(value or 30), 200))
+    return max(1, min(int(value or 30), 5000))
+
+
+def _day_range(days_ago: int) -> tuple[str, str]:
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = today - timedelta(days=days_ago)
+    end = start + timedelta(days=1)
+    return start.isoformat(sep=" ", timespec="seconds"), end.isoformat(sep=" ", timespec="seconds")
 
 
 def _redact_dsn(dsn: str) -> str:
@@ -64,11 +71,22 @@ def main() -> int:
     ap.add_argument("--sender", help="sender wxid, exact match")
     ap.add_argument("--q", help="keyword search in content/raw_json")
     ap.add_argument("--limit", type=int, default=30)
+    ap.add_argument("--since", help="created_at >= this time, e.g. '2026-06-30 00:00:00'")
+    ap.add_argument("--until", help="created_at < this time, e.g. '2026-07-01 00:00:00'")
+    ap.add_argument("--today", action="store_true", help="query today from 00:00:00 local time")
+    ap.add_argument("--yesterday", action="store_true", help="query yesterday from 00:00:00 to today 00:00:00")
+    ap.add_argument("--all", action="store_true", help="do not apply LIMIT; use carefully")
     args = ap.parse_args()
 
     if psycopg is None:
         _die("Missing dependency psycopg. Install with: python -m pip install psycopg[binary]")
 
+    if args.today and args.yesterday:
+        _die("--today and --yesterday cannot be used together")
+    if args.today:
+        args.since, args.until = _day_range(0)
+    if args.yesterday:
+        args.since, args.until = _day_range(1)
     limit = _safe_limit(args.limit)
     where = ["platform = 'wechat'"]
     params: list[object] = []
@@ -83,15 +101,22 @@ def main() -> int:
         where.append("(content ILIKE %s OR raw_json ILIKE %s)")
         like = f"%{args.q}%"
         params.extend([like, like])
+    if args.since:
+        where.append("created_at >= %s")
+        params.append(args.since)
+    if args.until:
+        where.append("created_at < %s")
+        params.append(args.until)
 
     sql = f"""
         SELECT conversation_id, message_id, sender_id, sender_name, type, content, created_at
         FROM conversation_messages
         WHERE {' AND '.join(where)}
         ORDER BY created_at DESC
-        LIMIT %s
     """
-    params.append(limit)
+    if not args.all:
+        sql += " LIMIT %s"
+        params.append(limit)
 
     try:
         with psycopg.connect(args.database_url, connect_timeout=5) as conn:
@@ -117,7 +142,15 @@ def main() -> int:
             "content": content or "",
         })
 
-    print(json.dumps({"ok": True, "count": len(items), "items": items}, ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "ok": True,
+        "count": len(items),
+        "limited": not args.all,
+        "limit": None if args.all else limit,
+        "since": args.since,
+        "until": args.until,
+        "items": items,
+    }, ensure_ascii=False, indent=2))
     return 0
 
 

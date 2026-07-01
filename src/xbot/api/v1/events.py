@@ -37,6 +37,18 @@ async def event_stream(websocket: WebSocket) -> None:
             }
         )
 
+
+    async def on_message_created(payload: dict) -> None:
+        await send_json(
+            {
+                "id": str(uuid4()),
+                "type": "message.created",
+                "topic": "messages",
+                "data": payload,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+        )
+
     async def on_background_task(record: BackgroundTaskRecord) -> None:
         await send_json(
             {
@@ -50,6 +62,7 @@ async def event_stream(websocket: WebSocket) -> None:
 
     unsubscribe_agent = ctx.agent.subscribe_events(on_agent_event)
     unsubscribe_background = ctx.agent.background.subscribe(on_background_task)
+    unsubscribe_message = ctx.events.subscribe("message.created", on_message_created)
     await send_json(
         {
             "id": str(uuid4()),
@@ -77,3 +90,4 @@ async def event_stream(websocket: WebSocket) -> None:
     finally:
         unsubscribe_agent()
         unsubscribe_background()
+        unsubscribe_message()

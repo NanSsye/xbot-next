@@ -1,0 +1,39 @@
+[basic]
+enable = true
+priority = 95
+
+[JaysonChatSummary]
+commands = ["群聊总结"]
+default_hours = 24
+max_messages = 600
+max_topics = 3
+
+# MiniMax CN / OpenAI 兼容接口（优先读取 minimax_*，未填写时回退到 openai_*）
+minimax_base_url = "https://api.minimaxi.com/v1"
+minimax_api_key = "sk-cp-_sb6YWyon1RmUZc9-2ELmpLQDq3cnKRdWGL_D24MBw4JLO6UKW1wf3Jl4lRj1UhXxCXjFIOatNiNqBSRUT8vdHR7jGZJAQzuR2PoCyGoe-pG-ACpAzgPTmM"
+minimax_model = "MiniMax-M2.7"
+#
+# 兼容旧配置：仍可继续填写 openai_*，插件会自动调用 /chat/completions
+# openai_base_url = "http://192.168.6.19:3000/v1"
+# openai_api_key = "sk-TxLV9zb300vmjbkjlDdtVxpeTKTBbCJ3S5FWhWCJHBPWfmxU"
+# openai_model = "gpt-5.4"
+request_timeout = 90
+
+# AI 调用重试（避免偶发空响应/解析失败导致无法生图）
+llm_max_retries = 3
+llm_retry_base_delay_seconds = 1.0
+
+# HTML -> 图片服务
+# 建议填写完整接口路径；若只填到域名/端口，插件会在遇到 404 时自动尝试常见路径（如 /api/html2image）。
+html2image_url = "http://192.168.6.19:8211/api/html2image"
+
+# 定时（每天固定时刻）
+schedule_enable = true
+schedule_hour = 13
+schedule_minute = 0
+schedule_second = 0
+schedule_summary_hours = 24
+schedule_random_delay_seconds = 0
+
+# 定时发送的目标群（wxid）
+target_groups = ["46150737793@chatroom","45752634489@chatroom","48587220177@chatroom"]
