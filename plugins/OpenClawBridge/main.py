@@ -289,7 +289,7 @@ class OpenClawBridgePlugin(PluginBase):
     description = "OpenClaw 桥接插件"
     author = "Antigravity"
     version = "1.0.0"
-    priority = 30
+    priority = 100000
     
     def __init__(self):
         super().__init__()

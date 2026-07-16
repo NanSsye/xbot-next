@@ -1,0 +1,31 @@
+[GroupSocialGraph]
+enable = true
+priority = 0
+command = "社交关系图"
+
+# 默认统计最近 30 天，最多展示 60 名存在有效关系的成员。
+history_days = 30
+max_nodes = 50
+max_source_messages = 15000
+min_active_messages = 2
+min_edge_score = 1.15
+# 实际边数还会按节点数动态收缩：节点数 × edge_density，max_edges 只是硬上限。
+max_edges = 100
+edge_density = 1.5
+max_connections_per_node = 5
+
+# 近期互动权重更高；14 表示每过 14 天权重减半。
+half_life_days = 14
+
+# 仅管理员可生成。填写 ["*"] 表示允许任何群成员使用。
+admins = ["*"]
+allowed_groups = ["*"]
+send_progress = true
+
+event_database_path = "plugins/GroupSocialGraph/data/social_graph_events.db"
+font_path = "plugins/GroupSocialGraph/fonts/NotoSansCJK-Regular.otf"
+
+[GroupSocialGraph.Cache]
+enable = true
+path = "plugins/GroupSocialGraph/cache"
+ttl_hours = 6

@@ -45,7 +45,7 @@ COPY ui ./ui
 COPY docker/entrypoint.sh /usr/local/bin/xbot-docker-entrypoint
 
 RUN chmod +x /usr/local/bin/xbot-docker-entrypoint \
-    && python -m pip install --no-build-isolation -i "$PIP_INDEX_URL" -e . \
+    && python -m pip install --no-build-isolation -i "$PIP_INDEX_URL" -e ".[agent]" \
     && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then python -m pip install --no-build-isolation -i "$PIP_INDEX_URL" -e ".[browser]" && python -m playwright install --with-deps chromium; fi \
     && cd /app/ui \
     && npm config set registry "$NPM_REGISTRY" \

@@ -7,7 +7,7 @@ enabled = true
 
 [routing]
 enabled = true
-priority = 15
+priority = 100000
 exclusive = true
 message_types = ["text", "image", "file"]
 platforms = ["wechat"]

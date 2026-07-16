@@ -303,11 +303,10 @@ export function App() {
         if (item.type === "message.created") {
           const payload = item.data as { message?: WechatMessage };
           const incoming = payload.message;
-          if (incoming?.conversation_id === selectedConversationId) {
+          if (incoming?.conversation_id === selectedConversationId && view === "wechat") {
             void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
             void api.wechatMembers(selectedConversationId).then(setWechatMembers).catch(() => undefined);
-            setMessages((current) => current.some((m) => m.id === incoming.id) ? current : [...current, incoming]);
-          } else if (incoming?.conversation_id) {
+          } else if (incoming?.conversation_id && incoming.raw?.direction !== "outgoing") {
             setWechatUnread((current) => ({ ...current, [incoming.conversation_id]: (current[incoming.conversation_id] || 0) + 1 }));
           }
           void api.wechatConversations(200).then(applyWechatConversations).catch(() => undefined);
@@ -332,7 +331,7 @@ export function App() {
       ]);
     };
     return () => socket.close();
-  }, [wsRevision, selectedTaskId, selectedConversationId]);
+  }, [wsRevision, selectedTaskId, selectedConversationId, view]);
 
   useEffect(() => {
     if (view !== "wechat" || !selectedConversationId) return;
@@ -781,7 +780,7 @@ export function App() {
       const oldId = previous[conversation.id];
       const incoming = conversation.last_message;
       const outgoing = incoming?.raw?.direction === "outgoing";
-      if (oldId && oldId !== lastId && conversation.id !== selectedConversationId && !outgoing) {
+      if (oldId && oldId !== lastId && !(view === "wechat" && conversation.id === selectedConversationId) && !outgoing) {
         increments[conversation.id] = (increments[conversation.id] || 0) + 1;
       }
     }
@@ -1597,6 +1596,8 @@ function WechatWorkbench(props: {
       await props.onSend(draft, file);
       setDraft("");
       setFile(null);
+    } catch (err) {
+      window.alert(`发送失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSending(false);
     }
@@ -1656,10 +1657,10 @@ function WechatWorkbench(props: {
         <footer className="wechat-input">
           <button className="wechat-emoji-toggle" type="button" onClick={() => setEmojiOpen((value) => !value)}>😊</button>
           {emojiOpen ? <div className="wechat-emoji-panel">{QUICK_EMOJIS.map((emoji) => <button key={emoji} type="button" onClick={() => pickEmoji(emoji)}>{emoji}</button>)}</div> : null}
-          <label className="wechat-file-button">📁<input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
-          <span>✂</span>
-          <input value={file ? `${draft}${draft ? " · " : ""}已选文件：${file.name}` : draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入消息/表情，支持图片/文件" onKeyDown={(event) => { if (event.key === "Enter") void submitWechat(); }} />
-          <button disabled={sending || (!draft.trim() && !file)} onClick={() => void submitWechat()}>{sending ? "发送中" : "发送"}</button>
+          <label className={`wechat-file-button ${file ? "wechat-file-button--active" : ""}`}>📁<input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
+          {file ? <button className="wechat-file-chip" type="button" title="移除文件" onClick={() => setFile(null)}>{file.name} ×</button> : <span className="wechat-cut">✂</span>}
+          <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入消息/表情，Enter 发送" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) void submitWechat(); }} />
+          <button className="wechat-send-button" disabled={sending || (!draft.trim() && !file)} onClick={() => void submitWechat()}>{sending ? "发送中" : "发送"}</button>
         </footer>
       </main>
       {detailOpen ? (
@@ -2890,7 +2891,7 @@ function ManageList<T extends { name: string; version: string; description: stri
                 <p>{item.description || "无描述"}</p>
               </div>
               <div className="manage-item__actions">
-                <StatusPill label={item.enabled ? "启用" : "停用"} tone={item.enabled ? "ok" : "neutral"} />
+                <StatusPill label={item.enabled ? "正在使用" : "已停用"} tone={item.enabled ? "ok" : "neutral"} />
                 <button className="ghost-button" onClick={() => toggle(item.name, item.enabled)}>
                   {item.enabled ? "停用" : "启用"}
                 </button>

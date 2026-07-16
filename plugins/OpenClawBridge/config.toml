@@ -1,5 +1,5 @@
 [basic]
-priority = 30
+priority = 100000
 
 [openclaw]
 # OpenClaw WebSocket 地址
