@@ -389,9 +389,21 @@ TOOLSETS = {
             "execute_code", "delegate_task",
             # Cronjob management
             "cronjob",
+            # xbot-native WeChat delivery
+            "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
+            "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
             # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
             "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
 
+        ],
+        "includes": []
+    },
+
+    "wechat": {
+        "description": "Send text and media through xbot's current WeChat adapter",
+        "tools": [
+            "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
+            "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
         ],
         "includes": []
     },

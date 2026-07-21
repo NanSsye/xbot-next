@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import shutil
+import subprocess
+import tempfile
 import uuid
 import time
 from typing import Any
@@ -128,7 +131,66 @@ class Wechat869Client:
         return await self.call_path("/message/SendAppMessage", body=payload)
 
     async def send_video_message(self, wxid: str, video_path: str) -> Any:
-        return await self.send_file_message(wxid, video_path)
+        path = Path(video_path)
+        video_bytes = path.read_bytes()
+        thumb_bytes = await asyncio.to_thread(self._video_thumb_bytes, path)
+        upload = await self.call_path(
+            "/message/CdnUploadVideo",
+            body={
+                "ToUserName": wxid,
+                "VideoData": list(video_bytes),
+                "ThumbData": list(thumb_bytes),
+            },
+        )
+        candidates = [upload] if isinstance(upload, dict) else []
+        if candidates and isinstance(upload.get("resp"), dict):
+            candidates.append(upload["resp"])
+        def candidate_value(keys: tuple[str, ...], default: Any = "") -> Any:
+            for candidate in candidates:
+                value = self._pick_nested(candidate, keys)
+                if value not in (None, ""):
+                    return value
+            return default
+
+        aes_key = candidate_value(("aesKey", "AesKey", "aeskey", "FileAesKey", "fileAesKey"))
+        cdn_url = candidate_value(("cdnVideoUrl", "CdnVideoUrl", "cdnvideourl", "fileId", "fileID", "FileID"))
+        if not aes_key or not cdn_url:
+            raise RuntimeError("869 视频上传响应缺少 AesKey 或 CdnVideoUrl")
+        return await self.call_path(
+            "/message/ForwardVideoMessage",
+            body={
+                "ForwardVideoList": [{
+                    "AesKey": str(aes_key),
+                    "CdnVideoUrl": str(cdn_url),
+                    "CdnThumbLength": self._safe_int(candidate_value(("cdnThumbLength", "CdnThumbLength", "ThumbDataSize")), len(thumb_bytes)),
+                    "Length": self._safe_int(candidate_value(("length", "Length", "totalLen", "TotalLen", "VideoDataSize")), len(video_bytes)),
+                    "PlayLength": self._safe_int(candidate_value(("playLength", "PlayLength")), 0),
+                    "ToUserName": wxid,
+                }],
+            },
+        )
+
+    @staticmethod
+    def _video_thumb_bytes(video_path: Path) -> bytes:
+        for suffix in (".jpg", ".jpeg", ".png"):
+            sidecar = video_path.with_suffix(suffix)
+            if sidecar.is_file():
+                return sidecar.read_bytes()
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            with tempfile.TemporaryDirectory(prefix="xbot-video-thumb-") as tmp_dir:
+                output = Path(tmp_dir) / "thumb.jpg"
+                result = subprocess.run(
+                    [ffmpeg, "-y", "-i", str(video_path), "-ss", "00:00:01", "-frames:v", "1", str(output)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                if result.returncode == 0 and output.is_file():
+                    return output.read_bytes()
+        return base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
 
     async def send_voice_message(self, wxid: str, voice_bytes: bytes, *, format: str = "wav", seconds: int = 0) -> Any:
         payload = {

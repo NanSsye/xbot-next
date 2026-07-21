@@ -6,6 +6,7 @@ import io
 import json
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -120,6 +121,25 @@ class Wechat869Adapter(BaseAdapter):
             return
         if reply.type == "file":
             await client.send_file_message(conversation_id, reply.content)
+            return
+        if reply.type == "voice":
+            voice_path = Path(reply.content)
+            await client.send_voice_message(
+                conversation_id,
+                voice_path.read_bytes(),
+                format=str(reply.metadata.get("format") or voice_path.suffix.lstrip(".") or "wav"),
+                seconds=int(reply.metadata.get("seconds") or 0),
+            )
+            return
+        if reply.type == "video":
+            await client.send_video_message(conversation_id, reply.content)
+            return
+        if reply.type in {"link", "music_card"}:
+            await client.send_app_message(
+                conversation_id,
+                str(reply.metadata["content_xml"]),
+                content_type=int(reply.metadata["content_type"]),
+            )
             return
         logger.warning("Wechat869Adapter 不支持回复类型: {}", reply.type)
 

@@ -28,6 +28,15 @@ class FakeClient869:
         self.sent.append((wxid, content, at))
         return 1, 2, 3
 
+    async def send_voice_message(self, wxid, voice_bytes, *, format="wav", seconds=0):
+        self.sent.append(("voice", wxid, voice_bytes, format, seconds))
+
+    async def send_video_message(self, wxid, video_path):
+        self.sent.append(("video", wxid, video_path))
+
+    async def send_app_message(self, wxid, content_xml, content_type=6):
+        self.sent.append(("app", wxid, content_xml, content_type))
+
     async def download_image(self, aes_key: str, cdn_url: str):
         return b"\xff\xd8\xfffake-jpeg"
 
@@ -274,6 +283,28 @@ async def test_wechat869_send_text_reply_uses_raw_conversation_id() -> None:
 
 
 @pytest.mark.anyio
+async def test_wechat869_routes_extended_reply_types(tmp_path) -> None:
+    client = FakeClient869()
+    adapter = Wechat869Adapter(Wechat869AdapterConfig(token_key="token"), client_factory=lambda: client)
+    await adapter.start()
+    voice = tmp_path / "voice.wav"
+    voice.write_bytes(b"voice")
+
+    common = {"platform": "wechat", "adapter": "wechat869", "conversation_id": "wxid_target"}
+    await adapter.send(Reply(**common, type="voice", content=str(voice), metadata={"format": "wav", "seconds": 2}))
+    await adapter.send(Reply(**common, type="video", content="video.mp4"))
+    await adapter.send(Reply(**common, type="link", content="https://example.com", metadata={"content_xml": "<link/>", "content_type": 5}))
+    await adapter.send(Reply(**common, type="music_card", content="https://example.com/a.mp3", metadata={"content_xml": "<music/>", "content_type": 3}))
+
+    assert client.sent == [
+        ("voice", "wxid_target", b"voice", "wav", 2),
+        ("video", "wxid_target", "video.mp4"),
+        ("app", "wxid_target", "<link/>", 5),
+        ("app", "wxid_target", "<music/>", 3),
+    ]
+
+
+@pytest.mark.anyio
 async def test_wechat869_ignores_self_system_messages() -> None:
     queue = FakeQueue()
     adapter = Wechat869Adapter(
@@ -370,6 +401,46 @@ def test_wechat869_internal_client_extracts_send_tuple() -> None:
             }
         ]
     ) == (1, 2, 3)
+
+
+@pytest.mark.anyio
+async def test_wechat869_client_sends_video_through_cdn_pipeline(tmp_path, monkeypatch) -> None:
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"video-bytes")
+    calls = []
+
+    async def fake_call_path(path, *, body=None, method="POST", key=None):
+        calls.append((path, body))
+        if path == "/message/CdnUploadVideo":
+            return {
+                "AesKey": "aes-key",
+                "CdnVideoUrl": "cdn-url",
+                "CdnThumbLength": 12,
+                "Length": 34,
+                "PlayLength": 5,
+            }
+        return {"ok": True}
+
+    client = Wechat869Client("127.0.0.1", 5253)
+    monkeypatch.setattr(client, "call_path", fake_call_path)
+    monkeypatch.setattr(client, "_video_thumb_bytes", lambda _: b"thumb")
+
+    result = await client.send_video_message("wxid_target", str(video))
+
+    assert result == {"ok": True}
+    assert [item[0] for item in calls] == [
+        "/message/CdnUploadVideo",
+        "/message/ForwardVideoMessage",
+    ]
+    assert calls[0][1]["VideoData"] == list(b"video-bytes")
+    assert calls[1][1]["ForwardVideoList"][0] == {
+        "AesKey": "aes-key",
+        "CdnVideoUrl": "cdn-url",
+        "CdnThumbLength": 12,
+        "Length": 34,
+        "PlayLength": 5,
+        "ToUserName": "wxid_target",
+    }
 
 
 def test_wechat869_internal_client_extracts_short_base64_payload() -> None:

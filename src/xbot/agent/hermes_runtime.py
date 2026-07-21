@@ -23,6 +23,7 @@ _HERMES_TOOL_POLICY: contextvars.ContextVar[dict[str, Any] | None] = contextvars
 )
 
 _MEMBER_TOOLSETS = [
+    "wechat",
     "web",
     "file",
     "terminal",
@@ -336,7 +337,7 @@ def _configure_hermes_auxiliary_client(auxiliary_client: Any, config: AgentConfi
 def _toolsets_for_source(source: str) -> list[str]:
     profile = _permission_profile_for_source(source)
     if profile == "guest":
-        return []
+        return ["wechat"]
     if profile == "member":
         return list(_MEMBER_TOOLSETS)
     if source.startswith("api") or source.startswith("terminal"):
@@ -529,6 +530,11 @@ def _tool_policy_denial(function_name: str, function_args: dict[str, Any], polic
     if profile == "admin":
         return None
     if profile == "guest":
+        if function_name in {
+            "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
+            "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
+        }:
+            return None
         return "当前 869 用户是 guest 权限，只能普通聊天，不能调用工具。"
 
     name = str(function_name or "")
@@ -632,6 +638,8 @@ async def run_hermes_agent(
     attachments: list[dict] | None,
     add_event: Callable[..., Any],
     llm_status: Callable[[], dict],
+    send_reply: Callable[..., Any] | None = None,
+    mark_proactive_send: Callable[[], None] | None = None,
 ) -> str:
     if not config.llm.enabled or not config.llm.api_key:
         return "LLM provider is not available: missing model API configuration."
@@ -678,6 +686,7 @@ async def run_hermes_agent(
         from run_agent import AIAgent
         from agent import auxiliary_client
         from hermes_state import SessionDB
+        from tools.xbot_wechat_tools import reset_send_context, set_send_context
 
         _install_hermes_tool_policy_wrapper()
 
@@ -694,6 +703,39 @@ async def run_hermes_agent(
         session_id = _session_id_for_source(source)
         tool_policy = _tool_policy_for_source(config, source)
         token = _HERMES_TOOL_POLICY.set(tool_policy)
+        send_token = None
+        session_parts = session_source.split(":", 3)
+        if (
+            send_reply is not None
+            and len(session_parts) == 4
+            and session_parts[0] == "channel"
+            and session_parts[1] == "wechat"
+        ):
+            async def send_wechat_reply(**kwargs: Any) -> None:
+                from xbot.messaging.models import Reply
+
+                message_type = kwargs["message_type"]
+                if session_parts[2] != "wechat869" and message_type in {
+                    "voice", "video", "link", "music_card",
+                }:
+                    raise RuntimeError(f"{message_type} is only supported by the wechat869 adapter.")
+                await send_reply(Reply(
+                    platform=kwargs["platform"],
+                    adapter=kwargs["adapter"],
+                    conversation_id=kwargs["conversation_id"],
+                    type=message_type,
+                    content=kwargs["content"],
+                    metadata=kwargs.get("metadata") or {},
+                ))
+                if mark_proactive_send is not None:
+                    mark_proactive_send()
+
+            send_token = set_send_context({
+                "loop": loop,
+                "sender": send_wechat_reply,
+                "adapter": session_parts[2],
+                "conversation_id": session_parts[3],
+            })
         agent = AIAgent(
             base_url=config.llm.base_url,
             api_key=config.llm.api_key,
@@ -739,6 +781,8 @@ async def run_hermes_agent(
                 task_id=task_id,
             )
         finally:
+            if send_token is not None:
+                reset_send_context(send_token)
             _HERMES_TOOL_POLICY.reset(token)
         if isinstance(result, dict):
             output = result.get("final_response") or result.get("response") or result.get("content") or ""

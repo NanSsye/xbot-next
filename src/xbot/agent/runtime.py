@@ -96,6 +96,7 @@ class AgentRuntime:
         )
         self._event_subscribers: set[AgentEventSubscriber] = set()
         self._suppress_channel_reply_task_ids: set[str] = set()
+        self._reply_sender = None
         self.background.subscribe(self._on_background_task_completed)
         self._register_hermes_tool_catalog()
 
@@ -111,6 +112,7 @@ class AgentRuntime:
         await self.mcp.stop()
 
     def attach_reply_sender(self, send_reply) -> None:
+        self._reply_sender = send_reply
         self.background.attach_reply_sender(send_reply)
 
     def subscribe_events(self, subscriber: AgentEventSubscriber) -> Callable[[], None]:
@@ -378,6 +380,8 @@ class AgentRuntime:
             attachments=attachments,
             add_event=self._add_event,
             llm_status=self.llm_status,
+            send_reply=self._reply_sender,
+            mark_proactive_send=lambda: self._suppress_channel_reply_task_ids.add(task_id),
         )
 
     async def _run_agent_for_task(self, input_text: str, source: str = "background") -> AgentResult:
@@ -433,6 +437,8 @@ class AgentRuntime:
 
     def _register_hermes_tool_catalog(self) -> None:
         names = [
+            "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
+            "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
             "web_search", "web_extract", "terminal", "process",
             "read_file", "write_file", "patch", "search_files",
             "vision_analyze", "image_generate",

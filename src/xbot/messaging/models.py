@@ -7,7 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 MessageType = Literal["text", "image", "file", "event"]
-ReplyType = Literal["text", "image", "file", "event"]
+ReplyType = Literal["text", "image", "file", "voice", "video", "link", "music_card", "event"]
 
 
 class Message(BaseModel):
