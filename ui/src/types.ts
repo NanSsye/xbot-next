@@ -271,3 +271,9 @@ export type WechatUserDetail = {
   recent_messages: WechatMessage[];
   images: WechatAttachment[];
 };
+
+export type WechatProfilePage = {
+  items: Array<WechatUserDetail & { last_active_at?: string | null }>;
+  total: number;
+  next_cursor?: string | null;
+};

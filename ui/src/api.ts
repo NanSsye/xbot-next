@@ -19,6 +19,7 @@ import type {
   WechatMember,
   WechatMessage,
   WechatUserDetail,
+  WechatProfilePage,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_XBOT_API_BASE ?? "/api/v1";
@@ -99,6 +100,8 @@ export const api = {
     request<WechatMessage[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`),
   wechatMembers: (conversationId: string) =>
     request<WechatMember[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/members`),
+  wechatProfilePage: (conversationId: string, limit = 30, cursor = "") =>
+    request<WechatProfilePage>(`/wechat/conversations/${encodeURIComponent(conversationId)}/profiles?limit=${limit}&cursor=${encodeURIComponent(cursor)}`),
   wechatUsers: (limit = 500, q = "") =>
     request<WechatUserDetail[]>(`/wechat/users?limit=${limit}&q=${encodeURIComponent(q)}`),
   wechatUser: (userId: string, conversationId?: string) => {

@@ -115,6 +115,9 @@ export function App() {
   const [profileSearch, setProfileSearch] = useState("");
   const [profileMembers, setProfileMembers] = useState<WechatMember[]>([]);
   const [profileDetails, setProfileDetails] = useState<Record<string, WechatUserDetail>>({});
+  const [profilePage, setProfilePage] = useState(1);
+  const [profileTotal, setProfileTotal] = useState(0);
+  const [profileCursors, setProfileCursors] = useState<Record<number, string>>({ 1: "" });
   const [groupOpsConversationId, setGroupOpsConversationId] = useState("");
   const [groupOpsMembers, setGroupOpsMembers] = useState<WechatMember[]>([]);
   const [groupOpsDetails, setGroupOpsDetails] = useState<Record<string, WechatUserDetail>>({});
@@ -349,11 +352,19 @@ export function App() {
   }, [view, wechatConversations, profileConversationId]);
 
   useEffect(() => {
+    setProfilePage(1);
+    setProfileCursors({ 1: "" });
+  }, [profileConversationId, profileSearch]);
+
+  useEffect(() => {
     if (view !== "profiles" || !profileConversationId) return;
     let cancelled = false;
-    setProfileMembers([]);
-    setProfileDetails({});
+    if (profilePage === 1) {
+      setProfileMembers([]);
+      setProfileDetails({});
+    }
     if (profileConversationId === "__all") {
+      if (profileMembers.length && profilePage > 1) return () => { cancelled = true; };
       api.wechatUsers(500, profileSearch)
         .then((users) => {
           if (cancelled) return;
@@ -366,30 +377,33 @@ export function App() {
             last_active_at: user.profile.updated_at || null,
           }));
           setProfileMembers(members);
+          setProfileTotal(members.length);
           setProfileDetails(Object.fromEntries(users.map((user) => [user.contact.user_id, user])));
         })
         .catch((err) => setError(err instanceof Error ? err.message : String(err)));
       return () => { cancelled = true; };
     }
-    api.wechatMembers(profileConversationId)
-      .then(async (members) => {
+    api.wechatProfilePage(profileConversationId, 30, profileCursors[profilePage] || "")
+      .then((result) => {
         if (cancelled) return;
-        const ordered = members.slice().sort((a, b) => (b.message_count || 0) - (a.message_count || 0));
-        setProfileMembers(ordered);
-        const details = await Promise.all(
-          ordered.slice(0, 80).map(async (member) => {
-            try {
-              return [member.user_id, await api.wechatUser(member.user_id, profileConversationId)] as const;
-            } catch {
-              return null;
-            }
-          }),
-        );
-        if (!cancelled) setProfileDetails(Object.fromEntries(details.filter(Boolean) as Array<readonly [string, WechatUserDetail]>));
+        const members = result.items.map((item) => ({
+          user_id: item.contact.user_id,
+          nickname: item.contact.nickname,
+          remark: item.contact.remark,
+          avatar_url: item.contact.avatar_url,
+          message_count: item.stats.message_count,
+          last_active_at: item.last_active_at || null,
+        }));
+        setProfileMembers(members);
+        setProfileTotal(result.total);
+        setProfileDetails(Object.fromEntries(result.items.map((item) => [item.contact.user_id, item])));
+        if (result.next_cursor) {
+          setProfileCursors((current) => ({ ...current, [profilePage + 1]: result.next_cursor || "" }));
+        }
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
     return () => { cancelled = true; };
-  }, [view, profileConversationId, profileSearch]);
+  }, [view, profileConversationId, profileSearch, profilePage]);
 
   useEffect(() => {
     if (view !== "groupOps") return;
@@ -476,7 +490,7 @@ export function App() {
     try {
       const result = await api.sendAgentTask(contextBlock, isDirectAgentChat ? directSource : "terminal:control-ui");
       setSelectedTaskId(result.task_id);
-      if (isDirectAgentChat) setSelectedAgentSessionSource(result.source || directSource);
+      if (isDirectAgentChat) setSelectedAgentSessionSource(agentSessionSource(result.source || directSource));
       const assistantMessage: ConsoleMessage = {
         id: pendingMessage.id,
         role: "assistant",
@@ -938,6 +952,10 @@ export function App() {
             setSelectedConversationId={setProfileConversationId}
             members={profileMembers}
             details={profileDetails}
+            page={profilePage}
+            setPage={setProfilePage}
+            total={profileTotal}
+            serverPaged={profileConversationId !== "__all"}
             search={profileSearch}
             setSearch={setProfileSearch}
             onSaveProfile={saveWechatProfile}
@@ -1151,9 +1169,9 @@ function AgentConsoleView({
 }) {
   const currentTask = detail?.task;
   const sessionSources = agentSessionSources(tasks);
-  const activeSessionSource = selectedAgentSessionSource || "terminal:control-ui";
+  const activeSessionSource = agentSessionSource(selectedAgentSessionSource || "terminal:control-ui");
   const sessionTasks = tasks
-    .filter((task) => (task.source || "terminal:control-ui") === activeSessionSource)
+    .filter((task) => agentSessionSource(task.source) === activeSessionSource)
     .slice()
     .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
   const latestSessionTask = sessionTasks[sessionTasks.length - 1];
@@ -1177,7 +1195,7 @@ function AgentConsoleView({
         </div>
         <div className="hermes-session-scroll">
           {sessionSources.map((source) => {
-            const sourceTasks = tasks.filter((task) => (task.source || "terminal:control-ui") === source);
+            const sourceTasks = tasks.filter((task) => agentSessionSource(task.source) === source);
             const latest = sourceTasks[0];
             return (
               <button
@@ -1284,6 +1302,10 @@ function WechatProfilesView({
   setSelectedConversationId,
   members,
   details,
+  page,
+  setPage,
+  total,
+  serverPaged,
   search,
   setSearch,
   onSaveProfile,
@@ -1293,6 +1315,10 @@ function WechatProfilesView({
   setSelectedConversationId: (value: string) => void;
   members: WechatMember[];
   details: Record<string, WechatUserDetail>;
+  page: number;
+  setPage: (value: number) => void;
+  total: number;
+  serverPaged: boolean;
   search: string;
   setSearch: (value: string) => void;
   onSaveProfile: (userId: string, conversationId: string | null, summary: string, tags: string[]) => Promise<WechatUserDetail>;
@@ -1300,10 +1326,14 @@ function WechatProfilesView({
   const selected = conversations.find((item) => item.id === selectedConversationId);
   const isAllProfiles = selectedConversationId === "__all";
   const [editingProfile, setEditingProfile] = useState<{ member: WechatMember; detail?: WechatUserDetail } | null>(null);
+  const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(() => new Set());
   const profiled = members.filter((member) => {
     const detail = details[member.user_id];
     return detail?.profile?.summary && detail.profile.summary !== "暂无 AI 用户画像。";
   }).length;
+  const pageSize = 30;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const visibleMembers = serverPaged ? members : members.slice((page - 1) * pageSize, page * pageSize);
 
   async function editProfile(member: WechatMember, detail?: WechatUserDetail) {
     setEditingProfile({ member, detail });
@@ -1352,19 +1382,28 @@ function WechatProfilesView({
             <div className="profile-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索昵称、wxid、标签、画像" /></div>
           </div>
           <div className="profile-lab__stats">
-            <span><b>{members.length}</b>成员</span>
+            <span><b>{total}</b>成员</span>
             <span><b>{profiled}</b>已画像</span>
             <span><b>{members.reduce((sum, item) => sum + (item.message_count || 0), 0)}</b>发言</span>
           </div>
         </header>
         {members.length ? (
+          <>
+          {pageCount > 1 ? (
+            <nav className="profile-pagination profile-pagination--top" aria-label="画像分页">
+              <button type="button" disabled={page <= 1} onClick={() => setPage(Math.max(1, page - 1))}>上一页</button>
+              <span>第 {page} / {pageCount} 页 · 共 {total} 人</span>
+              <button type="button" disabled={page >= pageCount} onClick={() => setPage(Math.min(pageCount, page + 1))}>下一页</button>
+            </nav>
+          ) : null}
           <div className="profile-card-grid">
-            {members.map((member) => {
+            {visibleMembers.map((member) => {
               const detail = details[member.user_id];
               const tags = detail?.profile?.tags || [];
               const summary = detail?.profile?.summary || "暂无 AI 用户画像。";
+              const expanded = expandedProfiles.has(member.user_id);
               return (
-                <article className={`profile-card ${summary === "暂无 AI 用户画像。" ? "profile-card--empty" : ""}`} key={member.user_id}>
+                <article className={`profile-card ${expanded ? "profile-card--expanded" : ""} ${summary === "暂无 AI 用户画像。" ? "profile-card--empty" : ""}`} key={member.user_id}>
                   <div className="profile-card__top">
                     <WechatAvatar className="profile-card__avatar" src={member.avatar_url || detail?.contact.avatar_url} text={member.nickname || member.user_id} />
                     <div>
@@ -1374,6 +1413,18 @@ function WechatProfilesView({
                     <button className="profile-card__edit" onClick={() => void editProfile(member, detail)}>编辑</button>
                   </div>
                   <p className="profile-card__summary">{summary}</p>
+                  {summary.length > 90 ? (
+                    <button
+                      type="button"
+                      className="profile-card__expand"
+                      onClick={() => setExpandedProfiles((current) => {
+                        const next = new Set(current);
+                        if (next.has(member.user_id)) next.delete(member.user_id);
+                        else next.add(member.user_id);
+                        return next;
+                      })}
+                    >{expanded ? "收起" : "展开全文"}</button>
+                  ) : null}
                   <div className="profile-card__tags">
                     {tags.length ? tags.map((tag) => <span key={tag}>{tag}</span>) : <span>未打标签</span>}
                   </div>
@@ -1386,6 +1437,7 @@ function WechatProfilesView({
               );
             })}
           </div>
+          </>
         ) : (
           <EmptyState title="暂无成员画像" text="选择左侧群聊，或先在微信页同步群成员。" />
         )}
@@ -2032,8 +2084,12 @@ function agentConsoleContextKey(source: string): string {
 
 function agentSessionSources(tasks: AgentTask[]): string[] {
   const sources = new Set<string>(["terminal:control-ui"]);
-  for (const task of tasks) sources.add(task.source || "terminal:control-ui");
+  for (const task of tasks) sources.add(agentSessionSource(task.source));
   return [...sources];
+}
+
+function agentSessionSource(source?: string): string {
+  return (source || "terminal:control-ui").replace(/:(?:restricted|member|guest)$/, "");
 }
 
 function sessionLabel(source: string): string {

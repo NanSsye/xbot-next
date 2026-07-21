@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -189,6 +189,7 @@ class ConversationRecord(Base):
 
 class ConversationMemberRecord(Base):
     __tablename__ = "conversation_members"
+    __table_args__ = (Index("ix_conversation_members_conversation_user", "conversation_id", "user_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(String(512), index=True)
@@ -200,6 +201,7 @@ class ConversationMemberRecord(Base):
 
 class ConversationMessageRecord(Base):
     __tablename__ = "conversation_messages"
+    __table_args__ = (Index("ix_conversation_messages_conversation_sender_created", "conversation_id", "sender_id", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(String(512), index=True)
@@ -253,6 +255,7 @@ class ContactRecord(Base):
 
 class MessageAttachmentRecord(Base):
     __tablename__ = "message_attachments"
+    __table_args__ = (Index("ix_message_attachments_conversation_sender_kind", "conversation_id", "sender_id", "kind"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     message_id: Mapped[str] = mapped_column(String(64), index=True)
@@ -273,7 +276,10 @@ class MessageAttachmentRecord(Base):
 
 class UserProfileRecord(Base):
     __tablename__ = "user_profiles"
-    __table_args__ = (UniqueConstraint("platform", "adapter", "user_id", "conversation_id", name="uq_user_profiles_scope"),)
+    __table_args__ = (
+        UniqueConstraint("platform", "adapter", "user_id", "conversation_id", name="uq_user_profiles_scope"),
+        Index("ix_user_profiles_scope_lookup", "platform", "adapter", "conversation_id", "user_id", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     platform: Mapped[str] = mapped_column(String(64))

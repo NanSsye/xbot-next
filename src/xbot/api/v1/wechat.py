@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import mimetypes
 from pathlib import Path
 from uuid import uuid4
@@ -31,6 +32,22 @@ class WechatProfileUpdate(BaseModel):
     conversation_id: str | None = None
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
+
+
+def _decode_offset_cursor(cursor: str) -> int:
+    if not cursor:
+        return 0
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding).decode("utf-8"))
+        return max(0, int(payload.get("offset", 0)))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid cursor") from exc
+
+
+def _encode_offset_cursor(offset: int) -> str:
+    raw = json.dumps({"offset": offset}, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def _beijing_now() -> datetime:
@@ -273,6 +290,114 @@ async def list_wechat_members(conversation_id: str, ctx: AppContext = Depends(ge
             })
             data.append(contact)
         return {"success": True, "data": data}
+
+
+@router.get("/conversations/{conversation_id}/profiles")
+async def list_wechat_member_profiles(
+    conversation_id: str,
+    limit: int = 30,
+    cursor: str = "",
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    page_size = max(1, min(100, limit))
+    offset = _decode_offset_cursor(cursor)
+    async with ctx.storage.session_factory() as session:
+        conv = await session.get(ConversationRecord, conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        sender_rows = (await session.execute(
+            select(
+                ConversationMessageRecord.sender_id,
+                func.count(ConversationMessageRecord.id),
+                func.max(ConversationMessageRecord.created_at),
+            )
+            .where(ConversationMessageRecord.conversation_id == conversation_id)
+            .group_by(ConversationMessageRecord.sender_id)
+        )).all()
+        known = (await session.execute(
+            select(ConversationMemberRecord).where(
+                ConversationMemberRecord.conversation_id == conversation_id
+            )
+        )).scalars().all()
+        count_map = {row[0]: int(row[1] or 0) for row in sender_rows if row[0]}
+        last_map = {row[0]: row[2] for row in sender_rows if row[0]}
+        member_names = {row.user_id: row.display_name for row in known}
+        user_ids = sorted(
+            set(member_names) | set(count_map),
+            key=lambda user_id: (-count_map.get(user_id, 0), user_id),
+        )
+        total = len(user_ids)
+        page_ids = user_ids[offset:offset + page_size]
+        contacts = {}
+        profiles_by_user: dict[str, list[UserProfileRecord]] = {}
+        image_counts = {}
+        if page_ids:
+            contacts = {
+                row.user_id: row
+                for row in (await session.execute(
+                    select(ContactRecord).where(
+                        ContactRecord.platform == conv.platform,
+                        ContactRecord.adapter == conv.adapter,
+                        ContactRecord.user_id.in_(page_ids),
+                    )
+                )).scalars().all()
+            }
+            raw_id = _raw_conversation_id(conversation_id)
+            profile_rows = (await session.execute(
+                select(UserProfileRecord).where(
+                    UserProfileRecord.platform == conv.platform,
+                    UserProfileRecord.adapter == conv.adapter,
+                    UserProfileRecord.user_id.in_(page_ids),
+                    or_(
+                        UserProfileRecord.conversation_id == conversation_id,
+                        UserProfileRecord.conversation_id == raw_id,
+                        UserProfileRecord.conversation_id.is_(None),
+                    ),
+                )
+            )).scalars().all()
+            for row in profile_rows:
+                profiles_by_user.setdefault(row.user_id, []).append(row)
+            image_counts = {
+                row[0]: int(row[1] or 0)
+                for row in (await session.execute(
+                    select(MessageAttachmentRecord.sender_id, func.count(MessageAttachmentRecord.id))
+                    .where(
+                        MessageAttachmentRecord.conversation_id == conversation_id,
+                        MessageAttachmentRecord.sender_id.in_(page_ids),
+                        MessageAttachmentRecord.kind == "image",
+                    )
+                    .group_by(MessageAttachmentRecord.sender_id)
+                )).all()
+            }
+
+        def pick_profile(user_id: str) -> UserProfileRecord | None:
+            raw_id = _raw_conversation_id(conversation_id)
+            rank = {conversation_id: 0, raw_id: 1, None: 2}
+            rows = profiles_by_user.get(user_id, [])
+            return min(rows, key=lambda row: (rank.get(row.conversation_id, 3), -(row.updated_at.timestamp() if row.updated_at else 0))) if rows else None
+
+        items = []
+        for user_id in page_ids:
+            contact = contacts.get(user_id)
+            profile = pick_profile(user_id)
+            items.append({
+                "contact": _contact_dict(contact, user_id, member_names.get(user_id)),
+                "stats": {"message_count": count_map.get(user_id, 0), "image_count": image_counts.get(user_id, 0)},
+                "profile": {
+                    "summary": profile.summary if profile else "暂无 AI 用户画像。",
+                    "tags": _json(profile.tags_json, []) if profile else [],
+                    "updated_at": profile.updated_at.isoformat() if profile and profile.updated_at else None,
+                },
+                "recent_messages": [],
+                "images": [],
+                "last_active_at": last_map.get(user_id).isoformat() if last_map.get(user_id) else None,
+            })
+        next_offset = offset + len(page_ids)
+        return {"success": True, "data": {
+            "items": items,
+            "total": total,
+            "next_cursor": _encode_offset_cursor(next_offset) if next_offset < total else None,
+        }}
 
 
 @router.get("/users")
