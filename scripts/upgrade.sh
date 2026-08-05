@@ -112,7 +112,8 @@ fi
 . .venv/bin/activate
 python -m pip install -U pip
 install_build_tools
-python -m pip install --no-build-isolation -e .
+python -m pip install --no-build-isolation -e ./vendor/hermes -e ".[agent]"
+python -c 'from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()'
 python -m playwright install chromium || true
 
 mkdir -p "$BIN_DIR"

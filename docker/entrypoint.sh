@@ -25,11 +25,11 @@ PY
 }
 
 if [ "${XBOT_DOCKER_INSTALL_DEPS_ON_START:-true}" = "true" ]; then
-  py_hash="$(hash_files pyproject.toml)"
-  py_marker="/app/data/.docker/pyproject.sha256"
+  py_hash="$(hash_files pyproject.toml vendor/hermes/pyproject.toml vendor/hermes-upstream.json)"
+  py_marker="/app/data/.docker/python-dependencies.sha256"
   if [ ! -f "$py_marker" ] || [ "$(cat "$py_marker")" != "$py_hash" ]; then
     echo "[xbot-docker] 安装/更新 Python 依赖..."
-    python -m pip install -e .
+    python -m pip install --no-build-isolation -e ./vendor/hermes -e ".[agent]"
     echo "$py_hash" > "$py_marker"
   fi
 fi

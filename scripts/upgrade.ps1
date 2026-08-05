@@ -134,7 +134,14 @@ Invoke-Native -FilePath $PythonExe -Arguments $VenvArgs
 $VenvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
 Invoke-Native -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-U", "pip")
 Install-BuildTools -PythonPath $VenvPython
-Invoke-Native -FilePath $VenvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "-e", ".")
+Invoke-Native -FilePath $VenvPython -Arguments @(
+    "-m", "pip", "install", "--no-build-isolation",
+    "-e", ".\vendor\hermes",
+    "-e", ".[agent]"
+)
+Invoke-Native -FilePath $VenvPython -Arguments @(
+    "-c", "from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()"
+)
 
 try {
     Invoke-Native -FilePath $VenvPython -Arguments @("-m", "playwright", "install", "chromium")

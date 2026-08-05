@@ -1,6 +1,6 @@
 # Docker 本地构建运行
 
-更新时间：2026-06-26
+更新时间：2026-08-05
 
 本项目支持用户在本机直接构建 Docker 运行环境，并把整个项目目录映射进容器。compose 会同时启动：
 
@@ -169,11 +169,12 @@ XBOT_DOCKER_BUILD_UI_ON_START: "false"
 ```
 
 依赖和前端在镜像构建阶段完成。数据库迁移仍按 `.env` 配置在启动时执行。
-内嵌 Hermes 源码位于 `vendor/hermes/`。因为 compose 映射整个项目目录，替换 `vendor/hermes/` 后重启 `xbot` 容器即可生效；通常不需要重新构建镜像。
+内嵌 Hermes 源码位于 `vendor/hermes/`。Hermes 升级可能同时改变 Python 依赖，并且当前镜像会构建规避 WAL-reset 缺陷的 SQLite 3.53.4，因此替换 Hermes 后必须重新构建镜像，不能只重启旧容器。
 
 只有这些情况需要重新构建镜像：
 
 - Dockerfile 改了
+- `vendor/hermes-upstream.json` 或 `vendor/hermes/pyproject.toml` 改了
 - Python/Node 系统运行环境要升级
 - 需要重新安装 Playwright 浏览器系统依赖
 
@@ -183,16 +184,12 @@ XBOT_DOCKER_BUILD_UI_ON_START: "false"
 docker compose up -d --build
 ```
 
-## Agent 和 Playwright 可选依赖
+## Agent 和 Playwright 依赖
 
-默认镜像只安装通道、插件、API 和 Web 控制台所需依赖，不安装内置 Agent extra，也不下载 Playwright Chromium。
-
-如果只使用 WeChat 869、OpenClawBridge 和普通插件，无需安装 Agent 依赖。
-
-如果需要内置 Agent/Hermes 依赖，可在镜像或容器内安装：
+默认镜像安装 xbot Agent extra 与 vendored Hermes，但不下载 Playwright Chromium。手动安装与镜像保持一致：
 
 ```bash
-pip install -e .[agent]
+pip install -e ./vendor/hermes -e ".[agent]"
 ```
 
 如果需要浏览器工具，再安装：

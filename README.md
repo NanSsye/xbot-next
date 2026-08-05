@@ -79,7 +79,7 @@ http://localhost:8548
 docker compose restart xbot
 ```
 
-说明：Docker 默认只安装通道、插件、API 和 Web 控制台所需依赖，不安装内置 Agent/Hermes 额外依赖，也不下载 Playwright Chromium。OpenClawBridge、WeChat 869 和普通插件可直接使用。只有需要内置 Agent 或浏览器工具时，才安装可选 extra。Docker 会映射整个项目目录，运行期数据会随项目目录保留。只有 `Dockerfile`、依赖或前端构建变化时才需要重新 `docker compose up -d --build`。
+说明：Docker 默认安装 xbot 与内嵌 Hermes 的完整运行依赖，但不下载 Playwright Chromium。Docker 会映射整个项目目录，运行期数据会随项目目录保留。Hermes 版本、Dockerfile 或 Python 依赖变化后必须重新执行 `docker compose up -d --build`。
 
 ### 一键安装
 
@@ -196,7 +196,7 @@ pip install -e .
 可选安装：
 
 ```bat
-pip install -e .[agent]     # 内置 Agent/Hermes/MCP/LLM 相关
+pip install -e ./vendor/hermes -e ".[agent]"  # 内置 Agent/Hermes/MCP/LLM
 pip install -e .[browser]   # Playwright Python SDK
 pip install -e .[full]      # agent + browser
 pip install -e .[dev]       # 测试/格式化工具
@@ -308,10 +308,12 @@ python -m pytest -q
 需要启用内置 Agent 时，先安装：
 
 ```bash
-pip install -e .[agent]
+pip install -e ./vendor/hermes -e ".[agent]"
 ```
 
-Docker 默认不安装 Agent extra；需要内置 Agent 的镜像请把 Dockerfile 中安装命令改为 `pip install -e .[agent]` 或 `pip install -e .[full]`。启用后，xbot 负责通道、插件、API、消息队列、任务记录和前端，Agent 对话循环、工具调用、上下文压缩、长期记忆、skill 自进化和轨迹由 Hermes 执行。
+Docker 镜像默认安装 Hermes 与 Agent extra。xbot 负责通道、插件、API、消息队列、任务记录和前端，Agent 对话循环、工具调用、上下文压缩、长期记忆、skill 自进化和轨迹由 Hermes 执行。
+
+Hermes state.db 只能使用不受 WAL-reset 缺陷影响的 SQLite：`>=3.51.3`、`3.50.7` backport 或 `3.44.6` backport。Dockerfile 会构建固定的 SQLite 3.53.4；本地安装脚本会在启用 Agent 前检查当前 Python 链接的 SQLite，不安全时会终止并提示更换运行时。
 
 主模型仍统一配置在项目根目录 `.env`：
 

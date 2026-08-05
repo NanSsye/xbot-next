@@ -115,7 +115,8 @@ cd "$INSTALL_DIR"
 . .venv/bin/activate
 python -m pip install -U pip
 install_build_tools
-python -m pip install --no-build-isolation -e .
+python -m pip install --no-build-isolation -e ./vendor/hermes -e ".[agent]"
+python -c 'from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()'
 
 if [ ! -f .env ] && [ -f .env.example ]; then
   cp .env.example .env

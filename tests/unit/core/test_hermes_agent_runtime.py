@@ -5,19 +5,21 @@ import json
 import anyio
 import pytest
 
+import xbot.agent.runtime as runtime_module
 from xbot.agent.hermes_runtime import (
+    _assert_safe_hermes_sqlite,
+    _configure_hermes_auxiliary_client,
     _ensure_hermes_home_files,
     _ensure_hermes_import_path,
     _permission_profile_for_source,
     _restore_session_history,
-    _session_source_for_source,
     _session_id_for_source,
+    _session_source_for_source,
     _tool_policy_denial,
     _tool_policy_for_source,
     _toolsets_for_source,
     clear_hermes_session,
 )
-import xbot.agent.runtime as runtime_module
 from xbot.agent.runtime import AgentRuntime
 from xbot.core.config import AgentConfig
 
@@ -92,7 +94,10 @@ def test_permission_scoped_channel_source_selects_hermes_toolsets():
     assert "file" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "terminal" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "wechat" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
-    assert _toolsets_for_source("channel:wechat:wechat869:group@chatroom") == ["hermes-api-server"]
+    assert _toolsets_for_source("channel:wechat:wechat869:group@chatroom") == [
+        "hermes-api-server",
+        "wechat",
+    ]
 
 
 def test_permission_scoped_channel_source_shares_hermes_session_with_allowed_source():
@@ -109,21 +114,111 @@ def test_permission_scoped_channel_source_shares_hermes_session_with_allowed_sou
     assert _session_id_for_source(guest) == _session_id_for_source(allowed)
     assert _permission_profile_for_source(member) == "member"
     assert _permission_profile_for_source(guest) == "guest"
-    assert _toolsets_for_source(allowed) == ["hermes-api-server"]
+    assert _toolsets_for_source(allowed) == ["hermes-api-server", "wechat"]
 
 
 def test_wechat_tools_are_registered_for_admin_and_member():
     _ensure_hermes_import_path()
     from model_tools import get_tool_definitions
 
-    admin_names = {item["function"]["name"] for item in get_tool_definitions(["hermes-api-server"], quiet_mode=True)}
-    member_names = {item["function"]["name"] for item in get_tool_definitions(["wechat"], quiet_mode=True)}
+    admin_names = {
+        item["function"]["name"]
+        for item in get_tool_definitions(
+            _toolsets_for_source("channel:wechat:wechat869:group@chatroom"),
+            quiet_mode=True,
+            skip_tool_search_assembly=True,
+        )
+    }
+    member_names = {
+        item["function"]["name"]
+        for item in get_tool_definitions(
+            ["wechat"],
+            quiet_mode=True,
+            skip_tool_search_assembly=True,
+        )
+    }
     expected = {
         "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
         "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
     }
     assert expected <= admin_names
     assert expected <= member_names
+
+
+def test_hermes_sqlite_gate_rejects_vulnerable_runtime(monkeypatch):
+    monkeypatch.setattr("xbot.agent.hermes_runtime.sqlite3.sqlite_version_info", (3, 45, 1))
+    monkeypatch.setattr("xbot.agent.hermes_runtime.sqlite3.sqlite_version", "3.45.1")
+
+    with pytest.raises(RuntimeError, match="WAL-reset corruption bug"):
+        _assert_safe_hermes_sqlite()
+
+
+def test_hermes_sqlite_gate_accepts_fixed_runtime(monkeypatch):
+    monkeypatch.setattr("xbot.agent.hermes_runtime.sqlite3.sqlite_version_info", (3, 51, 3))
+    monkeypatch.setattr("xbot.agent.hermes_runtime.sqlite3.sqlite_version", "3.51.3")
+
+    _assert_safe_hermes_sqlite()
+
+
+def test_upgraded_hermes_aiagent_constructor_contract(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _ensure_hermes_home_files(tmp_path)
+    _ensure_hermes_import_path()
+
+    from hermes_state import SessionDB
+    from run_agent import AIAgent
+
+    session_db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        agent = AIAgent(
+            base_url="https://example.invalid/v1",
+            api_key="test-key",
+            provider="custom",
+            api_mode="chat_completions",
+            model="test-model",
+            enabled_toolsets=["wechat"],
+            quiet_mode=True,
+            session_id="xbot-constructor-contract",
+            session_db=session_db,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+    finally:
+        session_db.close()
+
+    assert agent.session_id == "xbot-constructor-contract"
+    assert agent.enabled_toolsets == ["wechat"]
+
+
+def test_upgraded_hermes_auxiliary_client_contract():
+    _ensure_hermes_import_path()
+    from agent import auxiliary_client
+
+    config = AgentConfig()
+    config.llm.provider = "openai_compatible"
+    config.llm.base_url = "https://example.invalid/v1"
+    config.llm.api_key = "test-key"
+    config.llm.model = "test-model"
+    patched_names = (
+        "_resolve_custom_runtime",
+        "_resolve_auto",
+        "resolve_provider_client",
+        "get_text_auxiliary_client",
+        "get_async_text_auxiliary_client",
+        "_get_provider_chain",
+        "_try_openrouter",
+        "_try_nous",
+    )
+    originals = {name: getattr(auxiliary_client, name) for name in patched_names}
+    try:
+        _configure_hermes_auxiliary_client(auxiliary_client, config)
+        client, model = auxiliary_client.resolve_provider_client("auto")
+    finally:
+        for name, value in originals.items():
+            setattr(auxiliary_client, name, value)
+
+    assert client is not None
+    assert model == "test-model"
 
 
 @pytest.mark.anyio
@@ -149,7 +244,7 @@ async def test_runtime_passes_reply_sender_to_hermes(monkeypatch):
 @pytest.mark.anyio
 async def test_wechat_tool_routes_current_and_explicit_targets():
     _ensure_hermes_import_path()
-    from tools.xbot_wechat_tools import reset_send_context, send_text, set_send_context
+    from xbot.agent.tools.hermes_wechat import reset_send_context, send_text, set_send_context
 
     calls = []
 
@@ -177,7 +272,7 @@ async def test_wechat_tool_routes_current_and_explicit_targets():
 
 def test_wechat_tool_without_context_returns_error():
     _ensure_hermes_import_path()
-    from tools.xbot_wechat_tools import send_text
+    from xbot.agent.tools.hermes_wechat import send_text
 
     assert "error" in json.loads(send_text({"text": "hello"}))
 
@@ -185,8 +280,13 @@ def test_wechat_tool_without_context_returns_error():
 @pytest.mark.anyio
 async def test_wechat_extended_tools_build_metadata_and_route_targets():
     _ensure_hermes_import_path()
-    from tools.xbot_wechat_tools import (
-        reset_send_context, send_link, send_music_card, send_video, send_voice, set_send_context,
+    from xbot.agent.tools.hermes_wechat import (
+        reset_send_context,
+        send_link,
+        send_music_card,
+        send_video,
+        send_voice,
+        set_send_context,
     )
 
     calls = []
@@ -271,6 +371,8 @@ def test_ensure_hermes_home_files_does_not_overwrite_existing_config(tmp_path):
 
 def test_clear_hermes_session_deletes_only_source_session(tmp_path, monkeypatch):
     monkeypatch.setattr("xbot.agent.hermes_runtime.hermes_home_dir", lambda: tmp_path)
+    monkeypatch.setattr("xbot.agent.hermes_runtime.sqlite3.sqlite_version_info", (3, 51, 3))
+    monkeypatch.setattr("xbot.agent.hermes_runtime.sqlite3.sqlite_version", "3.51.3")
     _ensure_hermes_import_path()
 
     from hermes_state import SessionDB

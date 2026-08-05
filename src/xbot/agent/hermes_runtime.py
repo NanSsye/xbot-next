@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import re
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -15,7 +16,6 @@ import anyio
 
 from xbot.core.config import AgentConfig
 from xbot.core.logging import logger
-
 
 _HERMES_TOOL_POLICY: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "xbot_hermes_tool_policy",
@@ -186,7 +186,24 @@ def _ensure_hermes_import_path() -> Path:
     vendor_text = str(vendor_dir)
     if vendor_text not in sys.path:
         sys.path.insert(0, vendor_text)
+    from xbot.agent.tools.hermes_wechat import register_xbot_wechat_tools
+
+    register_xbot_wechat_tools()
     return vendor_dir
+
+
+def _assert_safe_hermes_sqlite() -> None:
+    """Refuse Hermes state writes on SQLite builds affected by WAL-reset corruption."""
+    _ensure_hermes_import_path()
+    from hermes_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable
+
+    if is_sqlite_wal_reset_vulnerable(sqlite3.sqlite_version_info):
+        raise RuntimeError(
+            "Hermes cannot safely use this Python runtime: linked SQLite "
+            f"{sqlite3.sqlite_version} contains the WAL-reset corruption bug. "
+            "Use SQLite >=3.51.3, the 3.50.7 backport, or the 3.44.6 backport. "
+            "The xbot Docker image builds a fixed SQLite automatically."
+        )
 
 
 def _ensure_hermes_home_files(home_dir: Path) -> None:
@@ -341,8 +358,8 @@ def _toolsets_for_source(source: str) -> list[str]:
     if profile == "member":
         return list(_MEMBER_TOOLSETS)
     if source.startswith("api") or source.startswith("terminal"):
-        return ["hermes-api-server"]
-    return ["hermes-api-server"]
+        return ["hermes-api-server", "wechat"]
+    return ["hermes-api-server", "wechat"]
 
 
 def _permission_profile_for_source(source: str) -> str:
@@ -378,6 +395,7 @@ def _session_id_for_source(source: str) -> str:
 def clear_hermes_session(source: str | None = None) -> dict[str, Any]:
     """Delete the Hermes session mapped to an xbot source."""
     _ensure_hermes_import_path()
+    _assert_safe_hermes_sqlite()
     home_dir = hermes_home_dir()
     _ensure_hermes_home_files(home_dir)
     os.environ["HERMES_HOME"] = str(home_dir)
@@ -682,11 +700,13 @@ async def run_hermes_agent(
         from hermes_cli.env_loader import load_hermes_dotenv
 
         load_hermes_dotenv(hermes_home=home_dir)
+        _assert_safe_hermes_sqlite()
 
-        from run_agent import AIAgent
         from agent import auxiliary_client
         from hermes_state import SessionDB
-        from tools.xbot_wechat_tools import reset_send_context, set_send_context
+        from run_agent import AIAgent
+
+        from xbot.agent.tools.hermes_wechat import reset_send_context, set_send_context
 
         _install_hermes_tool_policy_wrapper()
 

@@ -1,6 +1,6 @@
 # xbot 后端框架设计
 
-更新时间：2026-06-03
+更新时间：2026-08-05
 
 ## 当前定位
 
@@ -40,6 +40,8 @@ Hermes 负责：
 - 自进化和 curator。
 - trajectory 保存。
 - Hermes 扩展环境变量。
+
+Hermes vendor 通过 `vendor/hermes-upstream.json` 和 `scripts/sync_hermes.py` 固定、校验和重建。xbot 自有通道工具保留在 `src/xbot/agent/tools/`，运行时动态注册到 Hermes registry，避免下一次上游同步覆盖本地能力；确实无法外置的改动才进入 `patches/hermes/` 有序补丁队列。
 
 ## 869 Agent 权限模型
 
@@ -175,4 +177,4 @@ XBOT_LLM_MULTIMODAL_*
 - 为 Hermes memory、sessions、skills、trajectory 做只读管理页。
 - 给 Hermes task/event 流增加更完整的前端实时展示。
 - 补充 Hermes 配置导入/导出和生产环境诊断。
-- 对 `vendor/hermes` 更新流程做脚本化，便于以后直接替换源码。
+- 为 Hermes 上游升级增加 CI 校验，自动运行 sync verify、构造契约和旧库迁移 fixture。
