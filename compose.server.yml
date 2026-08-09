@@ -1,0 +1,75 @@
+services:
+  xbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SQLITE_BUILD_IMAGE: docker.m.daocloud.io/library/debian:bookworm-slim
+        RUNTIME_IMAGE: docker.m.daocloud.io/library/python:3.11-slim-bookworm
+        INSTALL_PLAYWRIGHT: ${INSTALL_PLAYWRIGHT:-false}
+        APT_MIRROR: https://mirrors.aliyun.com/debian
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    image: xbot-next:local
+    pull_policy: build
+    container_name: xbot-next-app
+    restart: unless-stopped
+    environment:
+      XBOT_SERVER_HOST: 0.0.0.0
+      XBOT_DOCKER_INSTALL_DEPS_ON_START: "false"
+      XBOT_DOCKER_BUILD_UI_ON_START: "true"
+      TZ: Asia/Shanghai
+    ports:
+      - "8548:8548"
+      - "18790:8548"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/app
+      - ./docker-data/ui-node_modules:/app/ui/node_modules
+      - ./docker-data/pip-cache:/root/.cache/pip
+      - ./docker-data/npm-cache:/root/.npm
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8548),5); s.close()"]
+      interval: 15s
+      timeout: 8s
+      retries: 20
+      start_period: 90s
+
+  postgres:
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    container_name: xbot-next-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${XBOT_POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: postgres
+      TZ: Asia/Shanghai
+    volumes:
+      - ./docker-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7-alpine
+    container_name: xbot-next-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./docker-data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

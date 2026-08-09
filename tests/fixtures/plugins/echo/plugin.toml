@@ -1,0 +1,12 @@
+name = "echo"
+version = "0.1.0"
+entry = "main:EchoPlugin"
+author = "xbot"
+description = "Minimal echo plugin for framework smoke tests."
+enabled = true
+
+[permissions]
+network = false
+filesystem = false
+admin = false
+

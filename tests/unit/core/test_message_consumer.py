@@ -146,5 +146,5 @@ async def test_message_consumer_recovers_after_queue_consume_error(monkeypatch):
 
 
 async def _until(predicate):
-    while not predicate():
+    while not predicate():  # noqa: ASYNC110 - polling predicate, not busy-wait
         await asyncio.sleep(0.01)

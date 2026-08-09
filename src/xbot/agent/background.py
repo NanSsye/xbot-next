@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from xbot.core.logging import logger
+from xbot.core.timeutils import utc_now
 from xbot.messaging.models import Reply
 
 TaskRunner = Callable[[], Awaitable[Any]]
@@ -32,7 +35,7 @@ class BackgroundTaskRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def from_storage(cls, record) -> "BackgroundTaskRecord":
+    def from_storage(cls, record) -> BackgroundTaskRecord:
         if isinstance(record, cls):
             return record
         result = json.loads(record.result_json) if record.result_json else None
@@ -65,6 +68,7 @@ class BackgroundTaskManager:
         self._records: dict[str, BackgroundTaskRecord] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._persist_locks: dict[str, asyncio.Lock] = {}
+        self._persist_tasks: set[asyncio.Task] = set()
         self._subscribers: set[BackgroundTaskSubscriber] = set()
 
     def attach_reply_sender(self, send_reply: ReplySender | None) -> None:
@@ -96,7 +100,7 @@ class BackgroundTaskManager:
             source=source,
             description=description,
             metadata=metadata or {},
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or utc_now(),
         )
         self._records[task_id] = record
         self._persist_later(record)
@@ -134,7 +138,7 @@ class BackgroundTaskManager:
         if progress:
             record.progress = progress
         metadata = dict(record.metadata or {})
-        metadata["heartbeat_at"] = datetime.utcnow().isoformat()
+        metadata["heartbeat_at"] = utc_now().isoformat()
         record.metadata = metadata
         self._persist_later(record)
         return record
@@ -142,7 +146,7 @@ class BackgroundTaskManager:
     def mark_stale(self, record: BackgroundTaskRecord, *, reason: str) -> BackgroundTaskRecord:
         record.status = "stale"
         record.error = reason
-        record.finished_at = datetime.utcnow()
+        record.finished_at = utc_now()
         metadata = dict(record.metadata or {})
         metadata["stale_reason"] = reason
         record.metadata = metadata
@@ -151,7 +155,7 @@ class BackgroundTaskManager:
         return record
 
     def mark_stale_running(self, *, older_than_seconds: int = 14400) -> list[BackgroundTaskRecord]:
-        cutoff = datetime.utcnow() - timedelta(seconds=max(1, older_than_seconds))
+        cutoff = utc_now() - timedelta(seconds=max(1, older_than_seconds))
         stale = []
         for record in list(self._records.values()):
             if record.status != "running":
@@ -161,10 +165,8 @@ class BackgroundTaskManager:
             last_seen = record.started_at or record.created_at
             heartbeat = (record.metadata or {}).get("heartbeat_at")
             if isinstance(heartbeat, str):
-                try:
+                with contextlib.suppress(ValueError):
                     last_seen = max(last_seen, datetime.fromisoformat(heartbeat))
-                except ValueError:
-                    pass
             if last_seen <= cutoff:
                 stale.append(self.mark_stale(record, reason="Background task heartbeat expired."))
         return stale
@@ -176,12 +178,10 @@ class BackgroundTaskManager:
         task = self._tasks.get(task_id)
         if task and not task.done():
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
         record.status = "cancelled"
-        record.finished_at = datetime.utcnow()
+        record.finished_at = utc_now()
         self._persist_later(record)
         await self._publish(record)
         return record
@@ -194,32 +194,30 @@ class BackgroundTaskManager:
                 task.cancel()
         for task in list(self._tasks.values()):
             if not task.done():
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
     async def _run(self, task_id: str, runner: TaskRunner) -> None:
         record = self._records[task_id]
         record.status = "running"
-        record.started_at = datetime.utcnow()
+        record.started_at = utc_now()
         self.heartbeat(task_id, progress=record.progress or "started")
         self._persist_later(record)
         try:
             record.result = await runner()
         except asyncio.CancelledError:
             record.status = "cancelled"
-            record.finished_at = datetime.utcnow()
+            record.finished_at = utc_now()
             self._persist_later(record)
             raise
         except Exception as exc:
             logger.warning("Background task failed: task_id={} error={}", task_id, exc)
             record.status = "failed"
             record.error = str(exc)
-            record.finished_at = datetime.utcnow()
+            record.finished_at = utc_now()
         else:
             record.status = "completed"
-            record.finished_at = datetime.utcnow()
+            record.finished_at = utc_now()
         finally:
             self._persist_later(record)
             await self._publish(record)
@@ -229,14 +227,15 @@ class BackgroundTaskManager:
     def _persist_later(self, record: BackgroundTaskRecord) -> None:
         if not self.repository_provider:
             return
-        asyncio.create_task(self._persist(record.model_copy(deep=True)), name=f"xbot-bg-persist-{record.id}")
+        task = asyncio.create_task(self._persist(record.model_copy(deep=True)), name=f"xbot-bg-persist-{record.id}")
+        self._persist_tasks.add(task)
+        task.add_done_callback(self._persist_tasks.discard)
 
     async def _persist(self, record: BackgroundTaskRecord) -> None:
         lock = self._persist_locks.setdefault(record.id, asyncio.Lock())
         try:
-            async with lock:
-                async with self.repository_provider() as repo:
-                    await repo.upsert_background_task(record)
+            async with lock, self.repository_provider() as repo:
+                await repo.upsert_background_task(record)
         except Exception as exc:
             logger.warning("Background task persistence failed: task_id={} error={}", record.id, exc)
 

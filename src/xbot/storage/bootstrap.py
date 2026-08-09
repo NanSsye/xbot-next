@@ -73,7 +73,7 @@ async def _bootstrap_database(config: StorageConfig) -> None:
         if config.create_role and target.username:
             await _ensure_role(conn, target.username, target.password)
         if config.create_database:
-            owner = target.username if target.username else None
+            owner = target.username or None
             await _ensure_database(conn, target.database, owner)
     finally:
         await conn.close()

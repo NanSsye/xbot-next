@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from xbot.core.timeutils import utc_now
 from xbot.plugins.manifest import PluginManifest
 from xbot.storage.models import PluginRecord
 
@@ -15,7 +14,7 @@ class PluginRepository:
 
     async def upsert_manifest(self, manifest: PluginManifest, path: str, enabled: bool) -> None:
         record = await self.get_record(manifest.name)
-        now = datetime.utcnow()
+        now = utc_now()
         if record:
             record.version = manifest.version
             record.enabled = enabled
@@ -38,7 +37,7 @@ class PluginRepository:
         if record is None:
             return False
         record.enabled = enabled
-        record.updated_at = datetime.utcnow()
+        record.updated_at = utc_now()
         return True
 
     async def get_enabled(self, name: str) -> bool | None:

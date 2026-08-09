@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 import os
 import platform
-import sys
 import socket
+import sys
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -741,7 +741,7 @@ class TerminalRenderer:
         elapsed = time.monotonic() - state.started_at
         lines: list[str] = []
         task = state.task_id[:8] if state.task_id else ""
-        header = f"[dim]{datetime.now().strftime('%H:%M:%S')}[/dim]"
+        header = f"[dim]{datetime.now().astimezone().strftime('%H:%M:%S')}[/dim]"
         if task:
             header += f"  [dim]task[/dim] {task}"
         header += f"  [dim]elapsed[/dim] {elapsed:.1f}s"
@@ -749,8 +749,7 @@ class TerminalRenderer:
         if state.thinking:
             iterations = max(1, state.llm_iterations)
             lines.append(f"[cyan]thinking[/cyan] {iterations} llm call{'s' if iterations != 1 else ''}")
-        for record in state.tools:
-            lines.append(self._format_tool_record(record))
+        lines.extend(self._format_tool_record(record) for record in state.tools)
         return "\n".join(lines)
 
     def _context_used_tokens(self, output_text: str) -> int:
@@ -1147,9 +1146,10 @@ class TerminalChatSession:
         toolsets: dict[str, list[str]] = {}
         for item in tools:
             toolsets.setdefault(str(item.get("toolset") or "core"), []).append(str(item.get("name")))
-        tool_lines = []
-        for name in sorted(toolsets):
-            tool_lines.append(f"[cyan]{name}[/cyan]: {self._comma_preview(toolsets[name], limit=3)}")
+        tool_lines = [
+            f"[cyan]{name}[/cyan]: {self._comma_preview(toolsets[name], limit=3)}"
+            for name in sorted(toolsets)
+        ]
 
         plugins = [item for item in self.ctx.plugins.list_plugins() if item.get("enabled")]
         skills = [item for item in self.ctx.skills.list_skills() if item.get("enabled")]
@@ -1204,7 +1204,7 @@ def build_terminal_agent_input(content: str, *, session_id: str, cwd: Path) -> s
         "adapter: cli\n"
         f"session_id: {session_id}\n"
         f"cwd: {cwd}\n"
-        f"shell: {os.environ.get('ComSpec') or os.environ.get('SHELL') or ''}\n"
+        f"shell: {os.environ.get('COMSPEC') or os.environ.get('SHELL') or ''}\n"
         f"os: {platform.platform()}\n"
         f"hostname: {socket.gethostname()}\n"
         f"python_venv: {os.environ.get('VIRTUAL_ENV') or ''}\n"
@@ -1225,13 +1225,14 @@ async def run_terminal_chat(
     fancy_input: bool = False,
     start_runtime: bool = False,
 ) -> None:
+    cwd_path = await asyncio.to_thread(lambda: Path(cwd or os.getcwd()).resolve())
     settings: Settings = load_settings(config_file)
-    configure_terminal_logging(debug=debug, cwd=Path(cwd or os.getcwd()).resolve())
+    configure_terminal_logging(debug=debug, cwd=cwd_path)
     await ensure_storage_ready(settings)
     ctx = build_context(settings)
     options = TerminalChatOptions(
         session_id=session_id or str(uuid4()),
-        cwd=Path(cwd or os.getcwd()).resolve(),
+        cwd=cwd_path,
         verbose=verbose,
         debug=debug,
         fancy_input=fancy_input,

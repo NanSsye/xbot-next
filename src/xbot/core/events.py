@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -14,10 +15,8 @@ class EventBus:
     def subscribe(self, event_type: str, handler: EventHandler):
         self._handlers[event_type].append(handler)
         def unsubscribe() -> None:
-            try:
+            with contextlib.suppress(ValueError):
                 self._handlers[event_type].remove(handler)
-            except ValueError:
-                pass
         return unsubscribe
 
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:

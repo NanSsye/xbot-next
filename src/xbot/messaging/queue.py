@@ -17,5 +17,11 @@ class MessageQueue(ABC):
     async def ack(self, envelope: MessageEnvelope) -> None:
         return None
 
+    async def requeue(self, envelope: MessageEnvelope) -> None:
+        await self.publish(envelope)
+
+    async def dead_letter(self, envelope: MessageEnvelope) -> None:
+        return None
+
     async def close(self) -> None:
         return None

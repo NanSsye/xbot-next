@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import base64
+import json
 import mimetypes
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
-from collections import Counter
-from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -14,6 +14,8 @@ from sqlalchemy import and_, case, func, or_, select
 
 from xbot.adapters.wechat869.client import Wechat869Client
 from xbot.app.deps import get_context
+from xbot.core.logging import logger
+from xbot.core.timeutils import utc_now
 from xbot.messaging.models import Message, Reply
 from xbot.runtime.context import AppContext
 from xbot.storage.models import (
@@ -51,7 +53,7 @@ def _encode_offset_cursor(offset: int) -> str:
 
 
 def _beijing_now() -> datetime:
-    return datetime.utcnow() + timedelta(hours=8)
+    return utc_now() + timedelta(hours=8)
 
 
 def _wechat869_client(ctx: AppContext) -> Wechat869Client:
@@ -448,7 +450,7 @@ async def list_wechat_users(limit: int = 500, q: str = "", ctx: AppContext = Dep
         needle = q.strip().lower()
         def sort_time(uid: str) -> datetime:
             profile = profile_map.get(uid)
-            return profile.updated_at if profile and profile.updated_at else datetime.min
+            return profile.updated_at if profile and profile.updated_at else datetime(1970, 1, 1, tzinfo=UTC).replace(tzinfo=None)
 
         for user_id in sorted(user_ids, key=sort_time, reverse=True)[:limit]:
             profile = profile_map.get(user_id)
@@ -536,23 +538,22 @@ async def update_wechat_user_profile(user_id: str, payload: WechatProfileUpdate,
     tags = tags[:20]
     summary = str(payload.summary or "").strip()
     conversation_id = payload.conversation_id or None
-    async with ctx.storage.session_factory() as session:
-        async with session.begin():
-            result = await session.execute(
-                select(UserProfileRecord).where(
-                    UserProfileRecord.platform == "wechat",
-                    UserProfileRecord.adapter == "wechat869",
-                    UserProfileRecord.user_id == user_id,
-                    UserProfileRecord.conversation_id.is_(None) if conversation_id is None else UserProfileRecord.conversation_id == conversation_id,
-                ).limit(1)
-            )
-            record = result.scalar_one_or_none()
-            if record:
-                record.summary = summary
-                record.tags_json = json.dumps(tags, ensure_ascii=False)
-                record.updated_at = _beijing_now()
-            else:
-                session.add(UserProfileRecord(
+    async with ctx.storage.session_factory() as session, session.begin():
+        result = await session.execute(
+            select(UserProfileRecord).where(
+                UserProfileRecord.platform == "wechat",
+                UserProfileRecord.adapter == "wechat869",
+                UserProfileRecord.user_id == user_id,
+                UserProfileRecord.conversation_id.is_(None) if conversation_id is None else UserProfileRecord.conversation_id == conversation_id,
+            ).limit(1)
+        )
+        record = result.scalar_one_or_none()
+        if record:
+            record.summary = summary
+            record.tags_json = json.dumps(tags, ensure_ascii=False)
+            record.updated_at = _beijing_now()
+        else:
+            session.add(UserProfileRecord(
                     platform="wechat",
                     adapter="wechat869",
                     user_id=user_id,
@@ -639,13 +640,12 @@ async def send_wechat_message(
         raw={"direction": "outgoing", "scope": "group" if ":group:" in conversation_id else "private", "attachments": [attachment] if attachment else []},
         timestamp=now,
     )
-    async with ctx.storage.session_factory() as session:
-        async with session.begin():
-            repo = ctx.storage.conversations(session)
-            await repo.append_message(conversation_id, message)
-            conv = await session.get(ConversationRecord, conversation_id)
-            if conv:
-                conv.updated_at = now
+    async with ctx.storage.session_factory() as session, session.begin():
+        repo = ctx.storage.conversations(session)
+        await repo.append_message(conversation_id, message)
+        conv = await session.get(ConversationRecord, conversation_id)
+        if conv:
+            conv.updated_at = now
     async with ctx.storage.session_factory() as session:
         record = (await session.execute(
             select(ConversationMessageRecord)
@@ -668,10 +668,9 @@ async def sync_wechat_metadata(ctx: AppContext = Depends(get_context)) -> dict:
     client = _wechat869_client(ctx)
     updated_conversations = 0
     updated_contacts = 0
-    async with ctx.storage.session_factory() as session:
-        async with session.begin():
-            convs = (await session.execute(select(ConversationRecord).where(ConversationRecord.platform == "wechat"))).scalars().all()
-            for conv in convs:
+    async with ctx.storage.session_factory() as session, session.begin():
+        convs = (await session.execute(select(ConversationRecord).where(ConversationRecord.platform == "wechat"))).scalars().all()
+        for conv in convs:
                 raw_id = conv.raw_id or _raw_conversation_id(conv.id)
                 if conv.adapter == "wechat869" and conv.scope == "group":
                     try:
@@ -682,8 +681,8 @@ async def sync_wechat_metadata(ctx: AppContext = Depends(get_context)) -> dict:
                         if title:
                             conv.title = title
                             updated_conversations += 1
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(f"Sync conversation {conv.id} title failed: {exc}")
                     try:
                         members = await client.get_chatroom_member_list(raw_id)
                         for m in members:
@@ -697,13 +696,13 @@ async def sync_wechat_metadata(ctx: AppContext = Depends(get_context)) -> dict:
                             if rec:
                                 rec.nickname = nickname or rec.nickname
                                 rec.avatar_url = avatar or rec.avatar_url
-                                rec.last_seen_at = datetime.utcnow()
+                                rec.last_seen_at = utc_now()
                             else:
-                                session.add(ContactRecord(platform="wechat", adapter=conv.adapter, user_id=user_id, nickname=nickname or user_id, avatar_url=avatar or None, raw_json=json.dumps(m, ensure_ascii=False), first_seen_at=datetime.utcnow(), last_seen_at=datetime.utcnow()))
+                                session.add(ContactRecord(platform="wechat", adapter=conv.adapter, user_id=user_id, nickname=nickname or user_id, avatar_url=avatar or None, raw_json=json.dumps(m, ensure_ascii=False), first_seen_at=utc_now(), last_seen_at=utc_now()))
                             exists = await session.scalar(select(ConversationMemberRecord.id).where(ConversationMemberRecord.conversation_id == conv.id, ConversationMemberRecord.user_id == user_id).limit(1))
                             if not exists:
-                                session.add(ConversationMemberRecord(conversation_id=conv.id, user_id=user_id, display_name=nickname or user_id, role="member", joined_at=datetime.utcnow()))
+                                session.add(ConversationMemberRecord(conversation_id=conv.id, user_id=user_id, display_name=nickname or user_id, role="member", joined_at=utc_now()))
                             updated_contacts += 1
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(f"Sync conversation {conv.id} members failed: {exc}")
     return {"success": True, "data": {"updated_conversations": updated_conversations, "updated_contacts": updated_contacts}}

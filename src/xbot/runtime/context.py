@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from xbot.adapters.registry import AdapterRegistry
 from xbot.agent.runtime import AgentRuntime
@@ -42,39 +42,33 @@ def build_context(settings: Settings) -> AppContext:
     message_queue = create_message_queue(settings.queue)
     @asynccontextmanager
     async def message_repository_provider():
-        async with storage.session_factory() as session:
-            async with session.begin():
-                yield storage.messages(session)
+        async with storage.session_factory() as session, session.begin():
+            yield storage.messages(session)
 
     @asynccontextmanager
     async def conversation_repository_provider():
-        async with storage.session_factory() as session:
-            async with session.begin():
-                yield storage.conversations(session)
+        async with storage.session_factory() as session, session.begin():
+            yield storage.conversations(session)
 
     @asynccontextmanager
     async def plugin_repository_provider():
-        async with storage.session_factory() as session:
-            async with session.begin():
-                yield storage.plugins(session)
+        async with storage.session_factory() as session, session.begin():
+            yield storage.plugins(session)
 
     @asynccontextmanager
     async def skill_repository_provider():
-        async with storage.session_factory() as session:
-            async with session.begin():
-                yield storage.skills(session)
+        async with storage.session_factory() as session, session.begin():
+            yield storage.skills(session)
 
     @asynccontextmanager
     async def agent_repository_provider():
-        async with storage.session_factory() as session:
-            async with session.begin():
-                yield storage.agent(session)
+        async with storage.session_factory() as session, session.begin():
+            yield storage.agent(session)
 
     @asynccontextmanager
     async def adapter_repository_provider():
-        async with storage.session_factory() as session:
-            async with session.begin():
-                yield storage.adapters(session)
+        async with storage.session_factory() as session, session.begin():
+            yield storage.adapters(session)
 
     messages = InMemoryMessageStore(
         repository_provider=message_repository_provider
@@ -135,6 +129,11 @@ def build_context(settings: Settings) -> AppContext:
         per_conversation_serial=settings.conversation.concurrency.per_conversation_serial,
         max_active_conversations=settings.conversation.concurrency.max_active_conversations,
         event_bus=events,
+        message_timeout_seconds=settings.runtime.timeout.message_seconds,
+        max_attempts=settings.queue.retry.max_attempts,
+        backoff_initial_seconds=settings.queue.retry.initial_delay_seconds,
+        backoff_max_seconds=settings.queue.retry.max_delay_seconds,
+        backoff_exponential=settings.queue.retry.backoff == "exponential",
     )
     engine.attach_messaging(consumer=consumer, queue=message_queue)
     return AppContext(

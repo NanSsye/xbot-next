@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+import contextlib
 
 from xbot.core.config import Settings
 from xbot.core.logging import logger
+from xbot.core.timeutils import utc_now
 from xbot.runtime.status import RuntimeStatus
 
 
@@ -20,6 +21,7 @@ class XBotEngine:
         self._storage = None
         self._message_store = None
         self._consumer_task: asyncio.Task | None = None
+        self._restart_task: asyncio.Task | None = None
         self._agent = None
 
     def attach_managers(self, plugins, skills, adapters) -> None:
@@ -53,7 +55,7 @@ class XBotEngine:
         if self._consumer and self._queue and self._consumer_task is None:
             self._start_consumer_task()
         self._status.state = "running"
-        self._status.started_at = datetime.utcnow()
+        self._status.started_at = utc_now()
         self._refresh_counts()
         logger.info("XBotEngine started")
 
@@ -68,15 +70,13 @@ class XBotEngine:
             await self._adapters.stop_all()
         if self._consumer_task:
             self._consumer_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._consumer_task
-            except asyncio.CancelledError:
-                pass
             self._consumer_task = None
         if self._queue:
             await self._queue.close()
         self._status.state = "stopped"
-        self._status.stopped_at = datetime.utcnow()
+        self._status.stopped_at = utc_now()
         self._refresh_counts()
         logger.info("XBotEngine stopped")
 
@@ -92,9 +92,8 @@ class XBotEngine:
         if self._message_store:
             await self._message_store.add_reply(reply)
         elif self._storage and self.settings.storage.persist_runtime_events:
-            async with self._storage.session_factory() as session:
-                async with session.begin():
-                    await self._storage.messages(session).save_reply(reply)
+            async with self._storage.session_factory() as session, session.begin():
+                await self._storage.messages(session).save_reply(reply)
         if self._adapters:
             await self._adapters.send(reply)
 
@@ -121,7 +120,11 @@ class XBotEngine:
             logger.warning("MessageConsumer 任务已退出，将自动重启")
         self._consumer_task = None
         if self._status.state == "running":
-            asyncio.create_task(self._restart_consumer_after_delay(), name="xbot-message-consumer-restart")
+            restart = asyncio.create_task(
+                self._restart_consumer_after_delay(), name="xbot-message-consumer-restart"
+            )
+            self._restart_task = restart
+            restart.add_done_callback(lambda _: setattr(self, "_restart_task", None))
 
     async def _restart_consumer_after_delay(self) -> None:
         await asyncio.sleep(1)

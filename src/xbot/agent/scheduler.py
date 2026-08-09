@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -49,7 +50,7 @@ class ScheduledJob(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     @classmethod
-    def from_storage(cls, record) -> "ScheduledJob":
+    def from_storage(cls, record) -> ScheduledJob:
         if isinstance(record, cls):
             return record
         metadata = json.loads(record.metadata_json or "{}")
@@ -78,7 +79,7 @@ class ScheduledJob(BaseModel):
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def parse_schedule(schedule: str, *, timezone_name: str = "Asia/Shanghai") -> ScheduleSpec:
@@ -160,7 +161,7 @@ def parse_schedule(schedule: str, *, timezone_name: str = "Asia/Shanghai") -> Sc
 def compute_next_run(job: ScheduledJob, *, from_time: datetime | None = None) -> datetime | None:
     base_utc = _ensure_utc_naive(from_time or now_utc())
     tz = _zoneinfo(job.timezone)
-    base = base_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+    base = base_utc.replace(tzinfo=UTC).astimezone(tz)
     if job.max_runs is not None and job.run_count >= job.max_runs:
         return None
     if job.schedule_type == "once":
@@ -205,10 +206,8 @@ class ScheduledJobManager:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
 
     async def create(
@@ -435,18 +434,18 @@ def _zoneinfo(timezone_name: str):
 
 def _to_utc_naive(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).replace(tzinfo=None)
 
 
 def _ensure_utc_naive(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.astimezone(UTC).replace(tzinfo=None)
 
 
 def _parse_duration_seconds(text: str, *, allow_error: bool = True) -> int | None:
-    match = re.fullmatch(r"\s*(\d+)\s*(m|min|mins|minute|minutes|h|hr|hour|hours|d|day|days)\s*", text, re.I)
+    match = re.fullmatch(r"\s*(\d+)\s*(m|min|mins|minute|minutes|h|hr|hour|hours|d|day|days)\s*", text, re.IGNORECASE)
     if not match:
         if allow_error:
             raise XBotError("Invalid duration. Use 30m, 2h, or 1d.")
@@ -468,7 +467,7 @@ def _try_parse_datetime(text: str, tz) -> datetime | None:
     if "T" not in text and not re.match(r"^\d{4}-\d{2}-\d{2}", text):
         return None
     try:
-        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(text)
     except ValueError:
         return None
     if dt.tzinfo is None:

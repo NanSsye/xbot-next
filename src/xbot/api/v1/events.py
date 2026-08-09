@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -9,6 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from xbot.agent.background import BackgroundTaskRecord
 from xbot.agent.runtime import AgentRuntimeEvent
 from xbot.app.security import authenticate_websocket
+from xbot.core.timeutils import utc_now
 
 router = APIRouter()
 
@@ -33,7 +33,7 @@ async def event_stream(websocket: WebSocket) -> None:
                 "type": "agent.event",
                 "topic": f"agent:{event.task_id}",
                 "data": event.model_dump(mode="json"),
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": utc_now().isoformat(),
             }
         )
 
@@ -45,7 +45,7 @@ async def event_stream(websocket: WebSocket) -> None:
                 "type": "message.created",
                 "topic": "messages",
                 "data": payload,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": utc_now().isoformat(),
             }
         )
 
@@ -56,7 +56,7 @@ async def event_stream(websocket: WebSocket) -> None:
                 "type": "background_task.updated",
                 "topic": f"background_task:{record.id}",
                 "data": record.model_dump(mode="json"),
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": utc_now().isoformat(),
             }
         )
 
@@ -69,7 +69,7 @@ async def event_stream(websocket: WebSocket) -> None:
             "type": "ui.connected",
             "topic": "ui",
             "data": {"client_id": client_id},
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": utc_now().isoformat(),
         }
     )
     try:
@@ -82,7 +82,7 @@ async def event_stream(websocket: WebSocket) -> None:
                         "type": "pong",
                         "topic": "ui",
                         "data": {},
-                        "created_at": datetime.utcnow().isoformat(),
+                        "created_at": utc_now().isoformat(),
                     }
                 )
     except WebSocketDisconnect:

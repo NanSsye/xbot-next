@@ -12,10 +12,9 @@ from xbot.storage.models import (
     ConversationMemberRecord,
     ConversationMessageRecord,
     ConversationRecord,
-    ConversationSummaryRecord,
     ConversationStateRecord,
+    ConversationSummaryRecord,
     MessageAttachmentRecord,
-    UserProfileRecord,
 )
 
 

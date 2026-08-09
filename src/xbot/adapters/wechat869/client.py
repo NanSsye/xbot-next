@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import shutil
 import subprocess
 import tempfile
-import uuid
 import time
-from typing import Any
+import uuid
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+from xbot.core.logging import logger
 
 SEND_CLIENT_MSG_ID_KEYS = ("ClientMsgid", "ClientMsgId", "clientMsgId", "client_msg_id")
 SEND_CREATE_TIME_KEYS = ("Createtime", "CreateTime", "createTime", "create_time")
@@ -100,7 +101,8 @@ class Wechat869Client:
 
 
     async def send_image_message(self, wxid: str, image_path: str) -> Any:
-        data = base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
+        image_bytes = await asyncio.to_thread(Path(image_path).read_bytes)
+        data = base64.b64encode(image_bytes).decode("ascii")
         payload = {"MsgItem": [{"ToUserName": wxid, "MsgType": 2, "ImageContent": data}]}
         try:
             return await self.call_path("/message/SendImageMessage", body=payload)
@@ -109,11 +111,13 @@ class Wechat869Client:
 
     async def send_file_message(self, wxid: str, file_path: str) -> Any:
         path = Path(file_path)
-        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        file_bytes = await asyncio.to_thread(path.read_bytes)
+        data = base64.b64encode(file_bytes).decode("ascii")
         upload = await self.call_path("/other/UploadAppAttach", body={"fileData": data})
         info = upload if isinstance(upload, dict) else {}
         media_id = str(info.get("mediaId") or info.get("MediaId") or info.get("media_id") or "")
-        total_len = int(info.get("totalLen") or info.get("TotalLen") or path.stat().st_size)
+        stat = await asyncio.to_thread(path.stat)
+        total_len = int(info.get("totalLen") or info.get("TotalLen") or stat.st_size)
         file_name = path.name
         ext = path.suffix.lstrip(".")
         xml = (
@@ -132,14 +136,14 @@ class Wechat869Client:
 
     async def send_video_message(self, wxid: str, video_path: str) -> Any:
         path = Path(video_path)
-        video_bytes = path.read_bytes()
+        video_bytes = await asyncio.to_thread(path.read_bytes)
         thumb_bytes = await asyncio.to_thread(self._video_thumb_bytes, path)
         upload = await self.call_path(
             "/message/CdnUploadVideo",
             body={
                 "ToUserName": wxid,
-                "VideoData": list(video_bytes),
-                "ThumbData": list(thumb_bytes),
+                "VideoData": base64.b64encode(video_bytes).decode("ascii"),
+                "ThumbData": base64.b64encode(thumb_bytes).decode("ascii"),
             },
         )
         candidates = [upload] if isinstance(upload, dict) else []
@@ -232,8 +236,8 @@ class Wechat869Client:
             for value in self._extract_auth_keys(payload):
                 if value not in self.auth_keys:
                     self.auth_keys.append(value)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"GetActiveLicenseKeys failed, will try GenAuthKey2: {exc}")
 
         if not self.auth_keys:
             payload = await self.request("/admin/GenAuthKey2", method="GET", key=self.admin_key)
@@ -468,7 +472,8 @@ class Wechat869Client:
                 payload = await self.send_cdn_download(aes_key, cdn_url, file_type)
                 if payload:
                     return base64.b64decode(payload)
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"CDN image download (type={file_type}) failed: {exc}")
                 continue
         return b""
 
@@ -517,7 +522,8 @@ class Wechat869Client:
         for path, body in attempts:
             try:
                 data = await self.call_path(path, body=body)
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Chatroom member API {path} failed: {exc}")
                 continue
             members = self._extract_chatroom_members(data)
             if members:

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
 import os
-from pathlib import Path
 import struct
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
 
 ILINK_APP_ID = "bot"
 CHANNEL_VERSION = "xbot-next/0.1.0"
@@ -128,7 +128,7 @@ class WechatIlinkClient:
         return await self._post(
             "/ilink/bot/getupdates",
             {"get_updates_buf": cursor, "base_info": _base_info()},
-            timeout=self.timeout_seconds,
+            timeout_seconds=self.timeout_seconds,
         )
 
     async def send_text(self, *, to_user_id: str, context_token: str, text: str) -> None:
@@ -144,7 +144,7 @@ class WechatIlinkClient:
         await self._post(
             "/ilink/bot/sendmessage",
             {"msg": message, "base_info": _base_info()},
-            timeout=15,
+            timeout_seconds=15,
         )
 
     async def send_image(self, *, to_user_id: str, context_token: str, path: str, text: str = "") -> dict:
@@ -194,7 +194,7 @@ class WechatIlinkClient:
             return response.content
 
     async def _upload_media(self, *, path: str, to_user_id: str, media_type: int) -> dict:
-        data = Path(path).read_bytes()
+        data = await asyncio.to_thread(Path(path).read_bytes)
         raw_size = len(data)
         aeskey = os.urandom(16)
         aeskey_hex = aeskey.hex()
@@ -213,7 +213,7 @@ class WechatIlinkClient:
                 "aeskey": aeskey_hex,
                 "base_info": _base_info(),
             },
-            timeout=15,
+            timeout_seconds=15,
         )
         upload_url = str(upload.get("upload_full_url") or "")
         upload_param = str(upload.get("upload_param") or "")
@@ -266,7 +266,7 @@ class WechatIlinkClient:
                     },
                     "base_info": _base_info(),
                 },
-                timeout=15,
+                timeout_seconds=15,
             )
         return {"message_id": last_client_id}
 
@@ -276,10 +276,10 @@ class WechatIlinkClient:
         encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
         return encryptor.update(plain) + encryptor.finalize()
 
-    async def _post(self, endpoint: str, body: dict[str, Any], *, timeout: int) -> dict[str, Any]:
+    async def _post(self, endpoint: str, body: dict[str, Any], *, timeout_seconds: int) -> dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 response = await client.post(url, headers=_common_headers(self.token), json=body)
                 payload = json.loads(response.text) if response.text else {}
                 if response.status_code >= 400:

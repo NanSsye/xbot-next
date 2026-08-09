@@ -35,6 +35,10 @@ class StorageConfig(BaseModel):
     create_database: bool = True
     create_role: bool = True
     run_migrations_on_startup: bool = True
+    pool_size: int = 10
+    max_overflow: int = 20
+    pool_recycle_seconds: int = 1800
+    pool_pre_ping: bool = True
 
 
 class QueueConfig(BaseModel):
@@ -45,6 +49,8 @@ class QueueConfig(BaseModel):
     event_queue: str = "xbot:events"
     agent_task_queue: str = "xbot:agent_tasks"
     dead_letter_queue: str = "xbot:dead_letters"
+    consumer_name: str | None = None
+    maxsize: int = 10000
 
 
 class QueueRetryConfig(BaseModel):
@@ -317,6 +323,14 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("storage", {})["auto_bootstrap"] = _env_bool(auto_bootstrap)
     if run_migrations := env.get("XBOT_DATABASE_RUN_MIGRATIONS_ON_STARTUP"):
         data.setdefault("storage", {})["run_migrations_on_startup"] = _env_bool(run_migrations)
+    if pool_size := env.get("XBOT_DATABASE_POOL_SIZE"):
+        data.setdefault("storage", {})["pool_size"] = _env_int(pool_size)
+    if max_overflow := env.get("XBOT_DATABASE_MAX_OVERFLOW"):
+        data.setdefault("storage", {})["max_overflow"] = _env_int(max_overflow)
+    if pool_recycle := env.get("XBOT_DATABASE_POOL_RECYCLE_SECONDS"):
+        data.setdefault("storage", {})["pool_recycle_seconds"] = _env_int(pool_recycle)
+    if pool_pre_ping := env.get("XBOT_DATABASE_POOL_PRE_PING"):
+        data.setdefault("storage", {})["pool_pre_ping"] = _env_bool(pool_pre_ping)
     if api_auth_enabled := env.get("XBOT_API_AUTH_ENABLED"):
         data.setdefault("api", {})["auth_enabled"] = _env_bool(api_auth_enabled)
     if api_token := env.get("XBOT_API_TOKEN"):

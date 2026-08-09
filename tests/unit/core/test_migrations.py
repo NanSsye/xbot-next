@@ -22,5 +22,5 @@ def test_migrations_mention_all_metadata_tables():
         path.read_text(encoding="utf-8")
         for path in sorted(Path("migrations/versions").glob("*.py"))
     )
-    for table_name in Base.metadata.tables.keys():
+    for table_name in Base.metadata.tables:
         assert f'"{table_name}"' in revision_text

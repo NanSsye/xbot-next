@@ -3,10 +3,10 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import sys
-from uuid import uuid4
 import tomllib
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from xbot.core.exceptions import PluginLoadError
 from xbot.plugins.manifest import PluginManifest

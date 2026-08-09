@@ -5,12 +5,12 @@ import hashlib
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from xbot.core.config import Wechat869AdapterConfig
 from xbot.core.logging import logger
+from xbot.core.timeutils import utc_now
 
 
 class Wechat869MediaResolver:
@@ -35,7 +35,7 @@ class Wechat869MediaResolver:
         quote = self.extract_quote(message)
         if quote:
             quote_attachments = []
-            quote_type = int(quote.get("msg_type") or 0)
+            quote_type = self._to_int(quote.get("msg_type"))
             quote_id = str(quote.get("message_id") or msg_id or "").strip()
             if quote_type == 3:
                 image = await self._image_attachment(quote.get("raw") or quote, conversation_id=conversation_id, msg_id=quote_id, quoted=True)
@@ -74,14 +74,24 @@ class Wechat869MediaResolver:
         image_bytes = self._decode_bytes_from_keys(data, ("Image", "image", "File", "file", "FileData", "fileData"))
         status = "metadata_only"
         error = ""
-        if not image_bytes and self.config.auto_download_images and image_meta.get("aeskey") and image_meta.get("cdn_url"):
-            try:
-                image_bytes = await self.client.download_image(image_meta["aeskey"], image_meta["cdn_url"]) if self.client else b""
-            except Exception as exc:
-                error = str(exc)
-                logger.warning("Wechat869 image download failed: msg_id={} error={}", msg_id, exc)
+        declared_size = self._to_int(image_meta.get("size"))
+        max_image_bytes = self._to_int(self.config.max_image_bytes)
+        if (
+            not image_bytes
+            and self.config.auto_download_images
+            and image_meta.get("aeskey")
+            and image_meta.get("cdn_url")
+        ):
+            if declared_size and max_image_bytes and declared_size > max_image_bytes:
+                status = "too_large"
+            else:
+                try:
+                    image_bytes = await self.client.download_image(image_meta["aeskey"], image_meta["cdn_url"]) if self.client else b""
+                except Exception as exc:
+                    error = str(exc)
+                    logger.warning("Wechat869 image download failed: msg_id={} error={}", msg_id, exc)
         if image_bytes:
-            if len(image_bytes) > int(self.config.max_image_bytes):
+            if len(image_bytes) > max_image_bytes:
                 status = "too_large"
                 image_bytes = b""
             else:
@@ -108,7 +118,10 @@ class Wechat869MediaResolver:
         file_bytes = self._decode_bytes_from_keys(data, ("File", "file", "FileData", "fileData", "data_base64"))
         status = "metadata_only"
         error = ""
-        if not file_bytes and self.config.auto_download_files and file_meta.get("aeskey") and file_meta.get("file_url"):
+        declared_size = self._to_int(file_meta.get("size"))
+        max_file_bytes = self._to_int(self.config.max_file_bytes)
+        download_allowed = not (declared_size and max_file_bytes and declared_size > max_file_bytes)
+        if not file_bytes and download_allowed and self.config.auto_download_files and file_meta.get("aeskey") and file_meta.get("file_url"):
             try:
                 logger.info(
                     "Wechat869 file download via CDN: msg_id={} filename={} size={}",
@@ -120,7 +133,7 @@ class Wechat869MediaResolver:
             except Exception as exc:
                 error = str(exc)
                 logger.warning("Wechat869 file download failed: msg_id={} error={}", msg_id, exc)
-        if not file_bytes and self.config.auto_download_files and file_meta.get("attachid"):
+        if not file_bytes and download_allowed and self.config.auto_download_files and file_meta.get("attachid"):
             try:
                 logger.info(
                     "Wechat869 file download via attachid: msg_id={} filename={} size={}",
@@ -133,11 +146,13 @@ class Wechat869MediaResolver:
                 error = str(exc)
                 logger.warning("Wechat869 attach download failed: msg_id={} error={}", msg_id, exc)
         if file_bytes:
-            if len(file_bytes) > int(self.config.max_file_bytes):
+            if len(file_bytes) > max_file_bytes:
                 status = "too_large"
                 file_bytes = b""
             else:
                 status = "downloaded"
+        elif declared_size and max_file_bytes and declared_size > max_file_bytes:
+            status = "too_large"
         elif self.config.auto_download_files and (file_meta.get("aeskey") or file_meta.get("attachid")):
             status = "download_empty"
         filename = self._safe_filename(file_meta.get("filename") or "wechat_file", file_meta.get("extension") or "")
@@ -156,7 +171,11 @@ class Wechat869MediaResolver:
         return attachment
 
     def _base_attachment(self, kind: str, data: dict[str, Any], filename: str, meta: dict[str, Any], *, quoted: bool, status: str, error: str) -> dict[str, Any]:
-        size = int(meta.get("size") or data.get("FileSize") or data.get("file_size") or 0)
+        size = (
+            self._to_int(meta.get("size"))
+            or self._to_int(data.get("FileSize"))
+            or self._to_int(data.get("file_size"))
+        )
         result = {
             "kind": kind,
             "filename": filename,
@@ -212,7 +231,11 @@ class Wechat869MediaResolver:
             or content_name
         )
         extension = str(merged.get("fileext") or data.get("FileExtend") or "").strip().lstrip(".")
-        size = int(merged.get("totallen") or data.get("FileSize") or data.get("file_size") or 0)
+        size = (
+            self._to_int(merged.get("totallen"))
+            or self._to_int(data.get("FileSize"))
+            or self._to_int(data.get("file_size"))
+        )
         attach_id = str(merged.get("attachid") or data.get("attachid") or "").strip()
         aeskey = str(merged.get("aeskey") or merged.get("cdnattachaeskey") or data.get("aeskey") or "").strip()
         file_url = str(merged.get("cdnattachurl") or merged.get("file_url") or data.get("FileURL") or "").strip()
@@ -241,7 +264,7 @@ class Wechat869MediaResolver:
             "cdnmidimgurl": img.get("cdnmidimgurl") or "",
             "cdnbigimgurl": img.get("cdnbigimgurl") or "",
             "md5": img.get("md5") or "",
-            "size": int(img.get("length") or 0),
+            "size": self._to_int(img.get("length") or 0),
         }
 
     def _file_meta_from_xml(self, text: str) -> dict[str, Any]:
@@ -288,7 +311,7 @@ class Wechat869MediaResolver:
 
     def _save_bytes(self, data: bytes, *, conversation_id: str, msg_id: str, filename: str) -> tuple[Path, str]:
         sha256 = hashlib.sha256(data).hexdigest()
-        today = datetime.utcnow()
+        today = utc_now()
         safe_conversation = self._safe_path_part(conversation_id or "unknown")
         safe_msg = self._safe_path_part(msg_id or sha256[:16])
         target_dir = Path(self.config.media_dir) / f"{today:%Y}" / f"{today:%m}" / f"{today:%d}" / safe_conversation / safe_msg
@@ -361,6 +384,13 @@ class Wechat869MediaResolver:
         text = self._pick_text(raw, keys)
         try:
             return int(text)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _to_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
         except (TypeError, ValueError):
             return default
 

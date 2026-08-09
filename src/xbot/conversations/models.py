@@ -25,7 +25,7 @@ class Conversation(BaseModel):
 class ConversationContext(BaseModel):
     conversation: Conversation
     messages: list[Message]
-    summaries: list["ConversationSummary"] = Field(default_factory=list)
+    summaries: list[ConversationSummary] = Field(default_factory=list)
     state: dict[str, dict] = Field(default_factory=dict)
 
 

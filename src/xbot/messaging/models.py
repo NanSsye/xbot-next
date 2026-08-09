@@ -44,7 +44,7 @@ class MessageEnvelope(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
-    def from_message(cls, message: Message, dedupe_key: str | None = None) -> "MessageEnvelope":
+    def from_message(cls, message: Message, dedupe_key: str | None = None) -> MessageEnvelope:
         return cls(
             dedupe_key=dedupe_key or default_dedupe_key(message),
             message=message,

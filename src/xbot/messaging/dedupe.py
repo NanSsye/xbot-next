@@ -17,3 +17,6 @@ class DedupeService:
             self._seen.popitem(last=False)
         return False
 
+    async def forget(self, dedupe_key: str) -> None:
+        self._seen.pop(dedupe_key, None)
+

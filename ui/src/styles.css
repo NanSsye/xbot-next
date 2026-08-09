@@ -2221,7 +2221,7 @@ td {
 }
 
 
-/* OpenClaw-like chat content rendering */
+/* agent-like chat content rendering */
 .hermes-message__body.chat-text {
   font-size: 14px;
   line-height: 1.55;

@@ -5,7 +5,7 @@
 本项目支持用户在本机直接构建 Docker 运行环境，并把整个项目目录映射进容器。compose 会同时启动：
 
 - `xbot` 后端和 Web 控制台
-- 内置 `/files` 静态文件访问，用于 OpenClaw 拉取媒体
+- 内置 `/files` 静态文件访问，用于对外提供媒体文件
 - PostgreSQL
 - Redis
 
@@ -42,7 +42,7 @@ http://localhost:8548
 http://电脑局域网IP:8548
 ```
 
-OpenClawBridge 媒体文件访问地址默认走同一个 xbot 应用，但用独立宿主机端口映射：
+媒体文件访问地址默认走同一个 xbot 应用，但用独立宿主机端口映射：
 
 ```text
 http://电脑局域网IP:18790/files/文件名
@@ -57,7 +57,7 @@ compose 默认持久化到宿主机项目目录：
 ```text
 ./data/                  xbot 运行数据、媒体、Agent 文件
 ./data/hermes/           Hermes session、memory、skills、curator 状态和轨迹
-./files/                 OpenClawBridge 对外发布的媒体文件，对应 /files URL
+./files/                 对外发布的媒体文件，对应 /files URL
 ./logs/                  日志
 ./workspace/             Agent 工作目录
 ./ui/dist/               前端构建产物
@@ -119,21 +119,6 @@ XBOT_WECHAT869_WS_URL=ws://host.docker.internal:8848/ws/GetSyncMsg
 ```
 
 如果它运行在局域网其他机器，改成对应机器 IP。
-
-OpenClawBridge 插件不写在根目录 `.env`。启用后到插件配置里改：
-
-```text
-plugins/OpenClawBridge/config.toml
-```
-
-其中媒体下载地址应和 compose 的 `18790:8548` 映射一致：
-
-```toml
-[openclaw]
-download_base_url = "http://你的机器IP:18790"
-```
-
-插件生成的 `/files/xxx` URL 会由 xbot 主应用内置静态路由提供，不需要单独的 `files` 容器。
 
 ## 常用命令
 

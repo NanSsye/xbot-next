@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from xbot.core.config import SkillConfig
@@ -26,9 +27,12 @@ class SkillManager:
 
     async def load_all(self) -> None:
         root = Path(self.config.directory)
-        if not root.exists():
+        if not await asyncio.to_thread(root.exists):
             return
-        for skill_dir in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        skill_dirs = await asyncio.to_thread(
+            lambda: sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
+        )
+        for skill_dir in skill_dirs:
             try:
                 manifest = self.loader.load_manifest(skill_dir)
                 self._paths[manifest.name] = skill_dir
@@ -53,7 +57,8 @@ class SkillManager:
             loaded = self._skills.get(name)
             try:
                 manifest = loaded[0] if loaded else self.loader.load_manifest(self._paths[name])
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Skip listing skill {name}: {exc}")
                 continue
             items.append(
                 {

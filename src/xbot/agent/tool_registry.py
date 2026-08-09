@@ -112,6 +112,4 @@ class ToolRegistry:
             return False
         if scopes and scope and scope not in scopes:
             return False
-        if modes and mode and mode not in modes:
-            return False
-        return True
+        return not (modes and mode and mode not in modes)

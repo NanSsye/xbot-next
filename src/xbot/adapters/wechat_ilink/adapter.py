@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 
@@ -53,17 +54,13 @@ class WechatIlinkAdapter(BaseAdapter):
         self.started = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
         if self._login_task:
             self._login_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._login_task
-            except asyncio.CancelledError:
-                pass
             self._login_task = None
 
     async def send(self, reply: Reply) -> None:
@@ -213,8 +210,7 @@ class WechatIlinkAdapter(BaseAdapter):
     async def _poll_once(self) -> None:
         client = self.client or self._create_client()
         payload = await client.get_updates(self.cursor)
-        self.cursor = str(payload.get("get_updates_buf") or self.cursor)
-        await self._persist_state()
+        next_cursor = str(payload.get("get_updates_buf") or self.cursor)
         messages = [item for item in payload.get("msgs", []) if isinstance(item, dict)]
         for raw in messages:
             if raw.get("message_type") != 1:
@@ -251,6 +247,10 @@ class WechatIlinkAdapter(BaseAdapter):
                 self._preview(message.content),
             )
             await self.queue.publish(MessageEnvelope.from_message(message))
+        # 游标仅在整批消息全部成功投递后提交，避免异常时批量消息丢失；
+        # 未提交时下次轮询会重复拉取，由消费端去重兜底。
+        self.cursor = next_cursor
+        await self._persist_state()
 
     async def _ensure_polling(self) -> None:
         if not self.started or not self.queue or self._task is not None:
@@ -338,11 +338,16 @@ class WechatIlinkAdapter(BaseAdapter):
             "bot_nickname": self.config.bot_nickname,
         }
         async with self.repository_provider() as repo:
-            await repo.set_state(self.name, state)
+            # 先读取现有状态再合并，避免覆盖 registry 等其他写入方持有的键(如 enabled)。
+            previous = await repo.get_state(self.name)
+            previous.update(state)
+            await repo.set_state(self.name, previous)
 
     def _remember_reply_target(self, conversation_id: str, to_user_id: str, context_token: str) -> None:
         if not to_user_id or not context_token:
             return
+        if len(self._reply_targets) >= 1000:
+            self._reply_targets.pop(next(iter(self._reply_targets)))
         self._reply_targets[conversation_id] = {
             "to_user_id": to_user_id,
             "context_token": context_token,

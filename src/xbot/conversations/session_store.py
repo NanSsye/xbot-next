@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from xbot.conversations.models import (
     Conversation,
     ConversationScope,
     ConversationSummary,
     build_conversation_id,
 )
+from xbot.core.timeutils import utc_now
 from xbot.messaging.models import Message
 
 
@@ -31,7 +30,7 @@ class InMemoryConversationStore:
         conversation_id = build_conversation_id(platform, adapter, scope, raw_id)
         existing = self.conversations.get(conversation_id)
         if existing:
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = utc_now()
             if title and title != raw_id:
                 existing.title = title
             return existing

@@ -34,6 +34,15 @@ data/agent/wiki/*/derived/
 logs/
 docker-data/
 
+# 本地运行数据库与隐私数据（含微信联系人/群成员/聊天历史）
+database/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+plugins/**/data/
+*.7z
+
 skills/**/wechat-869.json
 
 *.log

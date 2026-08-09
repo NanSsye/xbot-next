@@ -1,21 +1,31 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from xbot.core.config import StorageConfig
-from xbot.storage.repositories.agent_repo import AgentRepository
+from xbot.storage.models import Base
 from xbot.storage.repositories.adapter_repo import AdapterRepository
+from xbot.storage.repositories.agent_repo import AgentRepository
 from xbot.storage.repositories.conversation_repo import ConversationRepository
 from xbot.storage.repositories.message_repo import MessageRepository
 from xbot.storage.repositories.plugin_repo import PluginRepository
 from xbot.storage.repositories.skill_repo import SkillRepository
-from xbot.storage.models import Base
 
 
 class Storage:
     def __init__(self, config: StorageConfig) -> None:
         self.config = config
-        self.engine: AsyncEngine = create_async_engine(config.url, echo=config.echo)
+        engine_kwargs: dict[str, Any] = {"echo": config.echo}
+        if config.type == "postgresql":
+            engine_kwargs.update(
+                pool_size=config.pool_size,
+                max_overflow=config.max_overflow,
+                pool_recycle=config.pool_recycle_seconds,
+                pool_pre_ping=config.pool_pre_ping,
+            )
+        self.engine: AsyncEngine = create_async_engine(config.url, **engine_kwargs)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def close(self) -> None:

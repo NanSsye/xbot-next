@@ -4,7 +4,6 @@ import base64
 import hashlib
 import mimetypes
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -13,6 +12,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from xbot.core.config import WechatIlinkAdapterConfig
 from xbot.core.logging import logger
+from xbot.core.timeutils import utc_now
 
 
 class WechatIlinkMediaResolver:
@@ -138,7 +138,7 @@ class WechatIlinkMediaResolver:
 
     def _save_bytes(self, data: bytes, *, conversation_id: str, msg_id: str, filename: str) -> tuple[Path, str]:
         sha256 = hashlib.sha256(data).hexdigest()
-        today = datetime.utcnow()
+        today = utc_now()
         target_dir = (
             Path(self.config.media_dir)
             / f"{today:%Y}"

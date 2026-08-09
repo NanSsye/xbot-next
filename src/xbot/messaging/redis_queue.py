@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import os
+import socket
+
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
+from xbot.core.logging import logger
 from xbot.messaging.models import MessageEnvelope
 from xbot.messaging.queue import MessageQueue
+
+
+def _default_consumer_name() -> str:
+    return f"{socket.gethostname()}-{os.getpid()}"
 
 
 class RedisMessageQueue(MessageQueue):
@@ -13,14 +21,16 @@ class RedisMessageQueue(MessageQueue):
         redis_url: str,
         queue_name: str,
         group_name: str = "xbot",
-        consumer_name: str = "worker-1",
+        consumer_name: str | None = None,
+        dead_letter_queue: str | None = None,
         block_ms: int = 5000,
         pending_idle_ms: int = 30000,
     ) -> None:
         self.redis_url = redis_url
         self.queue_name = queue_name
         self.group_name = group_name
-        self.consumer_name = consumer_name
+        self.consumer_name = consumer_name or _default_consumer_name()
+        self.dead_letter_queue = dead_letter_queue
         self.block_ms = block_ms
         self.pending_idle_ms = pending_idle_ms
         read_timeout = max((block_ms / 1000) + 10, 10)
@@ -70,6 +80,27 @@ class RedisMessageQueue(MessageQueue):
         if redis_id:
             await self._redis.xack(self.queue_name, self.group_name, redis_id)
 
+    async def requeue(self, envelope: MessageEnvelope) -> None:
+        await self.ack(envelope)
+        await self.publish(envelope)
+
+    async def dead_letter(self, envelope: MessageEnvelope) -> None:
+        logger.error(
+            "消息进入死信: message_id={} conversation={} attempts={}",
+            envelope.message.id,
+            envelope.message.conversation_id,
+            envelope.delivery_attempts,
+        )
+        await self.ack(envelope)
+        if self.dead_letter_queue:
+            await self._redis.xadd(
+                self.dead_letter_queue,
+                {
+                    "id": envelope.id,
+                    "payload": envelope.model_dump_json(),
+                },
+            )
+
     async def close(self) -> None:
         await self._redis.aclose()
 
@@ -104,7 +135,17 @@ class RedisMessageQueue(MessageQueue):
         for redis_id, fields in messages:
             if redis_id in active_local_ids:
                 continue
-            envelope = MessageEnvelope.model_validate_json(fields["payload"])
+            try:
+                envelope = MessageEnvelope.model_validate_json(fields["payload"])
+            except Exception as exc:
+                logger.error(
+                    "队列中消息解析失败，丢弃: stream={} id={} error={}",
+                    self.queue_name,
+                    redis_id,
+                    exc,
+                )
+                await self._redis.xack(self.queue_name, self.group_name, redis_id)
+                continue
             self._pending_ids[envelope.id] = redis_id
             return envelope
         return None

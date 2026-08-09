@@ -8,10 +8,10 @@ def test_load_default_config(monkeypatch):
     assert settings.server.host == "0.0.0.0"
     assert settings.server.port == 8548
     assert settings.storage.type == "postgresql"
-    assert settings.storage.url == "postgresql+asyncpg://xbot:xbot@192.168.6.19:5433/xbot"
+    assert settings.storage.url == "postgresql+asyncpg://xbot:xbot@postgres:5432/xbot"
     assert settings.storage.auto_bootstrap is True
     assert settings.storage.run_migrations_on_startup is True
-    assert settings.queue.redis_url == "redis://192.168.6.41:6379/15"
+    assert settings.queue.redis_url == "redis://redis:6379/15"
     assert settings.storage.persist_runtime_events is True
     assert settings.queue.dead_letter_queue == "xbot:dead_letters"
     assert settings.api.auth_enabled is False

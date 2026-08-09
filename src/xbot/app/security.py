@@ -10,7 +10,6 @@ from starlette.responses import Response
 
 from xbot.core.config import Settings
 
-
 PUBLIC_PATH_PREFIXES = (
     "/docs",
     "/openapi.json",

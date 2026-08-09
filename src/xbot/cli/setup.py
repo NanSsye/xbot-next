@@ -7,7 +7,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-
 console = Console()
 
 
@@ -308,8 +307,7 @@ def _write_env(path: Path, values: dict[str, str], updates: dict[str, str]) -> N
     if extra_keys:
         lines.append("")
         lines.append("# Existing values preserved by setup.")
-        for key in extra_keys:
-            lines.append(f"{key}={merged[key]}")
+        lines.extend(f"{key}={merged[key]}" for key in extra_keys)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from xbot.core.timeutils import utc_now
 from xbot.storage.models import AdapterStateRecord
 
 
@@ -22,6 +22,6 @@ class AdapterRepository:
         record = AdapterStateRecord(
             adapter=adapter,
             state_json=json.dumps(state, ensure_ascii=False, default=str),
-            updated_at=datetime.utcnow(),
+            updated_at=utc_now(),
         )
         await self.session.merge(record)

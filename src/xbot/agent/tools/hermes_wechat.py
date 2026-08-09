@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
 _SEND_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(

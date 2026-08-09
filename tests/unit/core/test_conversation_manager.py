@@ -2,8 +2,8 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from xbot.conversations.manager import ConversationManager
 from xbot.conversations.context_window import ContextWindow
+from xbot.conversations.manager import ConversationManager
 from xbot.core.config import ConversationConfig
 from xbot.messaging.models import Message
 

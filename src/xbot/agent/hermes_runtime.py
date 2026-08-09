@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import ipaddress
 import json
@@ -8,8 +9,9 @@ import os
 import re
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 import anyio
@@ -256,10 +258,8 @@ def _configure_hermes_auxiliary_client(auxiliary_client: Any, config: AgentConfi
         "api_mode": api_mode or "",
     }
 
-    try:
+    with contextlib.suppress(Exception):
         auxiliary_client.set_runtime_main(provider, model)
-    except Exception:
-        pass
 
     original_resolve = auxiliary_client.resolve_provider_client
 
@@ -346,7 +346,7 @@ def _configure_hermes_auxiliary_client(auxiliary_client: Any, config: AgentConfi
     auxiliary_client.resolve_provider_client = resolve_xbot_provider
     auxiliary_client.get_text_auxiliary_client = get_text_auxiliary_client
     auxiliary_client.get_async_text_auxiliary_client = get_async_text_auxiliary_client
-    auxiliary_client._get_provider_chain = lambda: []
+    auxiliary_client._get_provider_chain = list
     auxiliary_client._try_openrouter = lambda *args, **kwargs: (None, None)
     auxiliary_client._try_nous = lambda *args, **kwargs: (None, None)
 
@@ -357,14 +357,14 @@ def _toolsets_for_source(source: str) -> list[str]:
         return ["wechat"]
     if profile == "member":
         return list(_MEMBER_TOOLSETS)
-    if source.startswith("api") or source.startswith("terminal"):
+    if source.startswith(("api", "terminal")):
         return ["hermes-api-server", "wechat"]
     return ["hermes-api-server", "wechat"]
 
 
 def _permission_profile_for_source(source: str) -> str:
     normalized = (source or "").strip()
-    if normalized.endswith(":guest") or normalized.endswith(":restricted"):
+    if normalized.endswith((":guest", ":restricted")):
         return "guest"
     if normalized.endswith(":member"):
         return "member"
@@ -611,7 +611,7 @@ def _install_hermes_tool_policy_wrapper() -> None:
     original = getattr(model_tools, "_xbot_original_handle_function_call", None)
     if original is None:
         original = model_tools.handle_function_call
-        setattr(model_tools, "_xbot_original_handle_function_call", original)
+        model_tools._xbot_original_handle_function_call = original
 
         def xbot_policy_handle_function_call(function_name: str, function_args: dict[str, Any], *args, **kwargs) -> str:
             policy = _HERMES_TOOL_POLICY.get()

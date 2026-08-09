@@ -3,14 +3,13 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
-
-import uvicorn
-import typer
-from alembic import command
-from alembic.config import Config
 from pathlib import Path
 
 import anyio
+import typer
+import uvicorn
+from alembic import command
+from alembic.config import Config
 from rich.console import Console
 from rich.table import Table
 

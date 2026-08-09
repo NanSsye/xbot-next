@@ -303,7 +303,7 @@ python -m pytest -q
 
 ## Agent 使用说明
 
-`xbot-next` 支持内嵌 Hermes Agent，但默认依赖集面向“通道 + 插件”轻量部署。若只使用 WeChat 869、OpenClawBridge 和普通插件，不需要安装内置 Agent 依赖。
+`xbot-next` 支持内嵌 Hermes Agent，但默认依赖集面向“通道 + 插件”轻量部署。若只使用 WeChat 869、ilink 和普通插件，不需要安装内置 Agent 依赖。
 
 需要启用内置 Agent 时，先安装：
 
@@ -366,7 +366,7 @@ data/hermes/.env.example
 - `agent_chat` 是兜底插件，不是总开关。
 - 私聊文本默认进入 `agent_chat`。
 - 群聊文本只有提到机器人时才进入 `agent_chat`。
-- OpenClaw 桥这类前置插件命中后，会由插件自己处理，不再进入 Hermes。
+- 前置插件命中后，会由插件自己处理，不再进入 Hermes。
 
 旧版自研 Agent 执行链已经移除。以下配置不再控制 Agent 执行：
 

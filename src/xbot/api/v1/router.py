@@ -2,7 +2,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from xbot.api.v1 import adapters, agent, bot, config, conversations, events, messages, plugins, skills, system, wechat
+from xbot.api.v1 import (
+    adapters,
+    agent,
+    bot,
+    config,
+    conversations,
+    events,
+    messages,
+    plugins,
+    skills,
+    system,
+    wechat,
+)
 
 router = APIRouter()
 router.include_router(system.router, prefix="/system", tags=["system"])

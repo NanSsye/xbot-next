@@ -168,7 +168,7 @@ XBOT_LLM_MULTIMODAL_*
 
 普通插件优先于 `agent_chat` 运行。
 
-`plugin.toml` 中 `exclusive = true` 的插件只要路由命中，就会阻断后续 fallback。OpenClaw 桥这类插件应使用该模式，避免消息同时进入 Hermes。
+`plugin.toml` 中 `exclusive = true` 的插件只要路由命中，就会阻断后续 fallback。前置插件应使用该模式，避免消息同时进入 Hermes。
 
 机器人自身发送的消息必须在 adapter 或插件层过滤，不能重新进入 xbot runtime，否则会造成自唤醒。
 

@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from xbot.agent.background import BackgroundTaskRecord
-from xbot.agent.runtime import AgentResult, AgentRuntimeEvent
-from xbot.agent.runtime import AgentRuntime
+from xbot.agent.runtime import AgentResult, AgentRuntime, AgentRuntimeEvent
+from xbot.cli.bridge import TerminalBridgeOptions, TerminalBridgeSession
 from xbot.cli.chat import (
     TerminalChatOptions,
     TerminalChatSession,
@@ -13,7 +13,6 @@ from xbot.cli.chat import (
     ToolProgressRenderer,
     build_terminal_agent_input,
 )
-from xbot.cli.bridge import TerminalBridgeOptions, TerminalBridgeSession
 from xbot.cli.tui import TerminalTuiRenderer
 from xbot.core.config import AgentConfig
 from xbot.core.logging import configure_terminal_logging, logger

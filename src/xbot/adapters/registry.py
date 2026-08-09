@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from xbot.adapters.base import BaseAdapter
+from xbot.adapters.web.adapter import WebAdapter
 from xbot.adapters.wechat869 import Wechat869Adapter
 from xbot.adapters.wechat_ilink import WechatIlinkAdapter
-from xbot.adapters.web.adapter import WebAdapter
 from xbot.core.config import AdapterConfig
 from xbot.messaging.models import Reply
 

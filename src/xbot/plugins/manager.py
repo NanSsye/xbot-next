@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import tomllib
 from pathlib import Path
@@ -7,13 +8,13 @@ from typing import Any
 
 import anyio
 
+from xbot.agent.tool_registry import ToolDefinition
 from xbot.core.config import PluginConfig
 from xbot.core.logging import logger
 from xbot.messaging.models import Message, Reply
 from xbot.plugins.context import PluginContext
 from xbot.plugins.loader import PluginLoader
 from xbot.plugins.manifest import PluginManifest, PluginRouting
-from xbot.agent.tool_registry import ToolDefinition
 
 
 class PluginManager:
@@ -29,6 +30,7 @@ class PluginManager:
         self._send_reply = None
         self._conversations = None
         self._settings = None
+        self._config_cache: dict[str, dict] = {}
 
     def attach_runtime(self, *, agent=None, send_reply=None, conversations=None, settings=None) -> None:
         self._agent = agent
@@ -38,10 +40,14 @@ class PluginManager:
 
     async def load_all(self) -> None:
         root = Path(self.config.directory)
-        if not root.exists():
+        if not await asyncio.to_thread(root.exists):
             return
         discovered: set[str] = set()
-        for plugin_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        self._config_cache.clear()
+        plugin_dirs = await asyncio.to_thread(
+            lambda: sorted(p for p in root.iterdir() if p.is_dir())
+        )
+        for plugin_dir in plugin_dirs:
             try:
                 manifest = self.loader.load_manifest(plugin_dir)
                 discovered.add(manifest.name)
@@ -78,11 +84,15 @@ class PluginManager:
         root = Path(self.config.directory)
         plugin_dir = self._paths.get(name)
         if plugin_dir is None:
-            candidates = [path for path in root.iterdir() if path.is_dir()] if root.exists() else []
+            candidates = []
+            if await asyncio.to_thread(root.exists):
+                entries = await asyncio.to_thread(root.iterdir)
+                candidates = [path for path in entries if path.is_dir()]
             for candidate in candidates:
                 try:
                     manifest = self.loader.load_manifest(candidate)
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"Skip plugin candidate {candidate}: {exc}")
                     continue
                 if manifest.name == name:
                     plugin_dir = candidate
@@ -221,6 +231,7 @@ class PluginManager:
 
     async def _unload_instance(self, name: str) -> None:
         instance = self._plugins.pop(name, None)
+        self._config_cache.pop(name, None)
         if instance is not None:
             await self._call(instance.on_unload)
 
@@ -239,7 +250,17 @@ class PluginManager:
                 continue
             if not self._matches_routing(message, manifest.routing):
                 continue
-            result = await self._call(plugin.on_message, message, self._context(name))
+            try:
+                result = await self._call(plugin.on_message, message, self._context(name))
+            except Exception as exc:
+                logger.exception(
+                    "Plugin on_message 异常(已隔离): plugin={} message_id={} conversation={} error={}",
+                    name,
+                    message.id,
+                    message.conversation_id,
+                    exc,
+                )
+                continue
             handled = await self._handle_plugin_result(result)
             if handled or self._claims_message(message, manifest.routing):
                 return
@@ -247,7 +268,17 @@ class PluginManager:
         for name, plugin in fallback_candidates:
             manifest = self._manifests[name]
             if self._matches_routing(message, manifest.routing):
-                result = await self._call(plugin.on_message, message, self._context(name))
+                try:
+                    result = await self._call(plugin.on_message, message, self._context(name))
+                except Exception as exc:
+                    logger.exception(
+                        "Plugin on_message 异常(已隔离): plugin={} message_id={} conversation={} error={}",
+                        name,
+                        message.id,
+                        message.conversation_id,
+                        exc,
+                    )
+                    continue
                 if await self._handle_plugin_result(result):
                     return
 
@@ -261,13 +292,21 @@ class PluginManager:
         return PluginContext(
             name=name,
             data_dir=plugin_dir / "data",
-            config=self._load_plugin_config(plugin_dir, name),
+            config=self._cached_plugin_config(plugin_dir, name),
             plugins=self,
             agent=self._agent,
             send_reply=self._send_reply,
             conversations=self._conversations,
             settings=self._settings,
         )
+
+    def _cached_plugin_config(self, plugin_dir: Path, name: str) -> dict:
+        cached = self._config_cache.get(name)
+        if cached is not None:
+            return cached
+        config = self._load_plugin_config(plugin_dir, name)
+        self._config_cache[name] = config
+        return config
 
     def _load_plugin_config(self, plugin_dir: Path, name: str) -> dict:
         config_path = plugin_dir / "config.toml"

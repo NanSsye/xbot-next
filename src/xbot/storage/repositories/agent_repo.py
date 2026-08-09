@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from xbot.core.timeutils import utc_now
 from xbot.storage.models import (
     AgentArtifactRecord,
     AgentBackgroundTaskRecord,
@@ -20,7 +21,7 @@ class AgentRepository:
         self.session = session
 
     async def create_task(self, task_id: str, source: str, input_text: str) -> None:
-        now = datetime.utcnow()
+        now = utc_now()
         self.session.add(
             AgentTaskRecord(
                 id=task_id,
@@ -44,20 +45,20 @@ class AgentRepository:
                     input="",
                     result=result.output,
                     created_at=result.created_at,
-                    updated_at=datetime.utcnow(),
+                    updated_at=utc_now(),
                 )
             )
             return
         record.status = result.status
         record.result = result.output
-        record.updated_at = datetime.utcnow()
+        record.updated_at = utc_now()
 
     async def mark_task_running(self, task_id: str) -> None:
         record = await self.session.get(AgentTaskRecord, task_id)
         if record is None:
             return
         record.status = "running"
-        record.updated_at = datetime.utcnow()
+        record.updated_at = utc_now()
 
     async def get_task(self, task_id: str) -> AgentTaskRecord | None:
         return await self.session.get(AgentTaskRecord, task_id)
@@ -76,7 +77,7 @@ class AgentRepository:
                 task_id=task_id,
                 type=event_type,
                 content=content,
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
         )
 
@@ -97,7 +98,7 @@ class AgentRepository:
                 content_hash=item.get("content_hash"),
                 summary=item.get("summary"),
                 metadata_json=json.dumps(item.get("metadata") or {}, ensure_ascii=False, default=str),
-                created_at=item.get("created_at") or datetime.utcnow(),
+                created_at=item.get("created_at") or utc_now(),
             )
         )
 
@@ -126,7 +127,7 @@ class AgentRepository:
             created_at=item.created_at,
             started_at=item.started_at,
             finished_at=item.finished_at,
-            updated_at=datetime.utcnow(),
+            updated_at=utc_now(),
         )
         await self.session.merge(record)
 
@@ -163,7 +164,7 @@ class AgentRepository:
             last_error=item.last_error,
             metadata_json=metadata_json,
             created_at=item.created_at,
-            updated_at=datetime.utcnow(),
+            updated_at=utc_now(),
         )
         await self.session.merge(record)
 

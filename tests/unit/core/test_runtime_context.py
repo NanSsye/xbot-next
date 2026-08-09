@@ -1,8 +1,9 @@
-import pytest
 from contextlib import asynccontextmanager
 
-from xbot.core.config import PluginConfig, load_settings
+import pytest
+
 from xbot.adapters.registry import AdapterRegistry
+from xbot.core.config import PluginConfig, load_settings
 from xbot.messaging.message_store import InMemoryMessageStore
 from xbot.messaging.models import Message, MessageEnvelope, Reply
 from xbot.plugins.manager import PluginManager
@@ -138,7 +139,6 @@ async def test_exclusive_plugin_blocks_fallback_even_when_it_returns_false():
     )
 
     assert calls == ["exclusive"]
-    suppress_channel_reply = False
 
 
 class FakeAgent:

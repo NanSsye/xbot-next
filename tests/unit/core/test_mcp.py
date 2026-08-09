@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -20,7 +21,7 @@ async def test_mcp_registers_discovered_tools():
 
     class FakeConnection:
         name = "time"
-        tools = [
+        tools: ClassVar[list] = [
             SimpleNamespace(
                 name="get-current-time",
                 description="Get current time",
@@ -61,8 +62,8 @@ async def test_mcp_include_exclude_filters_discovered_tools():
     class FakeConnection:
         name = "time"
         config = server_config
-        registered_tool_names = []
-        tools = [
+        registered_tool_names: ClassVar[list] = []
+        tools: ClassVar[list] = [
             SimpleNamespace(name="get-current-time", description="", inputSchema={}),
             SimpleNamespace(name="get-secret", description="", inputSchema={}),
             SimpleNamespace(name="set-current-time", description="", inputSchema={}),

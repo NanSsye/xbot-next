@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import io
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -17,7 +18,6 @@ from xbot.core.config import Wechat869AdapterConfig
 from xbot.core.logging import logger
 from xbot.messaging.models import Message, MessageEnvelope, Reply
 from xbot.messaging.queue import MessageQueue
-
 
 TEXT_KEYS = ("Content", "content", "TextContent", "text", "message")
 SENDER_KEYS = (
@@ -104,10 +104,8 @@ class Wechat869Adapter(BaseAdapter):
         self.started = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
 
     async def send(self, reply: Reply) -> None:
@@ -124,9 +122,10 @@ class Wechat869Adapter(BaseAdapter):
             return
         if reply.type == "voice":
             voice_path = Path(reply.content)
+            voice_bytes = await asyncio.to_thread(voice_path.read_bytes)
             await client.send_voice_message(
                 conversation_id,
-                voice_path.read_bytes(),
+                voice_bytes,
                 format=str(reply.metadata.get("format") or voice_path.suffix.lstrip(".") or "wav"),
                 seconds=int(reply.metadata.get("seconds") or 0),
             )
@@ -143,6 +142,33 @@ class Wechat869Adapter(BaseAdapter):
             return
         logger.warning("Wechat869Adapter 不支持回复类型: {}", reply.type)
 
+    _SENSITIVE_LOGIN_FIELDS = frozenset(
+        {"token_key", "poll_key", "auth_key", "auth_keys", "data62", "ticket", "admin_key"}
+    )
+
+    @staticmethod
+    def _mask_secret(value: Any) -> str:
+        text = str(value or "")
+        if not text:
+            return ""
+        if len(text) <= 8:
+            return "*" * len(text)
+        return f"{text[:4]}{'*' * 8}{text[-2:]}"
+
+    def _sanitize_login_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in payload.items():
+            if key == "raw":
+                continue
+            if key in self._SENSITIVE_LOGIN_FIELDS:
+                if key == "auth_keys" and isinstance(value, list):
+                    result[key] = [self._mask_secret(item) for item in value]
+                else:
+                    result[key] = self._mask_secret(value)
+            else:
+                result[key] = value
+        return result
+
     def public_status(self) -> dict[str, Any]:
         return {
             "adapter": self.name,
@@ -150,18 +176,19 @@ class Wechat869Adapter(BaseAdapter):
             "started": self.started,
             "host": self.config.host,
             "port": self.config.port,
-            "ws_url": self._ws_url(),
+            "ws_url": self._mask_url(self._ws_url()),
             "admin_key_configured": bool(self.config.admin_key),
-            "admin_key": self.config.admin_key,
             "token_key_configured": bool(self.config.token_key),
-            "token_key": self.config.token_key,
-            "auth_key": getattr(self.client, "auth_key", ""),
-            "poll_key": getattr(self.client, "poll_key", ""),
+            "token_key": self._mask_secret(getattr(self.client, "token_key", "") or self.config.token_key),
+            "auth_key": self._mask_secret(getattr(self.client, "auth_key", "")),
+            "poll_key": self._mask_secret(getattr(self.client, "poll_key", "")),
             "display_uuid": getattr(self.client, "display_uuid", ""),
             "login_tx_id": getattr(self.client, "login_tx_id", ""),
             "device_id": getattr(self.client, "device_id", ""),
             "device_type": getattr(self.client, "device_type", ""),
+            "data62": self._mask_secret(getattr(self.client, "data62", "")),
             "data62_set": bool(getattr(self.client, "data62", "")),
+            "ticket": self._mask_secret(getattr(self.client, "ticket", "")),
             "ticket_set": bool(getattr(self.client, "ticket", "")),
             "login_status": self._login_status,
             "login_qrcode_cached": bool(self._login_qrcode or self._login_qr_url),
@@ -185,7 +212,7 @@ class Wechat869Adapter(BaseAdapter):
             self._login_status = str(status.get("status") or self._login_status)
             if status.get("logged_in"):
                 await self._persist_state()
-        return {**self.public_status(), **status}
+        return {**self.public_status(), **self._sanitize_login_payload(status)}
 
     async def start_login(self, *, device_type: str = "ipad", proxy: str = "") -> dict[str, Any]:
         client = self.client or self._create_client()
@@ -195,7 +222,7 @@ class Wechat869Adapter(BaseAdapter):
             self._apply_client_login_state(client)
             self._login_status = "online"
             await self._persist_state()
-            return {**self.public_status(), "logged_in": True, "status": "online", "message": "已从现有 key 恢复登录。"}
+            return {**self.public_status(), **self._sanitize_login_payload({"logged_in": True, "status": "online", "message": "已从现有 key 恢复登录。"})}
         payload = await client.get_login_qrcode(
             device_type=device_type,
             device_id=getattr(client, "device_id", "") or "",
@@ -208,7 +235,7 @@ class Wechat869Adapter(BaseAdapter):
         await self._persist_state()
         return {
             **self.public_status(),
-            **payload,
+            **self._sanitize_login_payload(payload),
             "logged_in": False,
             "qr_image_url": self._qr_data_url(self._login_qr_url or self._login_qrcode),
             "message": "869 登录二维码已生成，请用微信扫码。",
@@ -227,7 +254,7 @@ class Wechat869Adapter(BaseAdapter):
         else:
             self._login_status = str(payload.get("status") or "waiting_login")
         await self._persist_state()
-        return {**self.public_status(), **payload}
+        return {**self.public_status(), **self._sanitize_login_payload(payload)}
 
     async def normalize(self, raw: dict) -> Message:
         message = self._unwrap_message(raw)
@@ -294,43 +321,57 @@ class Wechat869Adapter(BaseAdapter):
             ts = float(raw_value)
             if ts > 10_000_000_000:
                 ts = ts / 1000
-            # 业务要求：数据库直接保存北京时间的无时区 datetime。
-            return datetime.utcfromtimestamp(ts) + timedelta(hours=8)
+            # 统一保存 naive UTC，与其他消息路径的 created_at 保持一致。
+            return datetime.fromtimestamp(ts, tz=UTC).replace(tzinfo=None)
         except (TypeError, ValueError, OSError):
             return None
 
     async def _listen_loop(self) -> None:
+        import random
+
+        delay = max(1.0, float(self.config.reconnect_seconds))
         while self.started:
             try:
                 await self._listen_once()
+                delay = max(1.0, float(self.config.reconnect_seconds))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("Wechat869Adapter WS 监听异常，{} 秒后重连: {}", self.config.reconnect_seconds, exc)
-                await asyncio.sleep(self.config.reconnect_seconds)
+                logger.warning(
+                    "Wechat869Adapter WS 监听异常，{:.1f} 秒后重连: {}",
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60) * random.uniform(0.9, 1.1)
 
     async def _listen_once(self) -> None:
         import aiohttp
 
         ws_url = self._ws_url()
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(
-                ws_url,
-                heartbeat=30,
-                timeout=self.config.connect_timeout_seconds,
-            ) as ws:
-                logger.info("Wechat869Adapter 已连接 WS: {}", self._mask_url(ws_url))
-                async for event in ws:
-                    if event.type == aiohttp.WSMsgType.TEXT:
+        async with aiohttp.ClientSession() as session, session.ws_connect(
+            ws_url,
+            heartbeat=30,
+            timeout=self.config.connect_timeout_seconds,
+        ) as ws:
+            logger.info("Wechat869Adapter 已连接 WS: {}", self._mask_url(ws_url))
+            async for event in ws:
+                if event.type == aiohttp.WSMsgType.TEXT:
+                    try:
                         await self._handle_ws_text(event.data)
-                    elif event.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
-                        break
+                    except Exception as exc:
+                        logger.exception(
+                            "Wechat869Adapter 处理 WS 消息异常(已跳过，连接保持): error={}",
+                            exc,
+                        )
+                elif event.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                    break
 
     async def _handle_ws_text(self, payload: str) -> None:
-        logger.info("Wechat869Adapter 收到 WS 文本: {}", self._preview(payload))
+        logger.debug("Wechat869Adapter 收到 WS 文本: {}", self._preview(payload))
         data = self._loads_json(payload)
         messages = self._extract_messages(data)
-        logger.info("Wechat869Adapter 提取到 {} 条候选消息", len(messages))
+        logger.debug("Wechat869Adapter 提取到 {} 条候选消息", len(messages))
         for raw in messages:
             message = await self.normalize(raw)
             if self._should_ignore_message(message):
@@ -360,7 +401,7 @@ class Wechat869Adapter(BaseAdapter):
             if self.queue is None:
                 logger.warning("Wechat869Adapter 未配置消息队列，消息不会进入框架: {}", message.id)
                 continue
-            logger.info(
+            logger.debug(
                 "Wechat869Adapter 发布消息到队列: id={} scope={} conversation={} sender={} attachments={} quote_attachments={} content={}",
                 message.id,
                 message.raw.get("scope"),
@@ -387,9 +428,7 @@ class Wechat869Adapter(BaseAdapter):
             return True
         if raw_type in {10000, 10002} and message.raw.get("scope") == "group":
             return False
-        if raw_type in {51, 10000, 10002}:
-            return True
-        return False
+        return raw_type in {51, 10000, 10002}
 
     def _is_ignored_conversation(self, message: Message) -> bool:
         ids = {
@@ -597,15 +636,17 @@ class Wechat869Adapter(BaseAdapter):
             title = self._extract_xml_display_text(content)
             if title:
                 lines.append(title)
-        # 直接发送图片/文件只作为附件保存，不拼进文本，避免普通媒体自动进入 OpenClaw。
+        # 直接发送图片/文件只作为附件保存，不拼进文本，避免普通媒体自动进入 Hermes。
         quote = raw.get("quote")
         if isinstance(quote, dict):
             quote_attachments = [a for a in quote.get("attachments") or [] if isinstance(a, dict)]
             quote_content = str(quote.get("content") or "").strip()
             sender = str(quote.get("sender_name") or quote.get("sender_wxid") or "").strip()
             if quote_attachments:
-                for attachment in quote_attachments:
-                    lines.append("[引用" + self._attachment_line(attachment, include_local_path=False).lstrip("["))
+                lines.extend(
+                    "[引用" + self._attachment_line(attachment, include_local_path=False).lstrip("[")
+                    for attachment in quote_attachments
+                )
             else:
                 prefix = f"[引用] {sender}: {quote_content}" if sender and quote_content else f"[引用] {quote_content or sender}".strip()
                 if prefix and prefix != "[引用]":

@@ -395,7 +395,7 @@ async def test_wechat_ilink_downloads_quoted_file_to_channel_media_dir(tmp_path)
     assert attachment["download_status"] == "downloaded"
     assert attachment["source"] == "wechat_ilink"
     assert (tmp_path / "ilink-media") in Path(attachment["local_path"]).parents
-    assert Path(attachment["local_path"]).read_bytes() == b"hello file"
+    assert await asyncio.to_thread(Path(attachment["local_path"]).read_bytes) == b"hello file"
 
 
 def test_adapter_registry_can_enable_wechat869_and_ilink_together():
@@ -506,8 +506,8 @@ async def test_wechat_ilink_start_auto_polls_login_status_and_persists():
 async def test_wechat_ilink_client_sends_text_without_splitting(monkeypatch):
     calls = []
 
-    async def fake_post(self, endpoint, body, *, timeout):
-        calls.append({"endpoint": endpoint, "body": body, "timeout": timeout})
+    async def fake_post(self, endpoint, body, *, timeout_seconds):
+        calls.append({"endpoint": endpoint, "body": body, "timeout": timeout_seconds})
         return {"ret": 0}
 
     monkeypatch.setattr(WechatIlinkClient, "_post", fake_post)
@@ -530,15 +530,16 @@ async def test_wechat_ilink_client_sends_image_and_file_items(monkeypatch, tmp_p
     file.write_bytes(b"report")
 
     async def fake_upload(self, *, path, to_user_id, media_type):
+        data = await asyncio.to_thread(Path(path).read_bytes)
         return {
             "download_param": f"download-{media_type}",
             "aeskey_hex": "00112233445566778899aabbccddeeff",
-            "raw_size": len(Path(path).read_bytes()),
+            "raw_size": len(data),
             "cipher_size": 32,
         }
 
-    async def fake_post(self, endpoint, body, *, timeout):
-        calls.append({"endpoint": endpoint, "body": body, "timeout": timeout})
+    async def fake_post(self, endpoint, body, *, timeout_seconds):
+        calls.append({"endpoint": endpoint, "body": body, "timeout": timeout_seconds})
         return {"ret": 0}
 
     monkeypatch.setattr(WechatIlinkClient, "_upload_media", fake_upload)

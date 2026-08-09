@@ -149,7 +149,7 @@ async def run_terminal_bridge(
     session_id: str | None = None,
     cwd: str | None = None,
 ) -> None:
-    resolved_cwd = Path(cwd or os.getcwd()).resolve()
+    resolved_cwd = await asyncio.to_thread(lambda: Path(cwd or os.getcwd()).resolve())
     settings: Settings = load_settings(config_file)
     configure_terminal_logging(debug=False, cwd=resolved_cwd)
     await ensure_storage_ready(settings)

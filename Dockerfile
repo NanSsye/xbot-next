@@ -1,6 +1,7 @@
-# syntax=docker/dockerfile:1.7
+ARG SQLITE_BUILD_IMAGE=debian:bookworm-slim
+ARG RUNTIME_IMAGE=python:3.11-slim-bookworm
 
-FROM debian:bookworm-slim AS sqlite_build
+FROM ${SQLITE_BUILD_IMAGE} AS sqlite_build
 ARG SQLITE_AUTOCONF_VERSION=3530400
 ARG SQLITE_SHA256=0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c
 ARG APT_MIRROR=
@@ -32,7 +33,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     && make -j"$(nproc)" \
     && make install
 
-FROM python:3.11-slim-bookworm AS runtime
+FROM ${RUNTIME_IMAGE} AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

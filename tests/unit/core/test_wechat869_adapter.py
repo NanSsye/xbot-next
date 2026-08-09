@@ -432,7 +432,8 @@ async def test_wechat869_client_sends_video_through_cdn_pipeline(tmp_path, monke
         "/message/CdnUploadVideo",
         "/message/ForwardVideoMessage",
     ]
-    assert calls[0][1]["VideoData"] == list(b"video-bytes")
+    assert calls[0][1]["VideoData"] == base64.b64encode(b"video-bytes").decode("ascii")
+    assert calls[0][1]["ThumbData"] == base64.b64encode(b"thumb").decode("ascii")
     assert calls[1][1]["ForwardVideoList"][0] == {
         "AesKey": "aes-key",
         "CdnVideoUrl": "cdn-url",

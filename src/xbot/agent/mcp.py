@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import re
-from fnmatch import fnmatch
 from contextlib import AsyncExitStack
+from fnmatch import fnmatch
 from typing import Any
 
 import anyio
@@ -12,7 +12,6 @@ from xbot.agent.tool_registry import ToolDefinition, ToolRegistry
 from xbot.core.config import AgentMCPConfig, AgentMCPServerConfig
 from xbot.core.exceptions import XBotError
 from xbot.core.logging import logger
-
 
 SAFE_ENV_KEYS = {"PATH", "HOME", "USER", "USERNAME", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR", "TEMP", "TMP"}
 
@@ -88,7 +87,7 @@ class MCPClientManager:
             }
         return servers
 
-    def _register_tools(self, connection: "MCPServerConnection") -> None:
+    def _register_tools(self, connection: MCPServerConnection) -> None:
         server_config = getattr(connection, "config", None) or self.config.servers.get(
             connection.name, AgentMCPServerConfig()
         )
@@ -133,11 +132,7 @@ class MCPClientManager:
             fnmatch(candidate, pattern) for pattern in include for candidate in candidates
         ):
             return False
-        if exclude and any(
-            fnmatch(candidate, pattern) for pattern in exclude for candidate in candidates
-        ):
-            return False
-        return True
+        return not (exclude and any(fnmatch(candidate, pattern) for pattern in exclude for candidate in candidates))
 
     def _tool_name(self, server_name: str, tool_name: str) -> str:
         value = f"mcp_{server_name}_{tool_name}"

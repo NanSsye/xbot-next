@@ -1,5 +1,5 @@
 from xbot.core.config import load_settings
-from xbot.messaging.models import Message, Reply
+from xbot.messaging.models import Message
 from xbot.storage.models import Base
 from xbot.storage.session import Storage
 

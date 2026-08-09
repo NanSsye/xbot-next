@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import ClassVar
 from uuid import uuid4
 
 import typer
@@ -30,7 +32,7 @@ except Exception:  # pragma: no cover - clean fallback when dependency is absent
 
 
 class TerminalTuiRenderer:
-    def __init__(self, app: "TerminalTuiApp") -> None:
+    def __init__(self, app: TerminalTuiApp) -> None:
         self.app = app
         self.verbose = app.session.options.verbose
         self.debug = app.session.options.debug
@@ -206,7 +208,7 @@ if App is not None:
         }
         """
 
-        BINDINGS = [
+        BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
             ("ctrl+c", "quit", "Quit"),
             ("ctrl+l", "clear", "Clear"),
         ]
@@ -302,7 +304,7 @@ async def run_terminal_tui(
         raise typer.BadParameter(
             "Textual is not installed. Run: python -m pip install -e \".[dev]\""
         )
-    resolved_cwd = Path(cwd or Path.cwd()).resolve()
+    resolved_cwd = await asyncio.to_thread(lambda: Path(cwd or Path.cwd()).resolve())
     configure_terminal_logging(debug=debug, cwd=resolved_cwd)
     settings: Settings = load_settings(config_file)
     await ensure_storage_ready(settings)

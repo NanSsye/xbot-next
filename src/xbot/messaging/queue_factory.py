@@ -8,5 +8,10 @@ from xbot.messaging.redis_queue import RedisMessageQueue
 
 def create_message_queue(config: QueueSettings) -> MessageQueue:
     if config.type == "redis":
-        return RedisMessageQueue(redis_url=config.redis_url, queue_name=config.main_queue)
-    return MemoryMessageQueue()
+        return RedisMessageQueue(
+            redis_url=config.redis_url,
+            queue_name=config.main_queue,
+            consumer_name=config.consumer_name,
+            dead_letter_queue=config.dead_letter_queue,
+        )
+    return MemoryMessageQueue(maxsize=config.maxsize)
