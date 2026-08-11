@@ -373,6 +373,81 @@ async def test_agent_chat_plugin_handles_private_text_as_fallback():
 
 
 @pytest.mark.anyio
+async def test_agent_chat_plugin_routes_qq_group_mention_to_agent():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+    fake_agent = FakeAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="qq",
+            adapter="qq",
+            conversation_id="qq:group:test-group",
+            sender_id="test-member",
+            sender_name="群成员",
+            content="请回复这条群消息",
+            raw={
+                "id": "qq-group-agent-1",
+                "scope": "group",
+                "mentions_bot": True,
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        replies = await ctx.messages.recent_replies()
+        assert fake_agent.inputs
+        assert "请回复这条群消息" in fake_agent.inputs[-1][0]
+        assert replies[-1].adapter == "qq"
+        assert replies[-1].conversation_id == "qq:group:test-group"
+        assert replies[-1].content == "agent reply"
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("message_type", "content"),
+    [("voice", "[语音]"), ("video", "[视频]")],
+)
+async def test_agent_chat_plugin_routes_qq_group_media_to_agent(message_type, content):
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+    fake_agent = FakeAgent()
+    ctx.plugins.attach_runtime(agent=fake_agent, send_reply=ctx.engine.send_reply)
+    await ctx.engine.start()
+    try:
+        message = Message(
+            platform="qq",
+            adapter="qq",
+            type=message_type,
+            conversation_id="qq:group:test-group",
+            sender_id="test-member",
+            sender_name="群成员",
+            content=content,
+            raw={
+                "id": f"qq-group-agent-{message_type}",
+                "scope": "group",
+                "mentions_bot": True,
+            },
+        )
+        await ctx.consumer.handle(MessageEnvelope.from_message(message))
+
+        replies = await ctx.messages.recent_replies()
+        assert fake_agent.inputs
+        assert content in fake_agent.inputs[-1][0]
+        assert replies[-1].adapter == "qq"
+        assert replies[-1].conversation_id == "qq:group:test-group"
+        assert replies[-1].content == "agent reply"
+    finally:
+        await ctx.engine.stop()
+        await ctx.storage.close()
+
+
+@pytest.mark.anyio
 async def test_agent_chat_plugin_marks_non_admin_wechat869_as_member():
     settings = load_settings("configs/xbot.toml")
     settings.storage.persist_runtime_events = False

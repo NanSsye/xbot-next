@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import os
 import tomllib
 from pathlib import Path
@@ -234,10 +235,41 @@ class WechatIlinkAdapterConfig(BaseModel):
     max_file_bytes: int = 100 * 1024 * 1024
 
 
+class QQAdapterConfig(BaseModel):
+    enabled: bool = False
+    app_id: str = ""
+    client_secret: str = ""
+    intents: int = 1 << 25
+    api_base_url: str = "https://api.bot.qq.com"
+    token_url: str = "https://bots.qq.com/app/getAppAccessToken"
+    gateway_url: str = ""
+    connect_timeout_seconds: float = 30.0
+    reconnect_seconds: float = 5.0
+    max_reply_chars: int = 1800
+    # Active messages are disabled by default.  Passive replies carry the
+    # triggering message id and do not consume the active-message quota.
+    allow_active_messages: bool = False
+    media_enabled: bool = True
+    media_dir: str = "data/qq/media"
+    auto_download_media: bool = False
+    media_max_bytes: int = 200 * 1024 * 1024
+    media_image_max_bytes: int = 20 * 1024 * 1024
+    media_voice_max_bytes: int = 20 * 1024 * 1024
+    media_video_max_bytes: int = 30 * 1024 * 1024
+    media_file_max_bytes: int = 200 * 1024 * 1024
+    media_chunk_size: int = 5 * 1024 * 1024
+    media_allowed_roots: list[str] = Field(default_factory=list)
+    channel_enabled: bool = True
+    admin_openids: list[str] = Field(default_factory=list)
+    member_openids: list[str] = Field(default_factory=list)
+    default_profile: Literal["member", "guest"] = "guest"
+
+
 class AdapterConfig(BaseModel):
     web: WebAdapterConfig = Field(default_factory=WebAdapterConfig)
     wechat869: Wechat869AdapterConfig = Field(default_factory=Wechat869AdapterConfig)
     wechat_ilink: WechatIlinkAdapterConfig = Field(default_factory=WechatIlinkAdapterConfig)
+    qq: QQAdapterConfig = Field(default_factory=QQAdapterConfig)
 
 
 class Settings(BaseModel):
@@ -285,6 +317,25 @@ def _load_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
+def runtime_config_path(config_file: str | os.PathLike[str] | None = None) -> Path:
+    configured = os.getenv("XBOT_RUNTIME_CONFIG_FILE", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    path = Path(config_file or os.getenv("XBOT_CONFIG_FILE", "configs/xbot.toml"))
+    return (path.parent.parent / "data" / "runtime-config.json").resolve()
+
+
+def load_runtime_overrides(config_file: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    path = runtime_config_path(config_file)
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Runtime config must be a JSON object: {path}")
+    payload.pop("config_file", None)
+    return payload
+
+
 def _env_bool(value: str) -> bool:
     return value.lower() in {"1", "true", "yes", "on", "admin"}
 
@@ -297,7 +348,12 @@ def _env_int(value: str) -> int:
     return int(value.replace("_", "").strip())
 
 
-def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings:
+def load_settings(
+    config_file: str | os.PathLike[str] | None = None,
+    *,
+    runtime_overrides: dict[str, Any] | None = None,
+    include_runtime_overrides: bool = True,
+) -> Settings:
     path = Path(config_file or os.getenv("XBOT_CONFIG_FILE", "configs/xbot.toml"))
     data: dict[str, Any] = {}
     if path.exists():
@@ -533,6 +589,75 @@ def load_settings(config_file: str | os.PathLike[str] | None = None) -> Settings
         data.setdefault("adapters", {}).setdefault("wechat_ilink", {})["max_file_bytes"] = int(
             wechat_ilink_max_file_bytes
         )
+    if qq_enabled := env.get("XBOT_QQ_ENABLED"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["enabled"] = _env_bool(qq_enabled)
+    if qq_app_id := env.get("XBOT_QQ_APP_ID"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["app_id"] = qq_app_id
+    if qq_client_secret := env.get("XBOT_QQ_CLIENT_SECRET"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["client_secret"] = qq_client_secret
+    if qq_intents := env.get("XBOT_QQ_INTENTS"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["intents"] = _env_int(qq_intents)
+    if qq_api_base_url := env.get("XBOT_QQ_API_BASE_URL"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["api_base_url"] = qq_api_base_url
+    if qq_token_url := env.get("XBOT_QQ_TOKEN_URL"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["token_url"] = qq_token_url
+    if qq_gateway_url := env.get("XBOT_QQ_GATEWAY_URL"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["gateway_url"] = qq_gateway_url
+    if qq_connect_timeout := env.get("XBOT_QQ_CONNECT_TIMEOUT_SECONDS"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["connect_timeout_seconds"] = float(
+            qq_connect_timeout
+        )
+    if qq_reconnect_seconds := env.get("XBOT_QQ_RECONNECT_SECONDS"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["reconnect_seconds"] = float(
+            qq_reconnect_seconds
+        )
+    if qq_max_reply_chars := env.get("XBOT_QQ_MAX_REPLY_CHARS"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["max_reply_chars"] = _env_int(
+            qq_max_reply_chars
+        )
+    if qq_allow_active := env.get("XBOT_QQ_ALLOW_ACTIVE_MESSAGES"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["allow_active_messages"] = _env_bool(
+            qq_allow_active
+        )
+    if qq_media_enabled := env.get("XBOT_QQ_MEDIA_ENABLED"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_enabled"] = _env_bool(qq_media_enabled)
+    if qq_media_dir := env.get("XBOT_QQ_MEDIA_DIR"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_dir"] = qq_media_dir
+    if qq_auto_download := env.get("XBOT_QQ_AUTO_DOWNLOAD_MEDIA"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["auto_download_media"] = _env_bool(qq_auto_download)
+    if qq_media_max := env.get("XBOT_QQ_MEDIA_MAX_BYTES"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_max_bytes"] = _env_int(qq_media_max)
+    if qq_image_max := env.get("XBOT_QQ_MEDIA_IMAGE_MAX_BYTES"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_image_max_bytes"] = _env_int(qq_image_max)
+    if qq_voice_max := env.get("XBOT_QQ_MEDIA_VOICE_MAX_BYTES"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_voice_max_bytes"] = _env_int(qq_voice_max)
+    if qq_video_max := env.get("XBOT_QQ_MEDIA_VIDEO_MAX_BYTES"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_video_max_bytes"] = _env_int(qq_video_max)
+    if qq_file_max := env.get("XBOT_QQ_MEDIA_FILE_MAX_BYTES"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_file_max_bytes"] = _env_int(qq_file_max)
+    if qq_chunk_size := env.get("XBOT_QQ_MEDIA_CHUNK_SIZE"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_chunk_size"] = _env_int(qq_chunk_size)
+    if qq_media_roots := env.get("XBOT_QQ_MEDIA_ALLOWED_ROOTS"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["media_allowed_roots"] = _env_list(qq_media_roots)
+    if qq_channel_enabled := env.get("XBOT_QQ_CHANNEL_ENABLED"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["channel_enabled"] = _env_bool(qq_channel_enabled)
+    if qq_admin_openids := env.get("XBOT_QQ_ADMIN_OPENIDS"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["admin_openids"] = _env_list(
+            qq_admin_openids
+        )
+    if qq_member_openids := env.get("XBOT_QQ_MEMBER_OPENIDS"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["member_openids"] = _env_list(
+            qq_member_openids
+        )
+    if qq_default_profile := env.get("XBOT_QQ_DEFAULT_PROFILE"):
+        data.setdefault("adapters", {}).setdefault("qq", {})["default_profile"] = (
+            qq_default_profile
+        )
+    if include_runtime_overrides:
+        override_data = (
+            load_runtime_overrides(path) if runtime_overrides is None else runtime_overrides
+        )
+        _deep_update(data, override_data)
     _normalize_agent_config(data)
     if isinstance(data.get("xbot"), dict):
         data.setdefault("agent", {})["timezone"] = data["xbot"].get("timezone", "Asia/Shanghai")

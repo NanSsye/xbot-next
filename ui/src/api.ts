@@ -8,6 +8,9 @@ import type {
   AgentToolInfo,
   ApiEnvelope,
   BackgroundTask,
+  ConfigApplyResult,
+  ConfigChange,
+  ConfigSnapshot,
   Conversation,
   Message,
   PluginInfo,
@@ -61,7 +64,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401) {
       throw new Error("unauthorized: 请填写 xbot API Token");
     }
-    throw new Error(text || `${response.status} ${response.statusText}`);
+    let detail = text;
+    try {
+      const payload = JSON.parse(text) as { detail?: unknown };
+      if (typeof payload.detail === "string") detail = payload.detail;
+      if (Array.isArray(payload.detail)) {
+        detail = payload.detail
+          .map((item) => typeof item === "object" && item && "msg" in item ? String(item.msg) : String(item))
+          .join("；");
+      }
+    } catch {
+      // Keep plain-text responses as-is.
+    }
+    throw new Error(detail || `${response.status} ${response.statusText}`);
   }
   const envelope = (await response.json()) as ApiEnvelope<T>;
   return envelope.data;
@@ -159,6 +174,12 @@ export const api = {
   cancelBackgroundTask: (taskId: string) =>
     request<BackgroundTask>(`/agent/background-tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }),
   scheduledJobs: (limit = 100) => request<ScheduledJob[]>(`/agent/scheduled-jobs?limit=${limit}&include_disabled=true`),
+  config: () => request<ConfigSnapshot>("/config"),
+  updateConfig: (payload: { revision?: string | null; changes: ConfigChange[] }) =>
+    request<ConfigApplyResult>("/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   createScheduledJob: (payload: {
     input: string;
     schedule: string;

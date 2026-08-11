@@ -88,14 +88,15 @@ class XBotEngine:
         if self._plugins:
             await self._plugins.dispatch_message(message)
 
-    async def send_reply(self, reply) -> None:
+    async def send_reply(self, reply) -> object | None:
         if self._message_store:
             await self._message_store.add_reply(reply)
         elif self._storage and self.settings.storage.persist_runtime_events:
             async with self._storage.session_factory() as session, session.begin():
                 await self._storage.messages(session).save_reply(reply)
         if self._adapters:
-            await self._adapters.send(reply)
+            return await self._adapters.send(reply)
+        return None
 
     def status(self) -> RuntimeStatus:
         self._refresh_counts()

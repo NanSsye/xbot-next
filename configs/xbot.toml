@@ -155,4 +155,31 @@ auto_download_files = true
 max_image_bytes = 20971520
 max_file_bytes = 104857600
 
+[adapters.qq]
+enabled = false
+app_id = ""
+client_secret = ""
+intents = 33554432
+api_base_url = "https://api.bot.qq.com"
+token_url = "https://bots.qq.com/app/getAppAccessToken"
+gateway_url = ""
+connect_timeout_seconds = 30
+reconnect_seconds = 5
+max_reply_chars = 1800
+allow_active_messages = false
+media_enabled = true
+media_dir = "data/qq/media"
+auto_download_media = false
+media_max_bytes = 209715200
+media_image_max_bytes = 20971520
+media_voice_max_bytes = 20971520
+media_video_max_bytes = 31457280
+media_file_max_bytes = 209715200
+media_chunk_size = 5242880
+media_allowed_roots = []
+channel_enabled = true
+admin_openids = []
+member_openids = []
+default_profile = "guest"
+
 

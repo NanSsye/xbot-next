@@ -24,5 +24,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("Stopping xbot-next backend")
-        await context.engine.stop()
-        await context.storage.close()
+        active_context = app.state.context
+        await active_context.engine.stop()
+        await active_context.storage.close()

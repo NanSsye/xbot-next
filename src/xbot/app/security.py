@@ -23,14 +23,16 @@ class ApiTokenAuthMiddleware(BaseHTTPMiddleware):
         self.settings = settings
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        context = getattr(request.app.state, "context", None)
+        settings = getattr(context, "settings", self.settings)
         if not self._requires_auth(request):
             return await call_next(request)
-        if not self.settings.api.token:
+        if not settings.api.token:
             return JSONResponse(
                 {"success": False, "error": "api authentication is enabled but XBOT_API_TOKEN is empty"},
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        if token_matches(request_token(request), self.settings.api.token):
+        if token_matches(request_token(request), settings.api.token):
             return await call_next(request)
         return JSONResponse(
             {"success": False, "error": "unauthorized"},
@@ -41,7 +43,9 @@ class ApiTokenAuthMiddleware(BaseHTTPMiddleware):
     def _requires_auth(self, request: Request) -> bool:
         if request.method == "OPTIONS":
             return False
-        if not self.settings.api.auth_enabled:
+        context = getattr(request.app.state, "context", None)
+        settings = getattr(context, "settings", self.settings)
+        if not settings.api.auth_enabled:
             return False
         path = request.url.path
         if not path.startswith("/api/"):

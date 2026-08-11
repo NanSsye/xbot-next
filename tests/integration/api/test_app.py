@@ -30,3 +30,4 @@ def test_create_app():
     assert "/api/v1/conversations/{conversation_id}" in paths
     assert "/api/v1/conversations/{conversation_id}/messages" in paths
     assert "/api/v1/conversations/{conversation_id}/state/{namespace}" in paths
+    assert "/api/v1/config" in paths

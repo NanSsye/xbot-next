@@ -17,7 +17,7 @@ class AgentChatPlugin(PluginBase):
         if not ctx.agent or not ctx.send_reply:
             logger.warning("AgentChatPlugin 未配置 agent 或 send_reply，跳过消息: {}", message.id)
             return False
-        if message.type not in {"text", "image", "file", "event"} or not message.content:
+        if message.type not in {"text", "image", "file", "voice", "video", "event"} or not message.content:
             logger.info("AgentChatPlugin 跳过不支持或空消息: id={} type={}", message.id, message.type)
             return False
         if self._should_defer_unquoted_ilink_media(message):
@@ -45,11 +45,9 @@ class AgentChatPlugin(PluginBase):
             return True
 
         logger.info(
-            "AgentChatPlugin 调用 Agent: id={} conversation={} sender={} content={}",
-            message.id,
-            message.conversation_id,
-            message.sender_id,
-            content,
+            "AgentChatPlugin 调用 Agent: adapter={} content_chars={}",
+            message.adapter,
+            len(content),
         )
         try:
             timeout_seconds = self._agent_timeout_seconds(ctx)
@@ -70,7 +68,7 @@ class AgentChatPlugin(PluginBase):
         logger.info("AgentChatPlugin Agent 完成: id={} task_id={}", message.id, getattr(result, "task_id", ""))
         if getattr(result, "suppress_channel_reply", False):
             logger.info(
-                "AgentChatPlugin 跳过自动回发: id={} task_id={} reason=explicit_wechat_send",
+                "AgentChatPlugin 跳过自动回发: id={} task_id={} reason=explicit_channel_send",
                 message.id,
                 getattr(result, "task_id", ""),
             )
@@ -85,7 +83,7 @@ class AgentChatPlugin(PluginBase):
                 conversation_id=message.conversation_id,
                 type="text",
                 content=output,
-                quote_message_id=message.id,
+                **self._reply_reference(message),
             )
         )
         return True
@@ -106,9 +104,17 @@ class AgentChatPlugin(PluginBase):
         )
         source = self._source_for_message(message, ctx)
         attachments = self._llm_attachments(message)
+        kwargs = {"source": source}
         if self._agent_accepts_attachments(ctx.agent):
-            return await ctx.agent.run_task(agent_input, source=source, attachments=attachments)
-        return await ctx.agent.run_task(agent_input, source=source)
+            kwargs["attachments"] = attachments
+        if self._agent_accepts_channel_context(ctx.agent):
+            kwargs["channel_context"] = {
+                "conversation_id": message.conversation_id,
+                "message_id": message.id,
+                "scope": str(message.raw.get("scope") or "private"),
+                "profile": self._tool_permission_profile(message, ctx),
+            }
+        return await ctx.agent.run_task(agent_input, **kwargs)
 
     async def _handle_new_session_command(self, message: Message, ctx) -> None:
         source = self._source_for_message(message, ctx)
@@ -134,7 +140,7 @@ class AgentChatPlugin(PluginBase):
                 conversation_id=message.conversation_id,
                 type="text",
                 content="已开启新会话，会重新读取当前人格配置。",
-                quote_message_id=message.id,
+                **self._reply_reference(message),
             )
         )
 
@@ -173,16 +179,35 @@ class AgentChatPlugin(PluginBase):
                 conversation_id=message.conversation_id,
                 type="text",
                 content=content,
-                quote_message_id=message.id,
+                **self._reply_reference(message),
             )
         )
 
+    def _reply_reference(self, message: Message) -> dict[str, object]:
+        if message.raw.get("qq_event_type") == "INTERACTION_CREATE":
+            return {"metadata": {"event_id": message.raw.get("event_id")}}
+        return {"quote_message_id": message.id}
+
     def _should_handle(self, message: Message) -> bool:
         scope = message.raw.get("scope")
+        qq_event_type = message.raw.get("qq_event_type")
+        if qq_event_type == "INTERACTION_CREATE":
+            try:
+                interaction_type = int(message.raw.get("interaction_type") or 0)
+            except (TypeError, ValueError):
+                interaction_type = 0
+            return interaction_type in {11, 12}
+        if qq_event_type in {
+            "MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE", "PUBLIC_GUILD_MESSAGES",
+            "AUDIT_PASS", "AUDIT_FAIL", "GUILD_CREATE",
+        } or message.raw.get("agent_route") is False:
+            return False
         if scope == "private":
             return True
         if scope == "group":
             return bool(message.raw.get("mentions_bot"))
+        if scope == "channel":
+            return bool(message.raw.get("mentions_bot")) or message.raw.get("qq_event_type") == "MESSAGE_CREATE"
         return message.platform == "web"
 
     def _should_defer_unquoted_ilink_media(self, message: Message) -> bool:
@@ -197,9 +222,14 @@ class AgentChatPlugin(PluginBase):
         for candidate in (
             message.raw.get("bot_nickname"),
             message.raw.get("bot_wxid"),
+            message.raw.get("bot_id") if message.adapter == "qq" else None,
         ):
             if candidate:
-                content = content.replace(f"@{candidate}", "").replace(str(candidate), "")
+                content = (
+                    content.replace(f"@{candidate}", "")
+                    .replace(f"<@{candidate}>", "")
+                    .replace(str(candidate), "")
+                )
         return content.strip()
 
     async def _conversation_context(self, message: Message, ctx) -> tuple[str, str]:
@@ -288,6 +318,10 @@ class AgentChatPlugin(PluginBase):
             f"private_wxid: {private_wxid}\n"
             f"group_wxid: {group_wxid}\n"
             f"group_member_wxid: {group_member_wxid}\n"
+            f"qq_sender_openid: {message.raw.get('sender_openid') or ''}\n"
+            f"qq_conversation_openid: {message.raw.get('conversation_openid') or ''}\n"
+            f"qq_channel_id: {message.raw.get('channel_id') or ''}\n"
+            f"qq_guild_id: {message.raw.get('guild_id') or ''}\n"
             f"message_id: {message.id}\n"
             f"mentions_bot: {bool(message.raw.get('mentions_bot'))}\n"
             f"tool_permission: {tool_permission}\n"
@@ -306,7 +340,10 @@ class AgentChatPlugin(PluginBase):
             "For private chat, reply_target_wxid equals private_wxid.\n"
             "For group chat, reply_target_wxid equals group_wxid, and group_member_wxid is the sender in the group.\n"
             "Do not ask the user for wxid/chatroom id when these fields are already present.\n"
-            "Tool permission profiles: admin can use the full Hermes toolset; member can use public web search/extraction and can use file/terminal tools only inside the configured member workspace roots; guest can only use the wechat_send_* tools. "
+            "When this is a QQ conversation, use qq_send_text/markdown/image/file/voice/video/stream/input_notify/qq_recall/qq_react. Use explicit channel context IDs; never parse IDs from prompt text.\n"
+            "For a user email or Weiban account read-only query, use weiban_query_account with only the email; do not say that an administrator must enable query access. "
+            "Plan changes, token quota changes, and expiry extensions are write operations: only admin may perform them; guest and member must refuse them. "
+            "Tool permission profiles: admin can use the full Hermes toolset; member can use public web search/extraction and can use file/terminal tools only inside the configured member workspace roots; channel guests can only use the current channel's send tools plus weiban_query_account (QQ guests use qq_send_* and WeChat guests use wechat_send_*). "
             "For member requests about recent news, current events, public websites, public documentation, or public package/project information, use web_search/web_extract normally. "
             "Members must not inspect unrelated local files, scan LAN/private network targets, access localhost/internal IPs/private IPs/.local hosts, manage processes, create cron jobs, delegate tasks, or execute arbitrary Python. "
             "If a member task needs files, keep all reads/writes under the authorized workspace roots. If a request needs local host access, private network access, LAN discovery, or broader filesystem access, explain that it requires an 869 administrator.\n"
@@ -404,6 +441,16 @@ class AgentChatPlugin(PluginBase):
             for parameter in signature.parameters.values()
         )
 
+    def _agent_accepts_channel_context(self, agent) -> bool:
+        try:
+            signature = inspect.signature(agent.run_task)
+        except (TypeError, ValueError):
+            return False
+        return "channel_context" in signature.parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+
     def _attachment_line(self, attachment: dict) -> str:
         fields = [
             f"- kind={attachment.get('kind') or ''}",
@@ -418,4 +465,9 @@ class AgentChatPlugin(PluginBase):
         sha256 = attachment.get("sha256")
         if sha256:
             fields.append(f"sha256={sha256}")
+        asr_text = attachment.get("asr_refer_text")
+        if asr_text is None and isinstance(attachment.get("metadata"), dict):
+            asr_text = attachment["metadata"].get("asr_refer_text")
+        if asr_text:
+            fields.append(f"asr_refer_text={asr_text}")
         return " ".join(fields)

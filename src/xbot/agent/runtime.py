@@ -128,6 +128,7 @@ class AgentRuntime:
         input_text: str,
         source: str = "api",
         attachments: list[dict] | None = None,
+        channel_context: dict | None = None,
     ) -> AgentResult:
         task_id = str(uuid4())
         logger.info("Agent 任务开始: task_id={} source={} input_chars={}", task_id, source, len(input_text))
@@ -135,7 +136,9 @@ class AgentRuntime:
             async with self.repository_provider() as repo:
                 await repo.create_task(task_id, source, input_text)
         await self._add_event(task_id, "task.received", input_text)
-        output = await self._run_llm(task_id, input_text, source=source, attachments=attachments)
+        output = await self._run_llm(
+            task_id, input_text, source=source, attachments=attachments, channel_context=channel_context
+        )
         suppress_channel_reply = task_id in self._suppress_channel_reply_task_ids
         self._suppress_channel_reply_task_ids.discard(task_id)
         result = AgentResult(
@@ -371,6 +374,7 @@ class AgentRuntime:
         *,
         source: str = "api",
         attachments: list[dict] | None = None,
+        channel_context: dict | None = None,
     ) -> str:
         return await run_hermes_agent(
             config=self.config,
@@ -382,6 +386,7 @@ class AgentRuntime:
             llm_status=self.llm_status,
             send_reply=self._reply_sender,
             mark_proactive_send=lambda: self._suppress_channel_reply_task_ids.add(task_id),
+            channel_context=channel_context,
         )
 
     async def _run_agent_for_task(self, input_text: str, source: str = "background") -> AgentResult:
@@ -439,6 +444,9 @@ class AgentRuntime:
         names = [
             "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
             "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
+            "weiban_query_account",
+            "qq_send_text", "qq_send_markdown", "qq_send_image", "qq_send_file", "qq_send_voice",
+            "qq_send_video", "qq_send_stream", "qq_input_notify", "qq_recall", "qq_react",
             "web_search", "web_extract", "terminal", "process",
             "read_file", "write_file", "patch", "search_files",
             "vision_analyze", "image_generate",

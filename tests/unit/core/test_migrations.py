@@ -1,4 +1,6 @@
+import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 from alembic.config import Config
 
@@ -24,3 +26,16 @@ def test_migrations_mention_all_metadata_tables():
     )
     for table_name in Base.metadata.tables:
         assert f'"{table_name}"' in revision_text
+
+
+def test_0009_skips_varchar_resize_on_sqlite(monkeypatch):
+    migration = importlib.import_module("migrations.versions.0009_long_external_message_ids")
+    bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    calls = []
+    monkeypatch.setattr(migration.op, "get_bind", lambda: bind)
+    monkeypatch.setattr(migration.op, "alter_column", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    migration.upgrade()
+    migration.downgrade()
+
+    assert calls == []

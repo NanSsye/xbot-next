@@ -35,7 +35,7 @@ if [ "${XBOT_DOCKER_INSTALL_DEPS_ON_START:-true}" = "true" ]; then
 fi
 
 if [ "${XBOT_DOCKER_BUILD_UI_ON_START:-true}" = "true" ]; then
-  ui_hash="$(hash_files 'ui/package.json' 'ui/package-lock.json' 'ui/tsconfig.json' 'ui/vite.config.ts' 'ui/index.html' 'ui/src/**')"
+  ui_hash="$(hash_files 'ui/package.json' 'ui/package-lock.json' 'ui/tsconfig.json' 'ui/vite.config.ts' 'ui/index.html' 'ui/src/**/*')"
   ui_marker="/app/data/.docker/ui.sha256"
   if [ ! -f "$ui_marker" ] || [ "$(cat "$ui_marker")" != "$ui_hash" ] || [ ! -f /app/ui/dist/index.html ]; then
     echo "[xbot-docker] 构建 Web 控制台..."

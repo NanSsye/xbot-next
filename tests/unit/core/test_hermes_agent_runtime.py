@@ -5,6 +5,7 @@ import json
 import anyio
 import pytest
 
+import xbot.agent.hermes_runtime as hermes_runtime_module
 import xbot.agent.runtime as runtime_module
 from xbot.agent.hermes_runtime import (
     _assert_safe_hermes_sqlite,
@@ -90,13 +91,18 @@ def test_ensure_hermes_home_files_creates_default_config(tmp_path):
 
 
 def test_permission_scoped_channel_source_selects_hermes_toolsets():
-    assert _toolsets_for_source("channel:wechat:wechat869:group@chatroom:guest") == ["wechat"]
+    assert _toolsets_for_source("channel:wechat:wechat869:group@chatroom:guest") == [
+        "wechat",
+        "weiban-readonly",
+    ]
     assert "file" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "terminal" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "wechat" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
+    assert "weiban-readonly" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert _toolsets_for_source("channel:wechat:wechat869:group@chatroom") == [
         "hermes-api-server",
         "wechat",
+        "weiban-readonly",
     ]
 
 
@@ -114,7 +120,7 @@ def test_permission_scoped_channel_source_shares_hermes_session_with_allowed_sou
     assert _session_id_for_source(guest) == _session_id_for_source(allowed)
     assert _permission_profile_for_source(member) == "member"
     assert _permission_profile_for_source(guest) == "guest"
-    assert _toolsets_for_source(allowed) == ["hermes-api-server", "wechat"]
+    assert _toolsets_for_source(allowed) == ["hermes-api-server", "wechat", "weiban-readonly"]
 
 
 def test_wechat_tools_are_registered_for_admin_and_member():
@@ -143,6 +149,148 @@ def test_wechat_tools_are_registered_for_admin_and_member():
     }
     assert expected <= admin_names
     assert expected <= member_names
+
+
+def test_weiban_readonly_tool_is_registered_for_every_permission_profile():
+    _ensure_hermes_import_path()
+    from model_tools import get_tool_definitions
+
+    sources = (
+        "channel:wechat:wechat869:group@chatroom:guest",
+        "channel:wechat:wechat869:group@chatroom:member",
+        "channel:wechat:wechat869:group@chatroom",
+    )
+    for source in sources:
+        tool_names = {
+            item["function"]["name"]
+            for item in get_tool_definitions(
+                _toolsets_for_source(source),
+                quiet_mode=True,
+                skip_tool_search_assembly=True,
+            )
+        }
+        assert "weiban_query_account" in tool_names
+
+    guest_names = {
+        item["function"]["name"]
+        for item in get_tool_definitions(
+            _toolsets_for_source(sources[0]),
+            quiet_mode=True,
+            skip_tool_search_assembly=True,
+        )
+    }
+    assert guest_names == {
+        "wechat_send_text",
+        "wechat_send_image",
+        "wechat_send_file",
+        "wechat_send_voice",
+        "wechat_send_video",
+        "wechat_send_link",
+        "wechat_send_music_card",
+        "weiban_query_account",
+    }
+
+
+@pytest.mark.anyio
+async def test_guest_runtime_uses_direct_policy_filtered_tools_without_deferred_search(tmp_path, monkeypatch):
+    _ensure_hermes_import_path()
+    import hermes_cli.env_loader as env_loader
+    import hermes_state
+    import model_tools
+    import run_agent
+
+    agents = []
+    tool_definition_calls = []
+
+    class FakeSessionDB:
+        def get_session(self, session_id):
+            return None
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.session_id = kwargs["session_id"]
+            self._session_db = kwargs["session_db"]
+            self.enabled_toolsets = kwargs["enabled_toolsets"]
+            self.tools = [
+                {"function": {"name": "tool_search"}},
+                {"function": {"name": "tool_describe"}},
+                {"function": {"name": "tool_call"}},
+            ]
+            self.valid_tool_names = {"tool_search", "tool_describe", "tool_call"}
+            agents.append(self)
+
+        def run_conversation(self, *args, **kwargs):
+            return "done"
+
+    def fake_get_tool_definitions(enabled_toolsets, *, quiet_mode, skip_tool_search_assembly=False):
+        tool_definition_calls.append((enabled_toolsets, quiet_mode, skip_tool_search_assembly))
+        return [
+            {"function": {"name": "qq_send_text"}},
+            {"function": {"name": "qq_send_markdown"}},
+            {"function": {"name": "qq_recall"}},
+            {"function": {"name": "qq_react"}},
+            {"function": {"name": "weiban_query_account"}},
+            {"function": {"name": "tool_search"}},
+            {"function": {"name": "tool_describe"}},
+            {"function": {"name": "tool_call"}},
+        ]
+
+    async def add_event(*args, **kwargs):
+        return None
+
+    config = AgentConfig()
+    config.llm.enabled = True
+    config.llm.api_key = "test-key"
+    config.llm.base_url = "https://example.invalid/v1"
+    config.llm.model = "test-model"
+    config.member_policy.enabled = True
+    monkeypatch.setattr(hermes_runtime_module, "hermes_home_dir", lambda: tmp_path)
+    monkeypatch.setattr(hermes_runtime_module, "_assert_safe_hermes_sqlite", lambda: None)
+    monkeypatch.setattr(hermes_runtime_module, "_configure_hermes_auxiliary_client", lambda *args: None)
+    monkeypatch.setattr(hermes_runtime_module, "_install_hermes_tool_policy_wrapper", lambda: None)
+    monkeypatch.setattr(env_loader, "load_hermes_dotenv", lambda **kwargs: None)
+    monkeypatch.setattr(hermes_state, "SessionDB", FakeSessionDB)
+    monkeypatch.setattr(run_agent, "AIAgent", FakeAgent)
+    monkeypatch.setattr(model_tools, "get_tool_definitions", fake_get_tool_definitions)
+
+    for source in (
+        "channel:qq:qq:c2c:test:guest",
+        "channel:qq:qq:c2c:test:member",
+        "channel:qq:qq:c2c:test",
+    ):
+        result = await hermes_runtime_module.run_hermes_agent(
+            config=config,
+            task_id=f"task-{source.rsplit(':', 1)[-1]}",
+            input_text="查询账号",
+            source=source,
+            attachments=None,
+            add_event=add_event,
+            llm_status=dict,
+        )
+        assert result == "done"
+
+    guest_agent, member_agent, admin_agent = agents
+    assert {item["function"]["name"] for item in guest_agent.tools} == {
+        "qq_send_text",
+        "qq_send_markdown",
+        "weiban_query_account",
+    }
+    assert guest_agent.valid_tool_names == {
+        "qq_send_text",
+        "qq_send_markdown",
+        "weiban_query_account",
+    }
+    assert {item["function"]["name"] for item in member_agent.tools} == {
+        "tool_search",
+        "tool_describe",
+        "tool_call",
+    }
+    assert {item["function"]["name"] for item in admin_agent.tools} == {
+        "tool_search",
+        "tool_describe",
+        "tool_call",
+    }
+    assert tool_definition_calls == [(["qq", "weiban-readonly"], True, True)]
 
 
 def test_hermes_sqlite_gate_rejects_vulnerable_runtime(monkeypatch):
@@ -270,6 +418,35 @@ async def test_wechat_tool_routes_current_and_explicit_targets():
     assert [item["conversation_id"] for item in calls] == ["current@chatroom", "wxid_target"]
 
 
+@pytest.mark.anyio
+async def test_qq_tool_preserves_adapter_message_ids_from_sender_result():
+    _ensure_hermes_import_path()
+    from xbot.agent.tools.hermes_qq import reset_send_context, send_text, set_send_context
+
+    calls = []
+
+    async def sender(**kwargs):
+        calls.append(kwargs)
+        return {"message_id": "reply-42", "message_ids": ["reply-41", "reply-42"]}
+
+    token = set_send_context({
+        "loop": __import__("asyncio").get_running_loop(),
+        "sender": sender,
+        "adapter": "qq",
+        "conversation_id": "qq:c2c:user-1",
+        "message_id": "incoming-1",
+        "scope": "private",
+    })
+    try:
+        result = json.loads(await anyio.to_thread.run_sync(send_text, {"text": "收到"}))
+    finally:
+        reset_send_context(token)
+
+    assert result["message_id"] == "reply-42"
+    assert result["message_ids"] == ["reply-41", "reply-42"]
+    assert calls[-1]["conversation_id"] == "qq:c2c:user-1"
+
+
 def test_wechat_tool_without_context_returns_error():
     _ensure_hermes_import_path()
     from xbot.agent.tools.hermes_wechat import send_text
@@ -344,7 +521,36 @@ def test_guest_policy_allows_only_wechat_send_tools():
     assert _tool_policy_denial("wechat_send_video", {"path": "a.mp4"}, policy) is None
     assert _tool_policy_denial("wechat_send_link", {"url": "https://example.com"}, policy) is None
     assert _tool_policy_denial("wechat_send_music_card", {"music_url": "https://example.com/a.mp3"}, policy) is None
+    assert _tool_policy_denial("weiban_query_account", {"email": "user@example.com"}, policy) is None
     assert _tool_policy_denial("read_file", {"path": "a.txt"}, policy)
+    assert _tool_policy_denial("terminal", {"command": "dir"}, policy)
+    assert _tool_policy_denial("weiban_update_account", {"email": "user@example.com"}, policy)
+
+
+def test_qq_guest_policy_allows_only_current_session_send_tools():
+    policy = {"profile": "guest", "channel": "qq"}
+    allowed = {
+        "qq_send_text",
+        "qq_send_markdown",
+        "qq_send_image",
+        "qq_send_file",
+        "qq_send_voice",
+        "qq_send_video",
+        "qq_send_stream",
+        "qq_input_notify",
+    }
+    for tool_name in allowed:
+        assert _tool_policy_denial(tool_name, {}, policy) is None
+
+    for tool_name in {"qq_recall", "qq_react", "wechat_send_text", "read_file"}:
+        assert _tool_policy_denial(tool_name, {}, policy) == "当前 QQ guest 用户只能调用当前会话的 QQ 消息工具或微伴账号只读查询。"
+    assert _tool_policy_denial("weiban_query_account", {"email": "user@example.com"}, policy) is None
+
+    # Mutation tools remain available to explicitly elevated QQ profiles.
+    assert _tool_policy_denial("qq_recall", {}, {"profile": "member", "channel": "qq"}) is None
+    assert _tool_policy_denial("qq_react", {}, {"profile": "member", "channel": "qq"}) is None
+    assert _tool_policy_denial("qq_recall", {}, {"profile": "admin", "channel": "qq"}) is None
+    assert _tool_policy_denial("qq_react", {}, {"profile": "admin", "channel": "qq"}) is None
 
 
 def test_member_tool_policy_blocks_private_network_targets(tmp_path, monkeypatch):

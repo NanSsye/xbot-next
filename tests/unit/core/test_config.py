@@ -29,6 +29,9 @@ def test_load_default_config(monkeypatch):
     assert settings.agent.schedule.enabled is True
     assert settings.agent.schedule.tick_seconds == 30.0
     assert settings.adapters.wechat869.enabled is False
+    assert settings.adapters.qq.enabled is False
+    assert settings.adapters.qq.intents == 1 << 25
+    assert settings.adapters.qq.default_profile == "guest"
 
 
 def test_env_overrides_database_and_redis(monkeypatch):
@@ -89,6 +92,16 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_WECHAT_ILINK_MEDIA_DIR", "data/ilink-media")
     monkeypatch.setenv("XBOT_WECHAT_ILINK_MAX_IMAGE_BYTES", "456")
     monkeypatch.setenv("XBOT_WECHAT_ILINK_MAX_FILE_BYTES", "789")
+    monkeypatch.setenv("XBOT_QQ_ENABLED", "true")
+    monkeypatch.setenv("XBOT_QQ_APP_ID", "qq-app")
+    monkeypatch.setenv("XBOT_QQ_CLIENT_SECRET", "qq-secret")
+    monkeypatch.setenv("XBOT_QQ_INTENTS", "33554432")
+    monkeypatch.setenv("XBOT_QQ_GATEWAY_URL", "wss://qq.local/websocket")
+    monkeypatch.setenv("XBOT_QQ_RECONNECT_SECONDS", "2.5")
+    monkeypatch.setenv("XBOT_QQ_MAX_REPLY_CHARS", "1200")
+    monkeypatch.setenv("XBOT_QQ_ADMIN_OPENIDS", "admin-1,admin-2")
+    monkeypatch.setenv("XBOT_QQ_MEMBER_OPENIDS", "member-1")
+    monkeypatch.setenv("XBOT_QQ_DEFAULT_PROFILE", "member")
     settings = load_settings("configs/xbot.toml")
     assert settings.server.host == "0.0.0.0"
     assert settings.server.port == 18080
@@ -146,6 +159,16 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.adapters.wechat_ilink.media_dir == "data/ilink-media"
     assert settings.adapters.wechat_ilink.max_image_bytes == 456
     assert settings.adapters.wechat_ilink.max_file_bytes == 789
+    assert settings.adapters.qq.enabled is True
+    assert settings.adapters.qq.app_id == "qq-app"
+    assert settings.adapters.qq.client_secret == "qq-secret"
+    assert settings.adapters.qq.intents == 1 << 25
+    assert settings.adapters.qq.gateway_url == "wss://qq.local/websocket"
+    assert settings.adapters.qq.reconnect_seconds == 2.5
+    assert settings.adapters.qq.max_reply_chars == 1200
+    assert settings.adapters.qq.admin_openids == ["admin-1", "admin-2"]
+    assert settings.adapters.qq.member_openids == ["member-1"]
+    assert settings.adapters.qq.default_profile == "member"
 
 
 def test_env_overrides_local_storage_and_memory_queue(monkeypatch):

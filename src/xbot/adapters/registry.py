@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from xbot.adapters.base import BaseAdapter
+from xbot.adapters.qq import QQAdapter
 from xbot.adapters.web.adapter import WebAdapter
 from xbot.adapters.wechat869 import Wechat869Adapter
 from xbot.adapters.wechat_ilink import WechatIlinkAdapter
@@ -33,12 +34,21 @@ class AdapterRegistry:
                     repository_provider=repository_provider,
                 )
             )
+        if config.qq.enabled:
+            self.register(
+                QQAdapter(
+                    config.qq,
+                    queue=queue,
+                    repository_provider=repository_provider,
+                )
+            )
 
     def _configured_adapters(self) -> dict[str, tuple[str, bool]]:
         return {
             "web": ("web", self.config.web.enabled),
             "wechat869": ("wechat", self.config.wechat869.enabled),
             "wechat_ilink": ("wechat", self.config.wechat_ilink.enabled),
+            "qq": ("qq", self.config.qq.enabled),
         }
 
     def register(self, adapter: BaseAdapter) -> None:
@@ -119,6 +129,12 @@ class AdapterRegistry:
                 queue=self.queue,
                 repository_provider=self.repository_provider,
             )
+        if name == "qq":
+            return QQAdapter(
+                self.config.qq,
+                queue=self.queue,
+                repository_provider=self.repository_provider,
+            )
         return None
 
     async def start_enabled(self) -> None:
@@ -145,10 +161,11 @@ class AdapterRegistry:
         for adapter in self._adapters.values():
             await adapter.stop()
 
-    async def send(self, reply: Reply) -> None:
+    async def send(self, reply: Reply) -> object | None:
         adapter = self._adapters.get(reply.adapter)
         if adapter:
-            await adapter.send(reply)
+            return await adapter.send(reply)
+        return None
 
     def _effective_enabled(self, name: str) -> bool:
         if name in self._enabled_overrides:

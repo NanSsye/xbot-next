@@ -15,6 +15,7 @@ class PluginContext:
     config: dict[str, Any]
     plugins: Any | None = None
     agent: Any | None = None
-    send_reply: Callable[[Reply], Awaitable[None]] | None = None
+    send_reply: Callable[[Reply], Awaitable[object | None]] | None = None
     conversations: Any | None = None
     settings: Any | None = None
+    adapters: Any | None = None

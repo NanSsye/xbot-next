@@ -18,10 +18,9 @@ class BaseAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def send(self, reply: Reply) -> None:
+    async def send(self, reply: Reply) -> object | None:
         raise NotImplementedError
 
     @abstractmethod
     async def normalize(self, raw: dict) -> Message:
         raise NotImplementedError
-

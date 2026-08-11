@@ -30,13 +30,15 @@ class PluginManager:
         self._send_reply = None
         self._conversations = None
         self._settings = None
+        self._adapters = None
         self._config_cache: dict[str, dict] = {}
 
-    def attach_runtime(self, *, agent=None, send_reply=None, conversations=None, settings=None) -> None:
+    def attach_runtime(self, *, agent=None, send_reply=None, conversations=None, settings=None, adapters=None) -> None:
         self._agent = agent
         self._send_reply = send_reply
         self._conversations = conversations
         self._settings = settings
+        self._adapters = adapters
 
     async def load_all(self) -> None:
         root = Path(self.config.directory)
@@ -298,6 +300,7 @@ class PluginManager:
             send_reply=self._send_reply,
             conversations=self._conversations,
             settings=self._settings,
+            adapters=self._adapters,
         )
 
     def _cached_plugin_config(self, plugin_dir: Path, name: str) -> dict:

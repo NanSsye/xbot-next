@@ -118,6 +118,7 @@ def build_context(settings: Settings) -> AppContext:
         send_reply=engine.send_reply,
         conversations=conversations,
         settings=settings,
+        adapters=adapters,
     )
     consumer = MessageConsumer(
         dedupe=DedupeService(),

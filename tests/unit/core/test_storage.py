@@ -1,6 +1,6 @@
 from xbot.core.config import load_settings
 from xbot.messaging.models import Message
-from xbot.storage.models import Base
+from xbot.storage.models import EXTERNAL_MESSAGE_ID_LENGTH, Base
 from xbot.storage.session import Storage
 
 
@@ -75,6 +75,22 @@ def test_reply_record_table_exists():
 def test_conversation_message_record_can_restore_message_fields():
     table = Base.metadata.tables["conversation_messages"]
     assert {"platform", "adapter", "raw_json"}.issubset(table.columns.keys())
+
+
+def test_external_message_id_columns_accept_qq_platform_ids():
+    columns = (
+        ("messages", "id"),
+        ("replies", "quote_message_id"),
+        ("message_envelopes", "message_id"),
+        ("conversation_messages", "message_id"),
+        ("conversation_summaries", "from_message_id"),
+        ("conversation_summaries", "to_message_id"),
+        ("message_attachments", "message_id"),
+    )
+
+    for table_name, column_name in columns:
+        column = Base.metadata.tables[table_name].columns[column_name]
+        assert column.type.length == EXTERNAL_MESSAGE_ID_LENGTH
 
 
 def test_agent_tables_exist():

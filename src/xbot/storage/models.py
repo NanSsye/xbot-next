@@ -10,6 +10,9 @@ class Base(DeclarativeBase):
     pass
 
 
+EXTERNAL_MESSAGE_ID_LENGTH = 512
+
+
 class PluginRecord(Base):
     __tablename__ = "plugins"
 
@@ -123,7 +126,7 @@ class AgentArtifactRecord(Base):
 class MessageRecord(Base):
     __tablename__ = "messages"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(String(EXTERNAL_MESSAGE_ID_LENGTH), primary_key=True)
     platform: Mapped[str] = mapped_column(String(64), index=True)
     adapter: Mapped[str] = mapped_column(String(64), index=True)
     conversation_id: Mapped[str] = mapped_column(String(256), index=True)
@@ -144,7 +147,9 @@ class ReplyRecord(Base):
     conversation_id: Mapped[str] = mapped_column(String(256), index=True)
     type: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
-    quote_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    quote_message_id: Mapped[str | None] = mapped_column(
+        String(EXTERNAL_MESSAGE_ID_LENGTH), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -154,7 +159,7 @@ class MessageEnvelopeRecord(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     trace_id: Mapped[str] = mapped_column(String(64), index=True)
     dedupe_key: Mapped[str] = mapped_column(String(512), unique=True, index=True)
-    message_id: Mapped[str] = mapped_column(String(64), index=True)
+    message_id: Mapped[str] = mapped_column(String(EXTERNAL_MESSAGE_ID_LENGTH), index=True)
     delivery_attempts: Mapped[int] = mapped_column(Integer, default=0)
     available_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     headers_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -205,7 +210,7 @@ class ConversationMessageRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(String(512), index=True)
-    message_id: Mapped[str] = mapped_column(String(64), index=True)
+    message_id: Mapped[str] = mapped_column(String(EXTERNAL_MESSAGE_ID_LENGTH), index=True)
     platform: Mapped[str] = mapped_column(String(64), index=True)
     adapter: Mapped[str] = mapped_column(String(64), index=True)
     sender_id: Mapped[str] = mapped_column(String(256), index=True)
@@ -232,8 +237,12 @@ class ConversationSummaryRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(String(512), index=True)
     summary: Mapped[str] = mapped_column(Text)
-    from_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    to_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    from_message_id: Mapped[str | None] = mapped_column(
+        String(EXTERNAL_MESSAGE_ID_LENGTH), nullable=True
+    )
+    to_message_id: Mapped[str | None] = mapped_column(
+        String(EXTERNAL_MESSAGE_ID_LENGTH), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -258,7 +267,7 @@ class MessageAttachmentRecord(Base):
     __table_args__ = (Index("ix_message_attachments_conversation_sender_kind", "conversation_id", "sender_id", "kind"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    message_id: Mapped[str] = mapped_column(String(64), index=True)
+    message_id: Mapped[str] = mapped_column(String(EXTERNAL_MESSAGE_ID_LENGTH), index=True)
     conversation_id: Mapped[str] = mapped_column(String(512), index=True)
     sender_id: Mapped[str] = mapped_column(String(256), index=True)
     kind: Mapped[str] = mapped_column(String(32), index=True)

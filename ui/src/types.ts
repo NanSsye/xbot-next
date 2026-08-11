@@ -243,6 +243,55 @@ export type WechatMessage = Message & {
   sender_avatar_url?: string | null;
 };
 
+export type ConfigFieldType = "boolean" | "integer" | "number" | "list" | "json" | "string";
+
+export type ConfigField = {
+  path: string;
+  key: string;
+  label: string;
+  description: string;
+  type: ConfigFieldType;
+  value: unknown;
+  configured: boolean;
+  masked_value: string;
+  secret: boolean;
+  source: "web" | "env_or_file";
+  overridden: boolean;
+  env_name: string;
+  options: string[];
+  restart_required: boolean;
+  pending_restart: boolean;
+  adapter_toggle: boolean;
+};
+
+export type ConfigSection = {
+  key: string;
+  title: string;
+  description: string;
+  scope: "system" | "channels";
+  fields: ConfigField[];
+};
+
+export type ConfigSnapshot = {
+  revision: string;
+  runtime_file: string;
+  sections: ConfigSection[];
+  pending_restart: string[];
+  updated_at?: string | null;
+};
+
+export type ConfigChange = {
+  path: string;
+  value?: unknown;
+  reset?: boolean;
+};
+
+export type ConfigApplyResult = {
+  applied: string[];
+  restart_required: string[];
+  snapshot: ConfigSnapshot;
+};
+
 export type WechatConversation = Conversation & {
   message_count: number;
   avatar_members?: string[];

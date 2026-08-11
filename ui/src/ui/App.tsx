@@ -7,7 +7,6 @@ import {
   Circle,
   Clock3,
   FileText,
-  KeyRound,
   LogIn,
   ShieldAlert,
   Monitor,
@@ -31,7 +30,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, apiBase, clearApiToken, getApiToken, setApiToken, wsUrl } from "../api";
+import { api, clearApiToken, getApiToken, setApiToken, wsUrl } from "../api";
 import type {
   AdapterInfo,
   AdapterStatus,
@@ -56,6 +55,7 @@ import type {
   WechatMessage,
   WechatUserDetail,
 } from "../types";
+import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
 
 type View = "agentChat" | "chat" | "wechat" | "profiles" | "groupOps" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
 type DeliveryMode = "console" | "channel";
@@ -234,6 +234,15 @@ export function App() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [selectedConversationId, selectedTaskId]);
+
+  const handleConfigApplied = useCallback(async ({ apiToken: nextApiToken }: ConfigAppliedEvent) => {
+    if (nextApiToken !== undefined) {
+      setApiToken(nextApiToken);
+      setApiTokenState(nextApiToken.trim());
+    }
+    setWsRevision((value) => value + 1);
+    await loadAll();
+  }, [loadAll]);
 
   useEffect(() => {
     void loadAll();
@@ -1021,6 +1030,7 @@ export function App() {
             pollIlinkLogin={pollIlinkLogin}
             startWechat869Login={startWechat869Login}
             pollWechat869Login={pollWechat869Login}
+            onConfigApplied={handleConfigApplied}
           />
         )}
         {view === "extensions" && (
@@ -1061,22 +1071,7 @@ export function App() {
         )}
         {view === "logs" && <ActivityPanel events={events} liveEvents={liveEvents} />}
         {view === "settings" && (
-          <SettingsView
-            token={apiToken}
-            setToken={setApiTokenState}
-            themeMode={themeMode}
-            setThemeMode={setThemeMode}
-            saveToken={() => {
-              setApiToken(apiToken);
-              setWsRevision((value) => value + 1);
-              void loadAll();
-            }}
-            clearToken={() => {
-              clearApiToken();
-              setApiTokenState("");
-              setWsRevision((value) => value + 1);
-            }}
-          />
+          <SettingsView onConfigApplied={handleConfigApplied} />
         )}
         </PageErrorBoundary>
       </main>
@@ -2691,6 +2686,7 @@ function Channels({
   pollIlinkLogin,
   startWechat869Login,
   pollWechat869Login,
+  onConfigApplied,
 }: {
   adapters: AdapterInfo[];
   adapterStatuses: Record<string, AdapterStatus>;
@@ -2704,14 +2700,31 @@ function Channels({
   pollIlinkLogin: () => Promise<void>;
   startWechat869Login: () => Promise<void>;
   pollWechat869Login: () => Promise<void>;
+  onConfigApplied: (event: ConfigAppliedEvent) => void | Promise<void>;
 }) {
+  const [mode, setMode] = useState<"status" | "config">("status");
   return (
-    <section className="channels-grid">
+    <section className="channels-page">
+      <div className="channels-page__head">
+        <div>
+          <h2>通道管理</h2>
+          <p>先配置凭据与权限，再在运行状态中启停通道并检查连接。</p>
+        </div>
+        <Segmented
+          value={mode}
+          onChange={setMode}
+          options={[
+            ["status", "运行状态"],
+            ["config", "参数配置"],
+          ]}
+        />
+      </div>
+      {mode === "status" ? (
       <div className="panel channel-panel">
         <div className="panel-title panel-title--with-action">
           <div>
             <span>通道</span>
-            <small>页面开关会写入数据库，重启后继续生效；登录密钥仍由后端安全保存。</small>
+            <small>启停状态写入数据库并立即执行。密钥与通道参数请在“参数配置”中管理。</small>
           </div>
         </div>
         <div className="channel-card-grid">
@@ -2803,6 +2816,9 @@ function Channels({
         </div>
         {channelMessage ? <div className="channel-message">{channelMessage}</div> : null}
       </div>
+      ) : (
+        <ConfigCenter scope="channels" onApplied={onConfigApplied} />
+      )}
     </section>
   );
 }
@@ -2855,6 +2871,8 @@ function KeyValue({ label, value }: { label: string; value: string }) {
 function channelDisplayName(name: string): string {
   if (name === "wechat_ilink") return "iLink 通道";
   if (name === "wechat869") return "869 通道";
+  if (name === "qq") return "QQ 官方机器人";
+  if (name === "web") return "Web 控制台";
   return name;
 }
 
@@ -2888,6 +2906,20 @@ function channelStatusEntries(name: string, status: AdapterStatus): Array<[strin
       ["设备 ID", status.device_id],
       ["媒体", status.media_enabled],
       ["仅文本", status.text_only],
+    ];
+  }
+  if (name === "qq") {
+    return [
+      ["连接状态", status.connected],
+      ["凭据", status.configured],
+      ["Gateway 任务", status.gateway_running],
+      ["会话可恢复", status.session_ready],
+      ["机器人 ID", status.bot_id],
+      ["机器人昵称", status.bot_name],
+      ["最近事件", status.last_event_type],
+      ["最后序列", status.last_sequence],
+      ["Intents", status.intents],
+      ["最近错误", status.last_error],
     ];
   }
   return Object.entries(status)
@@ -3355,82 +3387,8 @@ function Schedules({
   );
 }
 
-function SettingsView({
-  token,
-  setToken,
-  themeMode,
-  setThemeMode,
-  saveToken,
-  clearToken,
-}: {
-  token: string;
-  setToken: (value: string) => void;
-  themeMode: ThemeMode;
-  setThemeMode: (value: ThemeMode) => void;
-  saveToken: () => void;
-  clearToken: () => void;
-}) {
-  return (
-    <section className="settings-grid">
-      <div className="panel settings-panel">
-        <div className="panel-title">控制台访问</div>
-        <div className="settings-form">
-          <label>
-            <span>API Base</span>
-            <input value={apiBase()} readOnly />
-          </label>
-          <label>
-            <span>WebSocket</span>
-            <input value={wsUrl()} readOnly />
-          </label>
-          <label>
-            <span>API Token</span>
-            <input
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              type="password"
-              placeholder="XBOT_API_TOKEN"
-              autoComplete="current-password"
-            />
-          </label>
-          <div className="settings-actions">
-            <button className="primary-button" disabled={!token.trim()} onClick={saveToken}>
-              <KeyRound size={15} />
-              保存 Token
-            </button>
-            <button className="ghost-button" onClick={clearToken}>
-              清除
-            </button>
-          </div>
-        </div>
-      </div>
-      <div className="panel settings-panel">
-        <div className="panel-title">界面偏好</div>
-        <div className="settings-form">
-          <label>
-            <span>主题</span>
-            <Segmented
-              value={themeMode}
-              onChange={setThemeMode}
-              options={[
-                ["system", "跟随系统"],
-                ["light", "日间"],
-                ["dark", "夜间"],
-              ]}
-            />
-          </label>
-        </div>
-      </div>
-      <div className="panel settings-panel">
-        <div className="panel-title">运行说明</div>
-        <div className="settings-copy">
-          <p>通道、插件和 Skill 的开关会写入后端数据库，重启后继续生效。</p>
-          <p>模型密钥、通道 token、数据库连接等敏感配置仍放在 `.env`，避免从浏览器直接写入明文密钥。</p>
-          <p>生产环境建议启用 `XBOT_API_AUTH_ENABLED=true`，并通过 HTTPS 访问控制台。</p>
-        </div>
-      </div>
-    </section>
-  );
+function SettingsView({ onConfigApplied }: { onConfigApplied: (event: ConfigAppliedEvent) => void | Promise<void> }) {
+  return <ConfigCenter scope="system" onApplied={onConfigApplied} />;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

@@ -26,6 +26,8 @@ _HERMES_TOOL_POLICY: contextvars.ContextVar[dict[str, Any] | None] = contextvars
 
 _MEMBER_TOOLSETS = [
     "wechat",
+    "qq",
+    "weiban-readonly",
     "web",
     "file",
     "terminal",
@@ -188,9 +190,13 @@ def _ensure_hermes_import_path() -> Path:
     vendor_text = str(vendor_dir)
     if vendor_text not in sys.path:
         sys.path.insert(0, vendor_text)
+    from xbot.agent.tools.hermes_qq import register_xbot_qq_tools
     from xbot.agent.tools.hermes_wechat import register_xbot_wechat_tools
+    from xbot.agent.tools.hermes_weiban import register_xbot_weiban_tools
 
     register_xbot_wechat_tools()
+    register_xbot_qq_tools()
+    register_xbot_weiban_tools()
     return vendor_dir
 
 
@@ -353,13 +359,15 @@ def _configure_hermes_auxiliary_client(auxiliary_client: Any, config: AgentConfi
 
 def _toolsets_for_source(source: str) -> list[str]:
     profile = _permission_profile_for_source(source)
+    is_qq = ":qq:" in (source or "")
     if profile == "guest":
-        return ["wechat"]
+        return ["qq" if is_qq else "wechat", "weiban-readonly"]
     if profile == "member":
-        return list(_MEMBER_TOOLSETS)
+        channel_toolset = "qq" if is_qq else "wechat"
+        return [channel_toolset, *[item for item in _MEMBER_TOOLSETS if item not in {"qq", "wechat"}]]
     if source.startswith(("api", "terminal")):
-        return ["hermes-api-server", "wechat"]
-    return ["hermes-api-server", "wechat"]
+        return ["hermes-api-server", "qq" if is_qq else "wechat", "weiban-readonly"]
+    return ["hermes-api-server", "qq" if is_qq else "wechat", "weiban-readonly"]
 
 
 def _permission_profile_for_source(source: str) -> str:
@@ -548,15 +556,30 @@ def _tool_policy_denial(function_name: str, function_args: dict[str, Any], polic
     if profile == "admin":
         return None
     if profile == "guest":
-        if function_name in {
+        channel = str(policy.get("channel") or "")
+        allowed = {
             "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
             "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
-        }:
+        } if channel != "qq" else {
+            "qq_send_text", "qq_send_markdown", "qq_send_image", "qq_send_file", "qq_send_voice",
+            "qq_send_video", "qq_send_stream", "qq_input_notify",
+        }
+        allowed.add("weiban_query_account")
+        if function_name in allowed:
             return None
-        return "当前 869 用户是 guest 权限，只能普通聊天，不能调用工具。"
+        return (
+            "当前 QQ guest 用户只能调用当前会话的 QQ 消息工具或微伴账号只读查询。"
+            if channel == "qq"
+            else "当前 869 用户只能普通聊天或查询自己的微伴账号信息。"
+        )
 
     name = str(function_name or "")
     args = function_args if isinstance(function_args, dict) else {}
+    channel = str(policy.get("channel") or "")
+    if channel == "qq" and name.startswith("wechat_send_"):
+        return "QQ 会话不能调用 WeChat 发送工具。"
+    if channel == "wechat" and name.startswith("qq_"):
+        return "WeChat 会话不能调用 QQ 工具。"
     if name in _MEMBER_DENIED_TOOLS or any(name.startswith(prefix) for prefix in _MEMBER_DENIED_PREFIXES):
         return f"普通成员不能调用 {name}。"
 
@@ -639,12 +662,33 @@ def _tool_policy_for_source(config: AgentConfig, source: str) -> dict[str, Any]:
         profile = "admin"
     return {
         "profile": profile,
+        "channel": "qq" if ":qq:" in (source or "") else "wechat" if ":wechat" in (source or "") else "",
         "workspace_roots": _member_workspace_roots(config),
         "cwd": Path.cwd(),
         "allow_terminal": bool(policy_config.allow_terminal),
         "allow_public_web": bool(policy_config.allow_public_web),
         "block_private_network": bool(policy_config.block_private_network),
     }
+
+
+def _guest_direct_tools(source: str, policy: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expose the small guest allowlist directly, without deferred tool search."""
+    from model_tools import get_tool_definitions
+
+    tool_definitions = get_tool_definitions(
+        _toolsets_for_source(source),
+        quiet_mode=True,
+        skip_tool_search_assembly=True,
+    )
+    return [
+        definition
+        for definition in tool_definitions
+        if _tool_policy_denial(
+            str((definition.get("function") or {}).get("name") or ""),
+            {},
+            policy,
+        ) is None
+    ]
 
 
 async def run_hermes_agent(
@@ -658,6 +702,7 @@ async def run_hermes_agent(
     llm_status: Callable[[], dict],
     send_reply: Callable[..., Any] | None = None,
     mark_proactive_send: Callable[[], None] | None = None,
+    channel_context: dict[str, Any] | None = None,
 ) -> str:
     if not config.llm.enabled or not config.llm.api_key:
         return "LLM provider is not available: missing model API configuration."
@@ -706,6 +751,8 @@ async def run_hermes_agent(
         from hermes_state import SessionDB
         from run_agent import AIAgent
 
+        from xbot.agent.tools.hermes_qq import reset_send_context as reset_qq_send_context
+        from xbot.agent.tools.hermes_qq import set_send_context as set_qq_send_context
         from xbot.agent.tools.hermes_wechat import reset_send_context, set_send_context
 
         _install_hermes_tool_policy_wrapper()
@@ -724,6 +771,7 @@ async def run_hermes_agent(
         tool_policy = _tool_policy_for_source(config, source)
         token = _HERMES_TOOL_POLICY.set(tool_policy)
         send_token = None
+        qq_send_token = None
         session_parts = session_source.split(":", 3)
         if (
             send_reply is not None
@@ -756,6 +804,43 @@ async def run_hermes_agent(
                 "adapter": session_parts[2],
                 "conversation_id": session_parts[3],
             })
+        if (
+            send_reply is not None
+            and len(session_parts) == 4
+            and session_parts[0] == "channel"
+            and session_parts[1] == "qq"
+        ):
+            channel = dict(channel_context or {})
+            async def send_qq_reply(**kwargs: Any) -> object | None:
+                from xbot.messaging.models import Reply
+
+                metadata = dict(kwargs.get("metadata") or {})
+                quote_message_id = (
+                    metadata.pop("quote_message_id")
+                    if "quote_message_id" in metadata
+                    else channel.get("message_id")
+                )
+                event_id = metadata.get("event_id") or channel.get("event_id")
+                if quote_message_id and event_id:
+                    raise ValueError("QQ sender 不能同时携带 quote_message_id 与 event_id")
+                if event_id:
+                    metadata["event_id"] = event_id
+                result = await send_reply(Reply(
+                    platform="qq", adapter="qq", conversation_id=kwargs.get("conversation_id") or session_parts[3],
+                    type=str(kwargs.get("message_type") or "text"), content=str(kwargs.get("content") or ""),
+                    metadata=metadata, quote_message_id=quote_message_id,
+                ))
+                return result
+
+            qq_send_token = set_qq_send_context({
+                "loop": loop, "sender": send_qq_reply, "adapter": "qq",
+                "conversation_id": channel.get("conversation_id") or session_parts[3],
+                "message_id": channel.get("message_id"), "event_id": channel.get("event_id"),
+                "profile": channel.get("profile", "guest"),
+                "scope": channel.get("scope", "private"), "media_roots": channel.get("media_roots", []),
+                "mark_proactive_send": mark_proactive_send,
+                "recall": channel.get("recall"), "react": channel.get("react"),
+            })
         agent = AIAgent(
             base_url=config.llm.base_url,
             api_key=config.llm.api_key,
@@ -779,6 +864,12 @@ async def run_hermes_agent(
             tool_complete_callback=tool_complete_callback,
             stream_delta_callback=stream_delta_callback,
         )
+        if tool_policy["profile"] == "guest":
+            agent.tools = _guest_direct_tools(source, tool_policy)
+            agent.valid_tool_names = {
+                str((definition.get("function") or {}).get("name") or "")
+                for definition in agent.tools
+            }
         try:
             conversation_history = _restore_session_history(agent)
             if conversation_history:
@@ -803,6 +894,8 @@ async def run_hermes_agent(
         finally:
             if send_token is not None:
                 reset_send_context(send_token)
+            if qq_send_token is not None:
+                reset_qq_send_context(qq_send_token)
             _HERMES_TOOL_POLICY.reset(token)
         if isinstance(result, dict):
             output = result.get("final_response") or result.get("response") or result.get("content") or ""
