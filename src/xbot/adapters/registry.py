@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from xbot.adapters.base import BaseAdapter
 from xbot.adapters.qq import QQAdapter
+from xbot.adapters.telegram import TelegramAdapter
 from xbot.adapters.web.adapter import WebAdapter
 from xbot.adapters.wechat869 import Wechat869Adapter
 from xbot.adapters.wechat_ilink import WechatIlinkAdapter
@@ -42,6 +43,14 @@ class AdapterRegistry:
                     repository_provider=repository_provider,
                 )
             )
+        if config.telegram.enabled:
+            self.register(
+                TelegramAdapter(
+                    config.telegram,
+                    queue=queue,
+                    repository_provider=repository_provider,
+                )
+            )
 
     def _configured_adapters(self) -> dict[str, tuple[str, bool]]:
         return {
@@ -49,6 +58,7 @@ class AdapterRegistry:
             "wechat869": ("wechat", self.config.wechat869.enabled),
             "wechat_ilink": ("wechat", self.config.wechat_ilink.enabled),
             "qq": ("qq", self.config.qq.enabled),
+            "telegram": ("telegram", self.config.telegram.enabled),
         }
 
     def register(self, adapter: BaseAdapter) -> None:
@@ -132,6 +142,12 @@ class AdapterRegistry:
         if name == "qq":
             return QQAdapter(
                 self.config.qq,
+                queue=self.queue,
+                repository_provider=self.repository_provider,
+            )
+        if name == "telegram":
+            return TelegramAdapter(
+                self.config.telegram,
                 queue=self.queue,
                 repository_provider=self.repository_provider,
             )

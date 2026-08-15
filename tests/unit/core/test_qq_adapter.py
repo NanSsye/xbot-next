@@ -1,3 +1,4 @@
+import asyncio
 import time
 from types import SimpleNamespace
 
@@ -51,6 +52,16 @@ class FakeClient:
 
     async def close(self):
         return None
+
+
+class RecallClient(FakeClient):
+    def __init__(self):
+        super().__init__()
+        self.deleted = []
+
+    async def delete_message(self, **payload):
+        self.deleted.append(payload)
+        return {}
 
 
 class ChannelClient(FakeClient):
@@ -368,6 +379,53 @@ async def test_qq_normalizes_voice_and_video_mime_from_urls_when_fields_are_miss
 
 
 @pytest.mark.anyio
+async def test_qq_normalizes_referenced_video_from_message_elements():
+    adapter = QQAdapter(QQAdapterConfig())
+    message = await adapter.normalize(
+        {
+            "_event_type": "GROUP_MESSAGE_CREATE",
+            "d": {
+                "id": "convert-command",
+                "group_openid": "group-1",
+                "author": {"member_openid": "user-1"},
+                "content": "转mp3",
+                "message_type": 103,
+                "msg_elements": [
+                    {
+                        "msg_idx": "REFIDX_example",
+                        "attachments": [
+                            {
+                                "url": "https://cdn.example.invalid/quoted.mp4",
+                                "filename": "quoted.mp4",
+                                "content_type": "video/mp4",
+                                "size": 123,
+                            }
+                        ],
+                    }
+                ],
+                "message_scene": {"ext": ["ref_msg_idx=REFIDX_example"]},
+            },
+        }
+    )
+
+    assert message.type == "text"
+    assert message.raw["attachments"] == []
+    assert message.raw["quote_attachments"] == [
+        {
+            "kind": "video",
+            "filename": "quoted.mp4",
+            "mime": "video/mp4",
+            "size": 123,
+            "url": "https://cdn.example.invalid/quoted.mp4",
+            "remote_url": "https://cdn.example.invalid/quoted.mp4",
+            "download_status": "remote",
+            "metadata": {"width": None, "height": None, "asr_refer_text": None},
+            "quoted": True,
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_qq_send_splits_long_reply_and_increments_msg_seq():
     client = FakeClient()
     adapter = QQAdapter(
@@ -389,6 +447,31 @@ async def test_qq_send_splits_long_reply_and_increments_msg_seq():
     assert len(client.sent) > 1
     assert [item["msg_seq"] for item in client.sent] == list(range(1, len(client.sent) + 1))
     assert all(len(item["content"]) <= 100 for item in client.sent)
+
+
+@pytest.mark.anyio
+async def test_qq_reply_auto_recall_uses_sent_message_id():
+    client = RecallClient()
+    adapter = QQAdapter(
+        QQAdapterConfig(app_id="app", client_secret="secret", allow_active_messages=True),
+        client_factory=lambda: client,
+    )
+
+    await adapter.send(
+        Reply(
+            platform="qq",
+            adapter="qq",
+            conversation_id="qq:group:g",
+            type="text",
+            content="temporary",
+            metadata={"auto_recall_seconds": 0.01},
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert client.deleted == [
+        {"target_type": "group", "target_id": "g", "message_id": "reply-1"}
+    ]
 
 
 @pytest.mark.anyio
@@ -509,6 +592,34 @@ async def test_qq_passive_msg_seq_is_shared_across_text_markdown_media_and_text(
 
 
 @pytest.mark.anyio
+async def test_qq_markdown_permission_error_falls_back_to_plain_text():
+    class MarkdownDeniedClient(FakeClient):
+        async def send_markdown(self, **payload):
+            raise QQBotApiError("markdown denied", status=403, err_code=304023)
+
+    client = MarkdownDeniedClient()
+    adapter = QQAdapter(
+        QQAdapterConfig(app_id="app", client_secret="secret"),
+        client_factory=lambda: client,
+    )
+
+    await adapter.send(
+        Reply(
+            platform="qq",
+            adapter="qq",
+            conversation_id="qq:group:group-1",
+            type="markdown",
+            content="## 微伴社区",
+            metadata={"fallback_text": "微伴社区玩法"},
+            quote_message_id="message-1",
+        )
+    )
+
+    assert client.sent[-1]["content"] == "微伴社区玩法"
+    assert client.sent[-1]["msg_seq"] == 1
+
+
+@pytest.mark.anyio
 async def test_qq_channel_image_requires_explicit_source_and_does_not_send_content_as_url(tmp_path):
     client = ChannelClient()
     adapter = QQAdapter(
@@ -536,7 +647,7 @@ async def test_qq_channel_image_requires_explicit_source_and_does_not_send_conte
 
 
 @pytest.mark.anyio
-async def test_qq_interaction_group_and_channel_buttons_keep_d_id_as_event_id():
+async def test_qq_interaction_group_and_channel_buttons_use_gateway_id_for_reply():
     adapter = QQAdapter(QQAdapterConfig())
     group = await adapter.normalize(
         {
@@ -553,7 +664,7 @@ async def test_qq_interaction_group_and_channel_buttons_keep_d_id_as_event_id():
         }
     )
     assert group.conversation_id == "qq:group:group-1"
-    assert group.raw["event_id"] == "interaction-group"
+    assert group.raw["event_id"] == "gateway-group"
     assert group.raw["gateway_event_id"] == "gateway-group"
     assert group.raw["button_data"] == "ask"
     assert group.raw["button_id"] == "btn-group"
@@ -574,7 +685,7 @@ async def test_qq_interaction_group_and_channel_buttons_keep_d_id_as_event_id():
         }
     )
     assert channel.conversation_id == "qq:channel:channel-1"
-    assert channel.raw["event_id"] == "interaction-channel"
+    assert channel.raw["event_id"] == "gateway-channel"
     assert channel.raw["button_data"] == "open"
     assert channel.sender_id == "member-2"
 

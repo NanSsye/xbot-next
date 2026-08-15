@@ -11,7 +11,7 @@ priority = 10000
 fallback = true
 exclusive = false
 message_types = ["text", "image", "file", "voice", "video", "event"]
-platforms = ["wechat", "web", "qq"]
+platforms = ["wechat", "web", "qq", "telegram"]
 
 [permissions]
 network = true

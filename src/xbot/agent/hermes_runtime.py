@@ -27,6 +27,7 @@ _HERMES_TOOL_POLICY: contextvars.ContextVar[dict[str, Any] | None] = contextvars
 _MEMBER_TOOLSETS = [
     "wechat",
     "qq",
+    "telegram",
     "weiban-readonly",
     "web",
     "file",
@@ -191,11 +192,13 @@ def _ensure_hermes_import_path() -> Path:
     if vendor_text not in sys.path:
         sys.path.insert(0, vendor_text)
     from xbot.agent.tools.hermes_qq import register_xbot_qq_tools
+    from xbot.agent.tools.hermes_telegram import register_xbot_telegram_tools
     from xbot.agent.tools.hermes_wechat import register_xbot_wechat_tools
     from xbot.agent.tools.hermes_weiban import register_xbot_weiban_tools
 
     register_xbot_wechat_tools()
     register_xbot_qq_tools()
+    register_xbot_telegram_tools()
     register_xbot_weiban_tools()
     return vendor_dir
 
@@ -360,14 +363,15 @@ def _configure_hermes_auxiliary_client(auxiliary_client: Any, config: AgentConfi
 def _toolsets_for_source(source: str) -> list[str]:
     profile = _permission_profile_for_source(source)
     is_qq = ":qq:" in (source or "")
+    is_telegram = ":telegram:" in (source or "")
+    channel_toolset = "telegram" if is_telegram else "qq" if is_qq else "wechat"
     if profile == "guest":
-        return ["qq" if is_qq else "wechat", "weiban-readonly"]
+        return [channel_toolset, "weiban-readonly"]
     if profile == "member":
-        channel_toolset = "qq" if is_qq else "wechat"
-        return [channel_toolset, *[item for item in _MEMBER_TOOLSETS if item not in {"qq", "wechat"}]]
+        return [channel_toolset, *[item for item in _MEMBER_TOOLSETS if item not in {"qq", "telegram", "wechat"}]]
     if source.startswith(("api", "terminal")):
-        return ["hermes-api-server", "qq" if is_qq else "wechat", "weiban-readonly"]
-    return ["hermes-api-server", "qq" if is_qq else "wechat", "weiban-readonly"]
+        return ["hermes-api-server", channel_toolset, "weiban-readonly"]
+    return ["hermes-api-server", channel_toolset, "weiban-readonly"]
 
 
 def _permission_profile_for_source(source: str) -> str:
@@ -560,18 +564,21 @@ def _tool_policy_denial(function_name: str, function_args: dict[str, Any], polic
         allowed = {
             "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
             "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
-        } if channel != "qq" else {
+        } if channel in {"", "wechat"} else {
             "qq_send_text", "qq_send_markdown", "qq_send_image", "qq_send_file", "qq_send_voice",
             "qq_send_video", "qq_send_stream", "qq_input_notify",
+        } if channel == "qq" else {
+            "telegram_send_text", "telegram_send_image", "telegram_send_file",
+            "telegram_send_voice", "telegram_send_video",
         }
         allowed.add("weiban_query_account")
         if function_name in allowed:
             return None
-        return (
-            "当前 QQ guest 用户只能调用当前会话的 QQ 消息工具或微伴账号只读查询。"
-            if channel == "qq"
-            else "当前 869 用户只能普通聊天或查询自己的微伴账号信息。"
-        )
+        if channel == "qq":
+            return "当前 QQ guest 用户只能调用当前会话的 QQ 消息工具或微伴账号只读查询。"
+        if channel == "telegram":
+            return "当前 Telegram guest 用户只能调用当前会话的 Telegram 消息工具或微伴账号只读查询。"
+        return "当前 869 用户只能普通聊天或查询自己的微伴账号信息。"
 
     name = str(function_name or "")
     args = function_args if isinstance(function_args, dict) else {}
@@ -580,6 +587,10 @@ def _tool_policy_denial(function_name: str, function_args: dict[str, Any], polic
         return "QQ 会话不能调用 WeChat 发送工具。"
     if channel == "wechat" and name.startswith("qq_"):
         return "WeChat 会话不能调用 QQ 工具。"
+    if channel != "telegram" and name.startswith("telegram_"):
+        return "非 Telegram 会话不能调用 Telegram 工具。"
+    if channel == "telegram" and (name.startswith("qq_") or name.startswith("wechat_send_")):
+        return "Telegram 会话不能调用其他通道的发送工具。"
     if name in _MEMBER_DENIED_TOOLS or any(name.startswith(prefix) for prefix in _MEMBER_DENIED_PREFIXES):
         return f"普通成员不能调用 {name}。"
 
@@ -662,7 +673,7 @@ def _tool_policy_for_source(config: AgentConfig, source: str) -> dict[str, Any]:
         profile = "admin"
     return {
         "profile": profile,
-        "channel": "qq" if ":qq:" in (source or "") else "wechat" if ":wechat" in (source or "") else "",
+        "channel": "telegram" if ":telegram:" in (source or "") else "qq" if ":qq:" in (source or "") else "wechat" if ":wechat" in (source or "") else "",
         "workspace_roots": _member_workspace_roots(config),
         "cwd": Path.cwd(),
         "allow_terminal": bool(policy_config.allow_terminal),
@@ -753,6 +764,8 @@ async def run_hermes_agent(
 
         from xbot.agent.tools.hermes_qq import reset_send_context as reset_qq_send_context
         from xbot.agent.tools.hermes_qq import set_send_context as set_qq_send_context
+        from xbot.agent.tools.hermes_telegram import reset_send_context as reset_telegram_send_context
+        from xbot.agent.tools.hermes_telegram import set_send_context as set_telegram_send_context
         from xbot.agent.tools.hermes_wechat import reset_send_context, set_send_context
 
         _install_hermes_tool_policy_wrapper()
@@ -772,6 +785,7 @@ async def run_hermes_agent(
         token = _HERMES_TOOL_POLICY.set(tool_policy)
         send_token = None
         qq_send_token = None
+        telegram_send_token = None
         session_parts = session_source.split(":", 3)
         if (
             send_reply is not None
@@ -841,6 +855,40 @@ async def run_hermes_agent(
                 "mark_proactive_send": mark_proactive_send,
                 "recall": channel.get("recall"), "react": channel.get("react"),
             })
+        if (
+            send_reply is not None
+            and len(session_parts) == 4
+            and session_parts[0] == "channel"
+            and session_parts[1] == "telegram"
+        ):
+            channel = dict(channel_context or {})
+
+            async def send_telegram_reply(**kwargs: Any) -> object | None:
+                from xbot.messaging.models import Reply
+
+                metadata = dict(kwargs.get("metadata") or {})
+                quote_message_id = metadata.pop("quote_message_id", channel.get("message_id"))
+                return await send_reply(Reply(
+                    platform="telegram",
+                    adapter="telegram",
+                    conversation_id=kwargs.get("conversation_id") or session_parts[3],
+                    type=str(kwargs.get("message_type") or "text"),
+                    content=str(kwargs.get("content") or ""),
+                    metadata=metadata,
+                    quote_message_id=quote_message_id,
+                ))
+
+            telegram_send_token = set_telegram_send_context({
+                "loop": loop,
+                "sender": send_telegram_reply,
+                "adapter": "telegram",
+                "conversation_id": channel.get("conversation_id") or session_parts[3],
+                "message_id": channel.get("message_id"),
+                "profile": channel.get("profile", "guest"),
+                "scope": channel.get("scope", "private"),
+                "media_roots": channel.get("media_roots", []),
+                "mark_proactive_send": mark_proactive_send,
+            })
         agent = AIAgent(
             base_url=config.llm.base_url,
             api_key=config.llm.api_key,
@@ -896,6 +944,8 @@ async def run_hermes_agent(
                 reset_send_context(send_token)
             if qq_send_token is not None:
                 reset_qq_send_context(qq_send_token)
+            if telegram_send_token is not None:
+                reset_telegram_send_context(telegram_send_token)
             _HERMES_TOOL_POLICY.reset(token)
         if isinstance(result, dict):
             output = result.get("final_response") or result.get("response") or result.get("content") or ""

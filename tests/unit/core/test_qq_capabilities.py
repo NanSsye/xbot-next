@@ -122,6 +122,70 @@ async def test_group_message_create_does_not_imply_mention():
     message = await adapter.normalize({"t": "GROUP_MESSAGE_CREATE", "d": {"id": "m", "group_openid": "g", "author": {"member_openid": "u"}, "content": "hi"}})
     assert message.raw["mentions_bot"] is False
 
+    adapter.bot_id = "bot-openid"
+    mentions_other = await adapter.normalize(
+        {
+            "t": "GROUP_MESSAGE_CREATE",
+            "d": {
+                "id": "m-other",
+                "group_openid": "g",
+                "author": {"member_openid": "u"},
+                "content": "@群友 你好",
+                "mentions": [{"id": "other-openid"}],
+            },
+        }
+    )
+    mentions_bot = await adapter.normalize(
+        {
+            "t": "GROUP_MESSAGE_CREATE",
+            "d": {
+                "id": "m-bot",
+                "group_openid": "g",
+                "author": {"member_openid": "u"},
+                "content": "@小x 你好",
+                "mentions": [{"id": "bot-openid"}],
+            },
+        }
+    )
+    mentions_bot_by_group_identity = await adapter.normalize(
+        {
+            "t": "GROUP_MESSAGE_CREATE",
+            "d": {
+                "id": "m-group-bot",
+                "group_openid": "g",
+                "author": {"member_openid": "u"},
+                "content": "<@group-bot-openid> 绑定ABCD1234",
+                "mentions": [
+                    {
+                        "id": "group-bot-openid",
+                        "member_openid": "group-bot-openid",
+                        "bot": True,
+                        "is_you": True,
+                        "scope": "single",
+                    }
+                ],
+            },
+        }
+    )
+    mentions_all = await adapter.normalize(
+        {
+            "t": "GROUP_MESSAGE_CREATE",
+            "d": {
+                "id": "m-all",
+                "group_openid": "g",
+                "author": {"member_openid": "u"},
+                "content": "<@all> 公告",
+                "mentions": [{"scope": "all", "is_you": True, "username": "全体成员"}],
+            },
+        }
+    )
+    assert mentions_other.raw["mentions_bot"] is False
+    assert mentions_bot.raw["mentions_bot"] is True
+    assert mentions_bot_by_group_identity.raw["mentions_bot"] is True
+    assert mentions_bot_by_group_identity.content == "绑定ABCD1234"
+    assert mentions_all.raw["mentions_bot"] is False
+    assert mentions_all.content == "<@all> 公告"
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("method", ["send_text", "send_markdown", "send_media", "stream_message", "input_notify"])

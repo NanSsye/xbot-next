@@ -544,6 +544,19 @@ def test_qq_guest_policy_allows_only_current_session_send_tools():
 
     for tool_name in {"qq_recall", "qq_react", "wechat_send_text", "read_file"}:
         assert _tool_policy_denial(tool_name, {}, policy) == "当前 QQ guest 用户只能调用当前会话的 QQ 消息工具或微伴账号只读查询。"
+
+
+def test_telegram_guest_policy_is_channel_scoped():
+    policy = {"profile": "guest", "channel": "telegram"}
+    for tool_name in {
+        "telegram_send_text", "telegram_send_image", "telegram_send_file",
+        "telegram_send_voice", "telegram_send_video",
+    }:
+        assert _tool_policy_denial(tool_name, {}, policy) is None
+    for tool_name in {"qq_send_text", "wechat_send_text", "read_file"}:
+        assert _tool_policy_denial(tool_name, {}, policy) == (
+            "当前 Telegram guest 用户只能调用当前会话的 Telegram 消息工具或微伴账号只读查询。"
+        )
     assert _tool_policy_denial("weiban_query_account", {"email": "user@example.com"}, policy) is None
 
     # Mutation tools remain available to explicitly elevated QQ profiles.

@@ -265,11 +265,29 @@ class QQAdapterConfig(BaseModel):
     default_profile: Literal["member", "guest"] = "guest"
 
 
+class TelegramAdapterConfig(BaseModel):
+    enabled: bool = False
+    bot_token: str = ""
+    api_base_url: str = "https://api.telegram.org"
+    polling_timeout_seconds: int = 30
+    connect_timeout_seconds: float = 40.0
+    reconnect_seconds: float = 3.0
+    max_reply_chars: int = 4096
+    media_enabled: bool = True
+    media_dir: str = "data/telegram/media"
+    auto_download_media: bool = True
+    media_max_bytes: int = 100 * 1024 * 1024
+    admin_user_ids: list[str] = Field(default_factory=list)
+    member_user_ids: list[str] = Field(default_factory=list)
+    default_profile: Literal["member", "guest"] = "guest"
+
+
 class AdapterConfig(BaseModel):
     web: WebAdapterConfig = Field(default_factory=WebAdapterConfig)
     wechat869: Wechat869AdapterConfig = Field(default_factory=Wechat869AdapterConfig)
     wechat_ilink: WechatIlinkAdapterConfig = Field(default_factory=WechatIlinkAdapterConfig)
     qq: QQAdapterConfig = Field(default_factory=QQAdapterConfig)
+    telegram: TelegramAdapterConfig = Field(default_factory=TelegramAdapterConfig)
 
 
 class Settings(BaseModel):
@@ -653,6 +671,26 @@ def load_settings(
         data.setdefault("adapters", {}).setdefault("qq", {})["default_profile"] = (
             qq_default_profile
         )
+    telegram = data.setdefault("adapters", {}).setdefault("telegram", {})
+    telegram_env: tuple[tuple[str, str, Any], ...] = (
+        ("XBOT_TELEGRAM_ENABLED", "enabled", _env_bool),
+        ("XBOT_TELEGRAM_BOT_TOKEN", "bot_token", str),
+        ("XBOT_TELEGRAM_API_BASE_URL", "api_base_url", str),
+        ("XBOT_TELEGRAM_POLLING_TIMEOUT_SECONDS", "polling_timeout_seconds", _env_int),
+        ("XBOT_TELEGRAM_CONNECT_TIMEOUT_SECONDS", "connect_timeout_seconds", float),
+        ("XBOT_TELEGRAM_RECONNECT_SECONDS", "reconnect_seconds", float),
+        ("XBOT_TELEGRAM_MAX_REPLY_CHARS", "max_reply_chars", _env_int),
+        ("XBOT_TELEGRAM_MEDIA_ENABLED", "media_enabled", _env_bool),
+        ("XBOT_TELEGRAM_MEDIA_DIR", "media_dir", str),
+        ("XBOT_TELEGRAM_AUTO_DOWNLOAD_MEDIA", "auto_download_media", _env_bool),
+        ("XBOT_TELEGRAM_MEDIA_MAX_BYTES", "media_max_bytes", _env_int),
+        ("XBOT_TELEGRAM_ADMIN_USER_IDS", "admin_user_ids", _env_list),
+        ("XBOT_TELEGRAM_MEMBER_USER_IDS", "member_user_ids", _env_list),
+        ("XBOT_TELEGRAM_DEFAULT_PROFILE", "default_profile", str),
+    )
+    for env_name, field, parser in telegram_env:
+        if value := env.get(env_name):
+            telegram[field] = parser(value)
     if include_runtime_overrides:
         override_data = (
             load_runtime_overrides(path) if runtime_overrides is None else runtime_overrides

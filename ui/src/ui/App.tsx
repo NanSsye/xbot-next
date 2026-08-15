@@ -2872,6 +2872,7 @@ function channelDisplayName(name: string): string {
   if (name === "wechat_ilink") return "iLink 通道";
   if (name === "wechat869") return "869 通道";
   if (name === "qq") return "QQ 官方机器人";
+  if (name === "telegram") return "Telegram Bot";
   if (name === "web") return "Web 控制台";
   return name;
 }
@@ -2920,6 +2921,17 @@ function channelStatusEntries(name: string, status: AdapterStatus): Array<[strin
       ["最后序列", status.last_sequence],
       ["Intents", status.intents],
       ["最近错误", status.last_error],
+    ];
+  }
+  if (name === "telegram") {
+    return [
+      ["连接状态", status.started],
+      ["凭据", status.configured],
+      ["长轮询", status.polling],
+      ["Bot ID", status.bot_id],
+      ["Bot 用户名", status.bot_username],
+      ["更新游标", status.offset],
+      ["媒体", status.media_enabled],
     ];
   }
   return Object.entries(status)

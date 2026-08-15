@@ -43,6 +43,9 @@ class FakeClient869:
     async def download_file(self, aes_key: str, file_url: str):
         return b"file-bytes"
 
+    async def download_video(self, aes_key: str, cdn_url: str):
+        return b"video-bytes" * 200
+
     async def download_attach(self, attach_id: str):
         return b"attach-bytes"
 
@@ -625,6 +628,44 @@ async def test_wechat869_downloads_quoted_file_by_attachid(tmp_path) -> None:
     assert attachment["download_status"] == "downloaded"
     assert attachment["local_path"]
     assert attachment["size"] == len(b"attach-bytes")
+
+
+@pytest.mark.anyio
+async def test_wechat869_downloads_quoted_video_from_videomsg_xml(tmp_path) -> None:
+    client = FakeClient869()
+    adapter = Wechat869Adapter(
+        Wechat869AdapterConfig(media_dir=str(tmp_path), text_only=False),
+        client_factory=lambda: client,
+    )
+    await adapter.start()
+
+    message = await adapter.normalize(
+        {
+            "MsgId": "convert-video",
+            "MsgType": 49,
+            "FromUserName": "room@chatroom",
+            "Content": "转mp3",
+            "Quote": {
+                "MsgType": 43,
+                "svrid": "quoted-video-id",
+                "Content": (
+                    '<msg><videomsg length="2200" playlength="10" '
+                    'aeskey="video-aes" cdnvideourl="video-cdn" '
+                    'originsourcemd5="video-md5" /></msg>'
+                ),
+            },
+        }
+    )
+
+    quote = message.raw["quote"]
+    attachment = quote["attachments"][0]
+    assert message.type == "file"
+    assert quote["message_id"] == "quoted-video-id"
+    assert attachment["kind"] == "video"
+    assert attachment["filename"] == "video-md5.mp4"
+    assert attachment["mime"] == "video/mp4"
+    assert attachment["download_status"] == "downloaded"
+    assert attachment["local_path"]
 
 
 @pytest.mark.anyio

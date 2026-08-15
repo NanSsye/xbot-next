@@ -32,6 +32,8 @@ def test_load_default_config(monkeypatch):
     assert settings.adapters.qq.enabled is False
     assert settings.adapters.qq.intents == 1 << 25
     assert settings.adapters.qq.default_profile == "guest"
+    assert settings.adapters.telegram.enabled is False
+    assert settings.adapters.telegram.bot_token == ""
 
 
 def test_env_overrides_database_and_redis(monkeypatch):
@@ -102,6 +104,13 @@ def test_env_overrides_database_and_redis(monkeypatch):
     monkeypatch.setenv("XBOT_QQ_ADMIN_OPENIDS", "admin-1,admin-2")
     monkeypatch.setenv("XBOT_QQ_MEMBER_OPENIDS", "member-1")
     monkeypatch.setenv("XBOT_QQ_DEFAULT_PROFILE", "member")
+    monkeypatch.setenv("XBOT_TELEGRAM_ENABLED", "true")
+    monkeypatch.setenv("XBOT_TELEGRAM_BOT_TOKEN", "telegram-secret")
+    monkeypatch.setenv("XBOT_TELEGRAM_POLLING_TIMEOUT_SECONDS", "25")
+    monkeypatch.setenv("XBOT_TELEGRAM_MEDIA_MAX_BYTES", "123456")
+    monkeypatch.setenv("XBOT_TELEGRAM_ADMIN_USER_IDS", "42,43")
+    monkeypatch.setenv("XBOT_TELEGRAM_MEMBER_USER_IDS", "44")
+    monkeypatch.setenv("XBOT_TELEGRAM_DEFAULT_PROFILE", "member")
     settings = load_settings("configs/xbot.toml")
     assert settings.server.host == "0.0.0.0"
     assert settings.server.port == 18080
@@ -169,6 +178,13 @@ def test_env_overrides_database_and_redis(monkeypatch):
     assert settings.adapters.qq.admin_openids == ["admin-1", "admin-2"]
     assert settings.adapters.qq.member_openids == ["member-1"]
     assert settings.adapters.qq.default_profile == "member"
+    assert settings.adapters.telegram.enabled is True
+    assert settings.adapters.telegram.bot_token == "telegram-secret"
+    assert settings.adapters.telegram.polling_timeout_seconds == 25
+    assert settings.adapters.telegram.media_max_bytes == 123456
+    assert settings.adapters.telegram.admin_user_ids == ["42", "43"]
+    assert settings.adapters.telegram.member_user_ids == ["44"]
+    assert settings.adapters.telegram.default_profile == "member"
 
 
 def test_env_overrides_local_storage_and_memory_queue(monkeypatch):

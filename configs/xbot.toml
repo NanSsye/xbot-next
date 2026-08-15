@@ -182,4 +182,20 @@ admin_openids = []
 member_openids = []
 default_profile = "guest"
 
+[adapters.telegram]
+enabled = false
+bot_token = ""
+api_base_url = "https://api.telegram.org"
+polling_timeout_seconds = 30
+connect_timeout_seconds = 40.0
+reconnect_seconds = 3.0
+max_reply_chars = 4096
+media_enabled = true
+media_dir = "data/telegram/media"
+auto_download_media = true
+media_max_bytes = 104857600
+admin_user_ids = []
+member_user_ids = []
+default_profile = "guest"
+
 
