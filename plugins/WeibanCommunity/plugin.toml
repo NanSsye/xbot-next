@@ -1,0 +1,15 @@
+name = "WeibanCommunity"
+version = "1.0.0"
+entry = "main:WeibanCommunityPlugin"
+author = "xbot/weiban"
+description = "微伴客户群积分、签到、游戏、发言榜和永久邀请码绑定。"
+enabled = true
+
+[routing]
+enabled = true
+priority = 30
+exclusive = false
+message_types = ["text", "event"]
+platforms = ["qq", "wechat"]
+adapters = ["qq", "wechat869", "wechat_ilink"]
+scopes = ["group"]

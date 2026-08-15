@@ -667,8 +667,8 @@ def _validate_bounded_object(value: object, label: str, *, max_bytes: int) -> No
 def _validate_keyboard(value: dict[str, Any]) -> None:
     _validate_bounded_object(value, "keyboard", max_bytes=32 * 1024)
     rows = value.get("content", {}).get("rows", []) if isinstance(value.get("content"), dict) else value.get("rows", [])
-    if not isinstance(rows, list) or len(rows) > 20:
-        raise QQBotApiError("keyboard 行数超出限制")
+    if not isinstance(rows, list) or len(rows) > 5:
+        raise QQBotApiError("keyboard 最多支持 5 行")
     for row in rows:
         buttons = row.get("buttons", []) if isinstance(row, dict) else []
         if not isinstance(buttons, list) or len(buttons) > 5:

@@ -1,0 +1,18 @@
+name = "wxsph_video"
+version = "0.4.4"
+entry = "main:WxsphVideoPlugin"
+author = "xbot"
+description = "自动解析短视频链接，并支持微信、QQ引用视频转MP3"
+enabled = true
+
+[routing]
+enabled = true
+priority = 100
+fallback = false
+message_types = ["text", "file"]
+platforms = ["wechat", "qq", "telegram"]
+
+[permissions]
+network = true
+filesystem = true
+admin = false

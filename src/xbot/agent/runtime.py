@@ -445,6 +445,7 @@ class AgentRuntime:
             "wechat_send_text", "wechat_send_image", "wechat_send_file", "wechat_send_voice",
             "wechat_send_video", "wechat_send_link", "wechat_send_music_card",
             "weiban_query_account",
+            "weiban_grant_character_images",
             "qq_send_text", "qq_send_markdown", "qq_send_image", "qq_send_file", "qq_send_voice",
             "qq_send_video", "qq_send_stream", "qq_input_notify", "qq_recall", "qq_react",
             "web_search", "web_extract", "terminal", "process",

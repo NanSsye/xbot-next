@@ -90,6 +90,21 @@ def _safe_path(value: str, context: dict[str, Any]) -> str:
 
 def _call_sender(context: dict[str, Any], *, target: str, kind: str, content: str = "", metadata: dict[str, Any] | None = None) -> str:
     sender: Callable[..., Any] = context["sender"]
+    if (
+        target == context.get("conversation_id")
+        and context.get("scope") == "group"
+        and context.get("event_id")
+    ):
+        if kind == "text":
+            nickname = str(context.get("sender_name") or "").strip()
+            if nickname and not content.lstrip().startswith(f"@{nickname}"):
+                content = f"@{nickname} {content}"
+        elif kind == "markdown":
+            sender_id = str(context.get("sender_id") or "").strip()
+            if sender_id and not content.lstrip().startswith(f"<@{sender_id}>"):
+                content = f"<@{sender_id}>\n\n{content}"
+                if isinstance(metadata, dict) and metadata.get("markdown"):
+                    metadata = {**metadata, "markdown": content}
     outgoing_metadata = {**(metadata or {}), "quote_message_id": context.get("message_id")}
     if context.get("event_id"):
         outgoing_metadata["event_id"] = context["event_id"]

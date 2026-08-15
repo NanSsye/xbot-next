@@ -23,6 +23,10 @@ import type {
   WechatMessage,
   WechatUserDetail,
   WechatProfilePage,
+  CommunityConfig,
+  CommunityOverview,
+  CommunityUser,
+  CommunityLedgerEntry,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_XBOT_API_BASE ?? "/api/v1";
@@ -201,6 +205,27 @@ export const api = {
     request<ScheduledJob>(`/agent/scheduled-jobs/${encodeURIComponent(jobId)}/run`, { method: "POST" }),
   deleteScheduledJob: (jobId: string) =>
     request(`/agent/scheduled-jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
+  communityConfig: () => request<CommunityConfig>("/community/config"),
+  updateCommunityConfig: (payload: CommunityConfig) =>
+    request<CommunityConfig>("/community/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  communityOverview: () => request<CommunityOverview>("/community/overview"),
+  communityUsers: (limit = 300) => request<CommunityUser[]>(`/community/users?limit=${limit}`),
+  communityLedger: (limit = 300) => request<CommunityLedgerEntry[]>(`/community/ledger?limit=${limit}`),
+  unbindCommunityIdentity: (identityId: number) =>
+    request(`/community/identities/${identityId}`, { method: "DELETE" }),
+  freezeCommunityAccount: (accountId: number, frozen: boolean) =>
+    request(`/community/accounts/${accountId}/freeze`, {
+      method: "PUT",
+      body: JSON.stringify({ frozen }),
+    }),
+  adjustCommunityPoints: (accountId: number, delta: number, reason: string) =>
+    request<{ applied: number; balance: number }>(`/community/accounts/${accountId}/points`, {
+      method: "POST",
+      body: JSON.stringify({ delta, reason }),
+    }),
 };
 
 export function wsUrl(): string {

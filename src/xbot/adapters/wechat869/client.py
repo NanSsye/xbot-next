@@ -481,6 +481,16 @@ class Wechat869Client:
         payload = await self.send_cdn_download(aes_key, file_url, 5)
         return base64.b64decode(payload) if payload else b""
 
+    async def download_video(self, aes_key: str, cdn_url: str) -> bytes:
+        for file_type in (4, 5):
+            try:
+                payload = await self.send_cdn_download(aes_key, cdn_url, file_type)
+                if payload:
+                    return base64.b64decode(payload)
+            except Exception as exc:
+                logger.debug(f"CDN video download (type={file_type}) failed: {exc}")
+        return b""
+
     async def download_attach(self, attach_id: str) -> bytes:
         attach_id = str(attach_id or "").strip()
         if not attach_id:

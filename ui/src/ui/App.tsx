@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  Coins,
   FileText,
   LogIn,
   ShieldAlert,
@@ -56,8 +57,9 @@ import type {
   WechatUserDetail,
 } from "../types";
 import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
+import { CommunityCenter } from "./CommunityCenter";
 
-type View = "agentChat" | "chat" | "wechat" | "profiles" | "groupOps" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
+type View = "agentChat" | "chat" | "wechat" | "profiles" | "groupOps" | "community" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
 type DeliveryMode = "console" | "channel";
 type ThemeMode = "system" | "light" | "dark";
 type ConsoleMessage = {
@@ -75,6 +77,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof MessagesSquare }> 
   { id: "wechat", label: "微信", icon: MessagesSquare },
   { id: "profiles", label: "画像", icon: Users },
   { id: "groupOps", label: "群管", icon: ShieldAlert },
+  { id: "community", label: "微伴社区", icon: Coins },
   { id: "overview", label: "总览", icon: Activity },
   { id: "agent", label: "Agent", icon: Bot },
   { id: "tasks", label: "任务", icon: Activity },
@@ -1073,6 +1076,7 @@ export function App() {
         {view === "settings" && (
           <SettingsView onConfigApplied={handleConfigApplied} />
         )}
+        {view === "community" && <CommunityCenter />}
         </PageErrorBoundary>
       </main>
     </div>
@@ -2872,6 +2876,7 @@ function channelDisplayName(name: string): string {
   if (name === "wechat_ilink") return "iLink 通道";
   if (name === "wechat869") return "869 通道";
   if (name === "qq") return "QQ 官方机器人";
+  if (name === "telegram") return "Telegram Bot";
   if (name === "web") return "Web 控制台";
   return name;
 }
@@ -2920,6 +2925,17 @@ function channelStatusEntries(name: string, status: AdapterStatus): Array<[strin
       ["最后序列", status.last_sequence],
       ["Intents", status.intents],
       ["最近错误", status.last_error],
+    ];
+  }
+  if (name === "telegram") {
+    return [
+      ["连接状态", status.started],
+      ["凭据", status.configured],
+      ["长轮询", status.polling],
+      ["Bot ID", status.bot_id],
+      ["Bot 用户名", status.bot_username],
+      ["更新游标", status.offset],
+      ["媒体", status.media_enabled],
     ];
   }
   return Object.entries(status)

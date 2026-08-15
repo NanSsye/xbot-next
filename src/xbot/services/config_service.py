@@ -46,6 +46,7 @@ SECTION_META: dict[str, tuple[str, str, str]] = {
     "adapters.wechat869": ("微信 869", "869 协议服务、登录凭据、媒体与权限名单。", "channels"),
     "adapters.wechat_ilink": ("微信 iLink", "iLink 扫码登录、轮询、媒体与账号信息。", "channels"),
     "adapters.qq": ("QQ 官方机器人", "QQ 开放平台 Gateway、OpenAPI 凭据与权限名单。", "channels"),
+    "adapters.telegram": ("Telegram Bot", "Telegram Bot API 长轮询、媒体与权限名单。", "channels"),
 }
 
 RESTART_REQUIRED_PREFIXES = (
@@ -67,6 +68,7 @@ OPTIONS: dict[str, list[str]] = {
     "agent.llm.provider": ["openai_compatible", "anthropic"],
     "adapters.wechat869.default_profile": ["member", "guest"],
     "adapters.qq.default_profile": ["member", "guest"],
+    "adapters.telegram.default_profile": ["member", "guest"],
 }
 
 FULL_LABELS: dict[str, str] = {
@@ -116,6 +118,20 @@ FULL_LABELS: dict[str, str] = {
     "adapters.wechat869.admin_wxids": "管理员 wxid",
     "adapters.wechat869.member_wxids": "成员 wxid",
     "adapters.wechat869.default_profile": "默认权限",
+    "adapters.telegram.enabled": "启用 Telegram 通道",
+    "adapters.telegram.bot_token": "Telegram Bot Token",
+    "adapters.telegram.api_base_url": "Telegram Bot API 地址",
+    "adapters.telegram.polling_timeout_seconds": "长轮询等待（秒）",
+    "adapters.telegram.connect_timeout_seconds": "请求超时（秒）",
+    "adapters.telegram.reconnect_seconds": "重连间隔（秒）",
+    "adapters.telegram.max_reply_chars": "单条回复长度",
+    "adapters.telegram.media_enabled": "启用 Telegram 媒体",
+    "adapters.telegram.media_dir": "Telegram 媒体宿主机目录",
+    "adapters.telegram.auto_download_media": "自动下载 Telegram 入站媒体",
+    "adapters.telegram.media_max_bytes": "Telegram 媒体大小上限",
+    "adapters.telegram.admin_user_ids": "管理员 User ID",
+    "adapters.telegram.member_user_ids": "成员 User ID",
+    "adapters.telegram.default_profile": "默认权限",
 }
 
 LEAF_LABELS: dict[str, str] = {
@@ -156,6 +172,9 @@ DESCRIPTIONS: dict[str, str] = {
     "adapters.qq.allow_active_messages": "默认关闭；开启后 QQ 工具才可在没有触发消息 ID 时主动发送。",
     "adapters.qq.media_dir": "必须是宿主机持久化目录，不使用容器专属临时路径。",
     "adapters.qq.intents": "仅填写网页/ENV 中已获授权的整数 intents；不要默认加入特殊 intent 以免 4014。",
+    "adapters.telegram.bot_token": "从 BotFather 获取；服务端保存，页面与 API 永不回传明文。",
+    "adapters.telegram.api_base_url": "默认使用 Telegram 官方 API；自建 Bot API 可在此替换。",
+    "adapters.telegram.media_dir": "必须使用宿主机持久化目录，避免容器重建后媒体丢失。",
 }
 
 ENV_ALIASES: dict[str, str] = {
@@ -363,6 +382,8 @@ class ConfigService:
             or not settings.adapters.qq.client_secret.strip()
         ):
             raise ValueError("启用 QQ 通道前必须同时配置 AppID 与 AppSecret")
+        if settings.adapters.telegram.enabled and not settings.adapters.telegram.bot_token.strip():
+            raise ValueError("启用 Telegram 通道前必须配置 Bot Token")
 
     def _write_overrides(
         self,
@@ -401,7 +422,7 @@ class ConfigService:
         if path in {"storage.url", "storage.admin_url", "queue.redis_url"}:
             return True
         leaf = path.rsplit(".", 1)[-1]
-        if leaf in {"token", "api_key", "client_secret", "admin_key", "token_key"}:
+        if leaf in {"token", "bot_token", "api_key", "client_secret", "admin_key", "token_key"}:
             return True
         return path == "agent.mcp.servers"
 
@@ -418,6 +439,7 @@ class ConfigService:
             "adapters.wechat869.": "XBOT_WECHAT869_",
             "adapters.wechat_ilink.": "XBOT_WECHAT_ILINK_",
             "adapters.qq.": "XBOT_QQ_",
+            "adapters.telegram.": "XBOT_TELEGRAM_",
         }
         for prefix, env_prefix in prefixes.items():
             if path.startswith(prefix):

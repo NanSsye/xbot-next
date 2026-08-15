@@ -94,15 +94,20 @@ def test_permission_scoped_channel_source_selects_hermes_toolsets():
     assert _toolsets_for_source("channel:wechat:wechat869:group@chatroom:guest") == [
         "wechat",
         "weiban-readonly",
+        "weiban-knowledge",
     ]
     assert "file" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "terminal" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "wechat" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "weiban-readonly" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
+    assert "weiban-admin" not in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:guest")
+    assert "weiban-admin" not in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert _toolsets_for_source("channel:wechat:wechat869:group@chatroom") == [
         "hermes-api-server",
         "wechat",
         "weiban-readonly",
+        "weiban-knowledge",
+        "weiban-admin",
     ]
 
 
@@ -120,7 +125,12 @@ def test_permission_scoped_channel_source_shares_hermes_session_with_allowed_sou
     assert _session_id_for_source(guest) == _session_id_for_source(allowed)
     assert _permission_profile_for_source(member) == "member"
     assert _permission_profile_for_source(guest) == "guest"
-    assert _toolsets_for_source(allowed) == ["hermes-api-server", "wechat", "weiban-readonly"]
+    assert _toolsets_for_source(allowed) == [
+        "hermes-api-server",
+        "wechat",
+        "weiban-readonly",
+        "weiban-knowledge",
+    ]
 
 
 def test_wechat_tools_are_registered_for_admin_and_member():
@@ -188,6 +198,7 @@ def test_weiban_readonly_tool_is_registered_for_every_permission_profile():
         "wechat_send_link",
         "wechat_send_music_card",
         "weiban_query_account",
+        "weiban_search_knowledge",
     }
 
 
@@ -522,6 +533,7 @@ def test_guest_policy_allows_only_wechat_send_tools():
     assert _tool_policy_denial("wechat_send_link", {"url": "https://example.com"}, policy) is None
     assert _tool_policy_denial("wechat_send_music_card", {"music_url": "https://example.com/a.mp3"}, policy) is None
     assert _tool_policy_denial("weiban_query_account", {"email": "user@example.com"}, policy) is None
+    assert _tool_policy_denial("weiban_search_knowledge", {"query": "怎么绑定"}, policy) is None
     assert _tool_policy_denial("read_file", {"path": "a.txt"}, policy)
     assert _tool_policy_denial("terminal", {"command": "dir"}, policy)
     assert _tool_policy_denial("weiban_update_account", {"email": "user@example.com"}, policy)
@@ -544,13 +556,36 @@ def test_qq_guest_policy_allows_only_current_session_send_tools():
 
     for tool_name in {"qq_recall", "qq_react", "wechat_send_text", "read_file"}:
         assert _tool_policy_denial(tool_name, {}, policy) == "当前 QQ guest 用户只能调用当前会话的 QQ 消息工具或微伴账号只读查询。"
+
+
+def test_telegram_guest_policy_is_channel_scoped():
+    policy = {"profile": "guest", "channel": "telegram"}
+    for tool_name in {
+        "telegram_send_text", "telegram_send_image", "telegram_send_file",
+        "telegram_send_voice", "telegram_send_video",
+    }:
+        assert _tool_policy_denial(tool_name, {}, policy) is None
+    for tool_name in {"qq_send_text", "wechat_send_text", "read_file"}:
+        assert _tool_policy_denial(tool_name, {}, policy) == (
+            "当前 Telegram guest 用户只能调用当前会话的 Telegram 消息工具或微伴账号只读查询。"
+        )
     assert _tool_policy_denial("weiban_query_account", {"email": "user@example.com"}, policy) is None
+    assert _tool_policy_denial("weiban_search_knowledge", {"query": "有哪些功能"}, policy) is None
 
     # Mutation tools remain available to explicitly elevated QQ profiles.
     assert _tool_policy_denial("qq_recall", {}, {"profile": "member", "channel": "qq"}) is None
     assert _tool_policy_denial("qq_react", {}, {"profile": "member", "channel": "qq"}) is None
     assert _tool_policy_denial("qq_recall", {}, {"profile": "admin", "channel": "qq"}) is None
     assert _tool_policy_denial("qq_react", {}, {"profile": "admin", "channel": "qq"}) is None
+
+
+def test_public_weiban_knowledge_is_searchable_by_guest():
+    from xbot.agent.tools.hermes_weiban_knowledge import search_knowledge
+
+    result = json.loads(search_knowledge({"query": "绑定邀请码可以不加空格吗"}))
+
+    assert result["success"] is True
+    assert "绑定ABCD1234" in result["content"]
 
 
 def test_member_tool_policy_blocks_private_network_targets(tmp_path, monkeypatch):

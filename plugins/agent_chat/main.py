@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 
 import anyio
@@ -12,6 +13,21 @@ from xbot.plugins.base import PluginBase
 class AgentChatPlugin(PluginBase):
     name = "agent_chat"
     version = "0.1.0"
+
+    def __init__(self) -> None:
+        self._tasks: set[asyncio.Task] = set()
+        self._task_conversations: dict[asyncio.Task, str] = {}
+        self._conversation_locks: dict[str, asyncio.Lock] = {}
+
+    async def on_unload(self) -> None:
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
+        self._task_conversations.clear()
+        self._conversation_locks.clear()
 
     async def on_message(self, message: Message, ctx):
         if not ctx.agent or not ctx.send_reply:
@@ -40,10 +56,35 @@ class AgentChatPlugin(PluginBase):
         if not content:
             logger.info("AgentChatPlugin 清理后内容为空，跳过消息: {}", message.id)
             return False
-        if self._is_new_session_command(content):
-            await self._handle_new_session_command(message, ctx)
-            return True
 
+        self._schedule_message(message, ctx, content)
+        return True
+
+    def _schedule_message(self, message: Message, ctx, content: str) -> None:
+        conversation_key = self._conversation_key(message)
+        lock = self._conversation_locks.setdefault(conversation_key, asyncio.Lock())
+        task = asyncio.create_task(
+            self._process_message(message, ctx, content, lock),
+            name=f"xbot-agent-{message.id}",
+        )
+        self._tasks.add(task)
+        self._task_conversations[task] = conversation_key
+        task.add_done_callback(self._on_task_done)
+
+    async def _process_message(
+        self,
+        message: Message,
+        ctx,
+        content: str,
+        lock: asyncio.Lock,
+    ) -> None:
+        async with lock:
+            if self._is_new_session_command(content):
+                await self._handle_new_session_command(message, ctx)
+                return
+            await self._handle_agent_message(message, ctx, content)
+
+    async def _handle_agent_message(self, message: Message, ctx, content: str) -> None:
         logger.info(
             "AgentChatPlugin 调用 Agent: adapter={} content_chars={}",
             message.adapter,
@@ -60,11 +101,11 @@ class AgentChatPlugin(PluginBase):
         except TimeoutError:
             logger.warning("AgentChatPlugin Agent 超时: id={} timeout={}s", message.id, timeout_seconds)
             await self._send_error_reply(message, ctx, "Agent 处理超时，请稍后重试。")
-            return True
+            return
         except Exception as exc:
             logger.warning("AgentChatPlugin Agent 失败: id={} error={}", message.id, exc)
             await self._send_error_reply(message, ctx, f"Agent 处理失败：{exc}")
-            return True
+            return
         logger.info("AgentChatPlugin Agent 完成: id={} task_id={}", message.id, getattr(result, "task_id", ""))
         if getattr(result, "suppress_channel_reply", False):
             logger.info(
@@ -72,21 +113,44 @@ class AgentChatPlugin(PluginBase):
                 message.id,
                 getattr(result, "task_id", ""),
             )
-            return True
+            return
         output = (getattr(result, "output", "") or "").strip()
         if not output:
             output = "Agent 没有生成有效回复，请换一种说法再试。"
+        output = self._address_qq_sender(message, output)
         await ctx.send_reply(
             Reply(
                 platform=message.platform,
                 adapter=message.adapter,
                 conversation_id=message.conversation_id,
-                type="text",
+                type="markdown" if message.adapter == "telegram" else "text",
                 content=output,
                 **self._reply_reference(message),
             )
         )
-        return True
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        conversation_key = self._task_conversations.pop(task, None)
+        self._tasks.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.error(
+                    "AgentChatPlugin 后台任务异常: task={} error={}",
+                    task.get_name(),
+                    error,
+                )
+        if conversation_key is None:
+            return
+        if conversation_key in self._task_conversations.values():
+            return
+        lock = self._conversation_locks.get(conversation_key)
+        if lock is not None and not lock.locked():
+            self._conversation_locks.pop(conversation_key, None)
+
+    @staticmethod
+    def _conversation_key(message: Message) -> str:
+        return f"{message.platform}:{message.adapter}:{message.conversation_id}"
 
     async def _run_agent(self, message: Message, ctx, content: str):
         if self._should_use_xbot_context(ctx):
@@ -145,6 +209,8 @@ class AgentChatPlugin(PluginBase):
             "message_id": None if message.raw.get("qq_event_type") == "INTERACTION_CREATE" else message.id,
             "event_id": message.raw.get("event_id") if message.raw.get("qq_event_type") == "INTERACTION_CREATE" else None,
             "scope": str(message.raw.get("scope") or "private"),
+            "sender_id": str(message.sender_id or ""),
+            "sender_name": str(message.sender_name or ""),
             "profile": profile,
             "media_roots": media_roots,
             "recall": getattr(channel_adapter, "recall", None) if message.adapter == "qq" else None,
@@ -174,7 +240,9 @@ class AgentChatPlugin(PluginBase):
                 adapter=message.adapter,
                 conversation_id=message.conversation_id,
                 type="text",
-                content="已开启新会话，会重新读取当前人格配置。",
+                content=self._address_qq_sender(
+                    message, "已开启新会话，会重新读取当前人格配置。"
+                ),
                 **self._reply_reference(message),
             )
         )
@@ -213,7 +281,7 @@ class AgentChatPlugin(PluginBase):
                 adapter=message.adapter,
                 conversation_id=message.conversation_id,
                 type="text",
-                content=content,
+                content=self._address_qq_sender(message, content),
                 **self._reply_reference(message),
             )
         )
@@ -258,6 +326,7 @@ class AgentChatPlugin(PluginBase):
             message.raw.get("bot_nickname"),
             message.raw.get("bot_wxid"),
             message.raw.get("bot_id") if message.adapter == "qq" else None,
+            message.raw.get("bot_username") if message.adapter == "telegram" else None,
         ):
             if candidate:
                 content = (
@@ -361,6 +430,7 @@ class AgentChatPlugin(PluginBase):
             f"message_id: {message.id}\n"
             f"mentions_bot: {bool(message.raw.get('mentions_bot'))}\n"
             f"tool_permission: {tool_permission}\n"
+            f"telegram_reply_style: {'Use concise Telegram Markdown: bold text uses one asterisk on each side, lists use short bullet lines; avoid hash headings, double-asterisk bold, and Markdown tables.' if message.adapter == 'telegram' else 'not applicable'}\n"
             "memory_scope: Hermes owns long-term memory, session history, context compression, and task trajectory. "
             "Only the current triggered message, its attachments/quote, and the assistant reply should affect memory. "
             "Do not infer durable memory from unrelated channel traffic.\n"
@@ -381,8 +451,10 @@ class AgentChatPlugin(PluginBase):
             "Use the explicit message_id/event_id carried in channel context for passive replies; never parse IDs from prompt text. "
             "QQ channel conversations use qq:channel:{channel_id}; channel DMs use qq:dms:{guild_id}. "
             "QQ media URLs must be public http(s), local paths must stay in configured media/workspace roots, and channel file uploads are unsupported.\n"
-            "For a user email or Weiban account read-only query, use weiban_query_account with only the email; do not say that an administrator must enable query access. "
-            "Plan changes, token quota changes, and expiry extensions are write operations: only admin may perform them; guest and member must refuse them. "
+            "For a Weiban account read-only query, use weiban_query_account with exactly one of the user's email or permanent invite code; never pass both fields and omit the unused field entirely; do not say that an administrator must enable query access. "
+            "For public questions about Weiban or Lyvu features, setup, community commands, memory, images, voice, quotas, or troubleshooting, call weiban_search_knowledge before answering. "
+            "Binding, check-in, points, games, rankings, and Token exchange are handled by the deterministic community plugin; tell the user the exact community command instead of claiming that guest permission blocks it. "
+            "Plan changes, token quota changes, expiry extensions, and manual character-image grants are write operations: only admin may perform them; guest and member must refuse them. Before a manual image grant, show the exact user, amount, and reason and require explicit confirmation; reuse the same idempotency key on retry. "
             "Tool permission profiles: admin can use the full Hermes toolset; member can use public web search/extraction and can use file/terminal tools only inside the configured member workspace roots; channel guests can only use the current channel's send tools plus weiban_query_account (QQ guests use qq_send_* and WeChat guests use wechat_send_*). "
             "For member requests about recent news, current events, public websites, public documentation, or public package/project information, use web_search/web_extract normally. "
             "Members must not inspect unrelated local files, scan LAN/private network targets, access localhost/internal IPs/private IPs/.local hosts, manage processes, create cron jobs, delegate tasks, or execute arbitrary Python. "
@@ -390,6 +462,17 @@ class AgentChatPlugin(PluginBase):
             "If the content asks about real project files, directories, plugins, skills, config, or runtime state, use tools before answering.\n"
             "Reply to the user in Chinese unless the user clearly asks for another language."
         )
+
+    @staticmethod
+    def _address_qq_sender(message: Message, content: str) -> str:
+        if (
+            message.adapter != "qq"
+            or str(message.raw.get("scope") or "") != "group"
+            or message.raw.get("qq_event_type") != "INTERACTION_CREATE"
+        ):
+            return content
+        nickname = str(message.sender_name or "").strip()
+        return f"@{nickname} {content}" if nickname else content
 
     def _is_restricted_channel_user(self, message: Message, ctx=None) -> bool:
         return self._tool_permission_profile(message, ctx) != "admin"
@@ -410,6 +493,14 @@ class AgentChatPlugin(PluginBase):
                 adapter_name="qq",
                 admin_field="admin_openids",
                 member_field="member_openids",
+            )
+        if message.adapter == "telegram":
+            return self._configured_channel_profile(
+                message,
+                ctx,
+                adapter_name="telegram",
+                admin_field="admin_user_ids",
+                member_field="member_user_ids",
             )
         return "admin"
 
@@ -432,6 +523,7 @@ class AgentChatPlugin(PluginBase):
             str(message.raw.get("sender_openid") or "").strip(),
             str(message.raw.get("member_openid") or "").strip(),
             str(message.raw.get("user_openid") or "").strip(),
+            str(message.raw.get("user_id") or "").strip(),
         }
         candidates.discard("")
         if admin_ids and candidates.intersection(admin_ids):

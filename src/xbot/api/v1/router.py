@@ -6,6 +6,7 @@ from xbot.api.v1 import (
     adapters,
     agent,
     bot,
+    community,
     config,
     conversations,
     events,
@@ -28,3 +29,4 @@ router.include_router(conversations.router, prefix="/conversations", tags=["conv
 router.include_router(config.router, prefix="/config", tags=["config"])
 router.include_router(events.router, prefix="/events", tags=["events"])
 router.include_router(wechat.router, prefix="/wechat", tags=["wechat"])
+router.include_router(community.router, prefix="/community", tags=["community"])

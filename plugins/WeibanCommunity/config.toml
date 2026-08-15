@@ -1,0 +1,3 @@
+[WeibanCommunity]
+# 运行配置由控制台写入 PostgreSQL；本文件只说明配置来源。
+config_source = "postgresql"

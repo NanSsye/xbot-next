@@ -37,6 +37,10 @@ type = "memory"
 enabled = false
 app_id = "qq-app"
 client_secret = "qq-client-secret"
+
+[adapters.telegram]
+enabled = false
+bot_token = "telegram-bot-secret"
 """.strip(),
         encoding="utf-8",
     )
@@ -67,12 +71,15 @@ def test_snapshot_masks_every_secret_and_reports_runtime_metadata(config_env):
     assert fields["api.token"]["value"] is None
     assert fields["api.token"]["masked_value"] == "已配置"
     assert fields["adapters.qq.client_secret"]["value"] is None
+    assert fields["adapters.telegram.bot_token"]["value"] is None
+    assert fields["adapters.telegram.bot_token"]["masked_value"] == "已配置"
     assert fields["storage.url"]["value"] is None
     assert fields["adapters.qq.app_id"]["value"] == "qq-app"
     assert fields["server.port"]["restart_required"] is True
     serialized = json.dumps(snapshot, ensure_ascii=False)
     assert "initial-api-secret" not in serialized
     assert "qq-client-secret" not in serialized
+    assert "telegram-bot-secret" not in serialized
 
 
 @pytest.mark.anyio

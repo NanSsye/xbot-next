@@ -326,3 +326,89 @@ export type WechatProfilePage = {
   total: number;
   next_cursor?: string | null;
 };
+
+export type CommunityConfig = {
+  enabled: boolean;
+  enabled_adapters: string[];
+  allowed_conversation_ids: string[];
+  red_packet_admin_user_ids: string[];
+  require_mention: boolean;
+  timezone: string;
+  checkin_base_reward: number;
+  checkin_streak_3_bonus: number;
+  checkin_streak_7_bonus: number;
+  checkin_streak_30_bonus: number;
+  activity_enabled: boolean;
+  activity_rewards: number[];
+  activity_min_messages: number;
+  activity_settle_hour: number;
+  activity_settle_minute: number;
+  activity_announce: boolean;
+  activity_milestone_enabled: boolean;
+  activity_milestone_messages: number;
+  activity_milestone_reward: number;
+  rps_daily_limit: number;
+  rps_win_reward: number;
+  rps_draw_reward: number;
+  fortune_min_reward: number;
+  fortune_max_reward: number;
+  treasure_enabled: boolean;
+  treasure_min_reward: number;
+  treasure_max_reward: number;
+  boss_enabled: boolean;
+  boss_daily_hp: number;
+  boss_daily_attacks: number;
+  boss_min_damage: number;
+  boss_max_damage: number;
+  boss_min_reward: number;
+  boss_max_reward: number;
+  boss_kill_reward_pool: number;
+  horse_race_enabled: boolean;
+  horse_race_start_hour: number;
+  horse_race_end_hour: number;
+  horse_race_interval_hours: number;
+  horse_race_draw_minute: number;
+  horse_race_prize_pool: number;
+  high_low_enabled: boolean;
+  high_low_stake: number;
+  high_low_daily_limit: number;
+  leaderboard_enabled: boolean;
+  token_exchange_enabled: boolean;
+  token_exchange_points: number;
+  token_exchange_tokens: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CommunityOverview = {
+  accounts: number;
+  identities: number;
+  points: number;
+  checkins_today: number;
+};
+
+export type CommunityUser = {
+  identity_id: number;
+  account_id: number;
+  platform: string;
+  adapter: string;
+  user_id: string;
+  nickname?: string | null;
+  last_conversation_id?: string | null;
+  points_balance: number;
+  frozen: boolean;
+  bound_at: string;
+  last_seen_at: string;
+};
+
+export type CommunityLedgerEntry = {
+  id: number;
+  account_id: number;
+  nickname: string;
+  delta: number;
+  balance_after: number;
+  reason: string;
+  conversation_id?: string | null;
+  effective_date: string;
+  created_at: string;
+};
