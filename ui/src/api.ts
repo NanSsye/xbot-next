@@ -27,6 +27,7 @@ import type {
   KnowledgeBase,
   KnowledgePage,
   KnowledgeRun,
+  LlmModelDiscovery,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_XBOT_API_BASE ?? "/api/v1";
@@ -121,7 +122,7 @@ export const api = {
     request<WechatMember[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/members`),
   wechatGroupPersona: (conversationId: string) =>
     request<WechatGroupPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`),
-  updateWechatGroupPersona: (conversationId: string, payload: { enabled: boolean; prompt: string }) =>
+  updateWechatGroupPersona: (conversationId: string, payload: { enabled: boolean; prompt: string; model?: string | null }) =>
     request<WechatGroupPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`, {
       method: "PUT",
       body: JSON.stringify(payload),
@@ -188,6 +189,7 @@ export const api = {
     request<BackgroundTask>(`/agent/background-tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }),
   scheduledJobs: (limit = 100) => request<ScheduledJob[]>(`/agent/scheduled-jobs?limit=${limit}&include_disabled=true`),
   config: () => request<ConfigSnapshot>("/config"),
+  discoverLlmModels: () => request<LlmModelDiscovery>("/config/llm/models/discover", { method: "POST" }),
   updateConfig: (payload: { revision?: string | null; changes: ConfigChange[] }) =>
     request<ConfigApplyResult>("/config", {
       method: "PUT",

@@ -91,6 +91,7 @@ FULL_LABELS: dict[str, str] = {
     "agent.llm.base_url": "模型 API 地址",
     "agent.llm.api_key": "模型 API Key",
     "agent.llm.model": "模型名称",
+    "agent.llm.enabled_models": "已启用模型",
     "agent.member_policy.workspace_roots": "成员工作区目录",
     "adapters.qq.enabled": "启用 QQ 通道",
     "adapters.qq.app_id": "QQ AppID",
@@ -165,6 +166,8 @@ DESCRIPTIONS: dict[str, str] = {
     "storage.url": "包含数据库口令，页面只显示是否已配置。",
     "storage.admin_url": "仅首次创建数据库或角色时使用，不写入普通日志。",
     "agent.llm.api_key": "留空表示保持原值；使用“恢复来源”可删除网页覆盖。",
+    "agent.llm.model": "所有未单独指定模型的会话都使用此模型。",
+    "agent.llm.enabled_models": "群聊只能从这里启用的模型中选择。",
     "adapters.qq.app_id": "在 QQ 开放平台创建机器人后获得。",
     "adapters.qq.client_secret": "只在服务端保存；页面与 API 永不回传明文。",
     "adapters.qq.gateway_url": "通常留空并通过 GET /gateway 自动发现。",
@@ -196,6 +199,7 @@ ENV_ALIASES: dict[str, str] = {
     "agent.llm.base_url": "XBOT_LLM_BASE_URL",
     "agent.llm.api_key": "XBOT_LLM_API_KEY",
     "agent.llm.model": "XBOT_LLM_MODEL",
+    "agent.llm.enabled_models": "XBOT_LLM_ENABLED_MODELS",
 }
 
 

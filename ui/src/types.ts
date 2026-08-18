@@ -298,10 +298,18 @@ export type WechatConversation = Conversation & {
   last_message?: WechatMessage | null;
 };
 
+export type LlmModelDiscovery = {
+  models: string[];
+  count: number;
+};
+
 export type WechatGroupPersona = {
   conversation_id: string;
   enabled: boolean;
   prompt: string;
+  model?: string | null;
+  default_model: string;
+  enabled_models: string[];
   updated_at?: string | null;
 };
 

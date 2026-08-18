@@ -13,6 +13,7 @@ from xbot.agent.hermes_runtime import (
     _ensure_hermes_home_files,
     _ensure_hermes_import_path,
     _group_persona_identity_override,
+    _model_for_channel,
     _permission_profile_for_source,
     _restore_session_history,
     _session_id_for_source,
@@ -31,6 +32,10 @@ def test_group_persona_replaces_soul_identity_without_wrapper():
 
     assert prompt == "你叫小法，回答简洁。"
     assert _group_persona_identity_override({}) is None
+    config = AgentConfig(llm={"model": "default-model", "enabled_models": ["default-model", "group-model"]})
+    assert _model_for_channel(config, {"group_model": "group-model"}) == "group-model"
+    assert _model_for_channel(config, {"group_model": "removed-model"}) == "default-model"
+    assert _model_for_channel(config, {}) == "default-model"
 
 
 @pytest.mark.anyio

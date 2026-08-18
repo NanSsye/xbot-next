@@ -431,6 +431,13 @@ def _group_persona_identity_override(channel_context: dict[str, Any] | None) -> 
     return prompt or None
 
 
+def _model_for_channel(config: AgentConfig, channel_context: dict[str, Any] | None) -> str:
+    group_model = str((channel_context or {}).get("group_model") or "").strip()
+    if group_model and group_model in config.llm.enabled_models:
+        return group_model
+    return config.llm.model
+
+
 def clear_hermes_session(source: str | None = None) -> dict[str, Any]:
     """Delete the Hermes session mapped to an xbot source."""
     _ensure_hermes_import_path()
@@ -962,7 +969,7 @@ async def run_hermes_agent(
             api_key=config.llm.api_key,
             provider=_provider_for_config(config),
             api_mode=_api_mode_for_config(config),
-            model=config.llm.model,
+            model=_model_for_channel(config, channel_context),
             max_iterations=90,
             enabled_toolsets=_toolsets_for_source(source),
             quiet_mode=True,

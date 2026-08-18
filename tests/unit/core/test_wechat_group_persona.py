@@ -50,6 +50,14 @@ async def persona_context():
     ctx = SimpleNamespace(
         storage=SimpleNamespace(session_factory=factory),
         agent=Agent(),
+        settings=SimpleNamespace(
+            agent=SimpleNamespace(
+                llm=SimpleNamespace(
+                    model="model-default",
+                    enabled_models=["model-default", "model-group"],
+                )
+            )
+        ),
     )
     try:
         yield ctx
@@ -67,23 +75,27 @@ async def test_group_persona_can_be_saved_read_and_disabled(persona_context):
     conversation_id = "wechat:wechat869:group:group-1@chatroom"
     saved = await update_wechat_group_persona(
         conversation_id,
-        WechatGroupPersonaUpdate(enabled=True, prompt=" 你叫小群，只说简短中文。 "),
+        WechatGroupPersonaUpdate(enabled=True, prompt=" 你叫小群，只说简短中文。 ", model="model-group"),
         persona_context,
     )
     loaded = await get_wechat_group_persona(conversation_id, persona_context)
 
     assert saved["data"]["enabled"] is True
     assert loaded["data"]["prompt"] == "你叫小群，只说简短中文。"
+    assert loaded["data"]["model"] == "model-group"
+    assert loaded["data"]["default_model"] == "model-default"
+    assert loaded["data"]["enabled_models"] == ["model-default", "model-group"]
     assert loaded["data"]["updated_at"]
     assert persona_context.agent.sources == ["channel:wechat:wechat869:group-1@chatroom"]
 
     disabled = await update_wechat_group_persona(
         conversation_id,
-        WechatGroupPersonaUpdate(enabled=False, prompt=loaded["data"]["prompt"]),
+        WechatGroupPersonaUpdate(enabled=False, prompt=loaded["data"]["prompt"], model=None),
         persona_context,
     )
     assert disabled["data"]["enabled"] is False
     assert disabled["data"]["prompt"] == loaded["data"]["prompt"]
+    assert disabled["data"]["model"] is None
     assert persona_context.agent.sources == [
         "channel:wechat:wechat869:group-1@chatroom",
         "channel:wechat:wechat869:group-1@chatroom",
@@ -101,6 +113,12 @@ async def test_group_persona_rejects_empty_enabled_prompt_and_private_chat(perso
     with pytest.raises(HTTPException, match="only available for WeChat groups"):
         await get_wechat_group_persona(
             "wechat:wechat869:private:user-1",
+            persona_context,
+        )
+    with pytest.raises(HTTPException, match="不在管理员启用的模型池"):
+        await update_wechat_group_persona(
+            "wechat:wechat869:group:group-1@chatroom",
+            WechatGroupPersonaUpdate(enabled=False, prompt="", model="not-allowed"),
             persona_context,
         )
 

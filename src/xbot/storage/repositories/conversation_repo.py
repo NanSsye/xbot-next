@@ -42,6 +42,7 @@ class ConversationRepository:
             agent_persona_enabled=conversation.agent_persona_enabled,
             agent_persona_prompt=conversation.agent_persona_prompt,
             agent_persona_updated_at=conversation.agent_persona_updated_at,
+            agent_model=conversation.agent_model,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )
@@ -262,6 +263,7 @@ class ConversationRepository:
             agent_persona_enabled=record.agent_persona_enabled,
             agent_persona_prompt=record.agent_persona_prompt,
             agent_persona_updated_at=record.agent_persona_updated_at,
+            agent_model=record.agent_model,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )
