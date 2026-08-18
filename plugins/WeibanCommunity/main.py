@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, time, timedelta
+from hashlib import sha256
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -26,6 +28,7 @@ from xbot.community.weiban_token_client import (
 from xbot.messaging.models import Message, Reply
 from xbot.plugins.base import PluginBase
 from xbot.plugins.context import PluginContext
+from xbot.runtime.scheduler import enqueue_reply
 
 _INVITE_CODE = re.compile(r"^[A-Z0-9]{8}$")
 _MENTION = re.compile(r"<@!?[^>]+>")
@@ -55,6 +58,7 @@ _TOKEN_EXCHANGE_TIERS = {
     1_000: 1_100_000,
 }
 _CHARACTER_IMAGE_EXCHANGE_TIERS = {200: 1, 1_000: 5}
+_SETTLEMENT_JOB_NAME = "weiban-community-settlement"
 _REASON_LABELS = {
     "checkin": "每日签到",
     "daily_activity_rank": "群发言榜",
@@ -122,6 +126,10 @@ class WeibanCommunityPlugin(PluginBase):
         self.config = CommunityConfig()
         self.config_created_at = datetime.now(UTC).replace(tzinfo=None)
         self._settlement_task: asyncio.Task | None = None
+        self._scheduler_registered = False
+        self._message_event_unsubscribe: Callable[[], None] | None = None
+        self._activity_tasks: set[asyncio.Task] = set()
+        self._loaded = False
         self._sender_names: dict[str, str] = {}
         self._game_lock = asyncio.Lock()
 
@@ -135,9 +143,23 @@ class WeibanCommunityPlugin(PluginBase):
         async with provider() as repo:
             self.config, record = await CommunityService(repo.session).get_config()
             self.config_created_at = record.created_at
-        self._settlement_task = asyncio.create_task(
-            self._settlement_loop(), name="weiban-community-settlement"
-        )
+        self._loaded = True
+        if ctx.events is not None:
+            self._message_event_unsubscribe = ctx.events.subscribe(
+                "message.created", self._queue_activity_observer
+            )
+        if ctx.scheduler is not None:
+            ctx.scheduler.register(
+                _SETTLEMENT_JOB_NAME,
+                interval_seconds=60,
+                handler=self._run_settlement_cycle,
+                source=self.name,
+            )
+            self._scheduler_registered = True
+        else:
+            self._settlement_task = asyncio.create_task(
+                self._settlement_loop(), name=_SETTLEMENT_JOB_NAME
+            )
         logger.info(
             "WeibanCommunity 已加载: enabled={} adapters={} groups={}",
             self.config.enabled,
@@ -146,6 +168,20 @@ class WeibanCommunityPlugin(PluginBase):
         )
 
     async def on_unload(self) -> None:
+        self._loaded = False
+        if self._scheduler_registered and self.ctx and self.ctx.scheduler is not None:
+            await self.ctx.scheduler.unregister(_SETTLEMENT_JOB_NAME)
+            self._scheduler_registered = False
+        if self._message_event_unsubscribe is not None:
+            self._message_event_unsubscribe()
+            self._message_event_unsubscribe = None
+        tasks = list(self._activity_tasks)
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+        self._activity_tasks.clear()
         if self._settlement_task is not None:
             self._settlement_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -156,16 +192,15 @@ class WeibanCommunityPlugin(PluginBase):
         if not self._message_enabled(message):
             return False
         message = await self._resolve_sender_name(message)
-        milestone = await self._award_activity_milestone(message)
         mentioned = bool(message.raw.get("mentions_bot")) or self._is_button_interaction(message)
         command = self._clean_content(message)
         public_qq_command = message.adapter == "qq" and (
             command in _HELP_COMMANDS or self._is_binding_command(command)
         )
         if self.config.require_mention and not mentioned and not public_qq_command:
-            return self._milestone_reply(message, milestone) if milestone else False
+            return False
         if not command:
-            return self._milestone_reply(message, milestone) if milestone else False
+            return False
         keyboard = None
         try:
             result = await self._dispatch_command(message, command)
@@ -186,10 +221,39 @@ class WeibanCommunityPlugin(PluginBase):
             )
             content = "功能暂时不可用，请稍后再试。"
         if content is None:
-            return self._milestone_reply(message, milestone) if milestone else False
-        if milestone:
-            content = f"{content}\n\n{self._milestone_text(milestone)}"
+            return False
         return self._reply(message, command, content, keyboard=keyboard)
+
+    async def _queue_activity_observer(self, payload: dict[str, Any]) -> None:
+        if not self._loaded:
+            return
+        task = asyncio.create_task(
+            self._observe_message_created(payload),
+            name="weiban-community-activity",
+        )
+        self._activity_tasks.add(task)
+        task.add_done_callback(self._activity_tasks.discard)
+
+    async def _observe_message_created(self, payload: dict[str, Any]) -> None:
+        try:
+            message = Message.model_validate(payload.get("message"))
+        except Exception as exc:
+            logger.debug("WeibanCommunity 忽略无效消息事件: {}", exc)
+            return
+        if not self._message_enabled(message):
+            return
+        message = await self._resolve_sender_name(message)
+        milestone = await self._award_activity_milestone(message)
+        if milestone is None or self.ctx is None or self.ctx.send_reply is None:
+            return
+        try:
+            await self.ctx.send_reply(self._milestone_reply(message, milestone))
+        except Exception as exc:
+            logger.warning(
+                "WeibanCommunity 发言达标通知失败: message_id={} error={}",
+                message.id,
+                exc,
+            )
 
     async def _award_activity_milestone(self, message: Message) -> dict[str, Any] | None:
         if self._is_button_interaction(message) or message.type != "text":
@@ -1429,19 +1493,29 @@ class WeibanCommunityPlugin(PluginBase):
 
     async def _settlement_loop(self) -> None:
         while True:
-            try:
-                await self._settle_due_activity()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("WeibanCommunity 发言榜结算失败: {}", exc)
-            try:
-                await self._process_horse_races()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("WeibanCommunity 群体赛马处理失败: {}", exc)
+            await self._run_settlement_cycle()
             await asyncio.sleep(60)
+
+    async def _run_settlement_cycle(self) -> None:
+        failures: list[str] = []
+        try:
+            await self._settle_due_activity()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("WeibanCommunity 发言榜结算失败: {}", exc)
+            failures.append("activity")
+        try:
+            await self._process_horse_races()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("WeibanCommunity 群体赛马处理失败: {}", exc)
+            failures.append("horse_race")
+        if failures:
+            raise RuntimeError(
+                "WeibanCommunity settlement failed: " + ",".join(failures)
+            )
 
     async def _process_horse_races(self) -> None:
         if not self.ctx or not self.config.enabled or not self.config.horse_race_enabled:
@@ -1450,6 +1524,22 @@ class WeibanCommunityPlugin(PluginBase):
             service = CommunityService(repo.session)
             settled = await service.settle_due_horse_races(self.config)
             opened = await service.open_current_horse_races(self.config)
+            if self.ctx.scheduler is not None:
+                for result in settled:
+                    await enqueue_reply(
+                        repo.session,
+                        self._horse_race_result_reply(result),
+                        idempotency_key=f"weiban:horse:{result['race_id']}:result",
+                        source=self.name,
+                    )
+                for result in opened:
+                    await enqueue_reply(
+                        repo.session,
+                        self._horse_race_opened_reply(result),
+                        idempotency_key=f"weiban:horse:{result['race_id']}:opened",
+                        source=self.name,
+                    )
+                return
         if not self.ctx.send_reply:
             return
         for result in settled:
@@ -1460,38 +1550,42 @@ class WeibanCommunityPlugin(PluginBase):
     async def _send_horse_race_opened(self, result: dict[str, Any]) -> None:
         if not self.ctx or not self.ctx.send_reply:
             return
+        await self.ctx.send_reply(self._horse_race_opened_reply(result))
+
+    def _horse_race_opened_reply(self, result: dict[str, Any]) -> Reply:
         plain = "群体赛马开赛！\n" + self._horse_race_status_text(result)
         if result["adapter"] != "qq":
-            reply = Reply(
+            return Reply(
                 platform=result["platform"],
                 adapter=result["adapter"],
                 conversation_id=result["conversation_id"],
                 type="text",
                 content=plain + "\n发送“支持赛马 1”到“支持赛马 4”参与。",
             )
-        else:
-            current = datetime.now(ZoneInfo(self.config.timezone))
-            recall_seconds = max(
-                (result["draw_minute"] - current.minute) * 60 - current.second,
-                10,
-            )
-            reply = Reply(
-                platform=result["platform"],
-                adapter=result["adapter"],
-                conversation_id=result["conversation_id"],
-                type="keyboard",
-                content=self._markdown("群体赛马", plain),
-                metadata={
-                    "keyboard": self._horse_race_keyboard(),
-                    "fallback_text": plain,
-                    "auto_recall_seconds": recall_seconds,
-                },
-            )
-        await self.ctx.send_reply(reply)
+        current = datetime.now(ZoneInfo(self.config.timezone))
+        recall_seconds = max(
+            (result["draw_minute"] - current.minute) * 60 - current.second,
+            10,
+        )
+        return Reply(
+            platform=result["platform"],
+            adapter=result["adapter"],
+            conversation_id=result["conversation_id"],
+            type="keyboard",
+            content=self._markdown("群体赛马", plain),
+            metadata={
+                "keyboard": self._horse_race_keyboard(),
+                "fallback_text": plain,
+                "auto_recall_seconds": recall_seconds,
+            },
+        )
 
     async def _send_horse_race_result(self, result: dict[str, Any]) -> None:
         if not self.ctx or not self.ctx.send_reply:
             return
+        await self.ctx.send_reply(self._horse_race_result_reply(result))
+
+    def _horse_race_result_reply(self, result: dict[str, Any]) -> Reply:
         horse = int(result["winning_horse"])
         base, remainder = divmod(result["payout_total"], result["winner_count"])
         reward_text = (
@@ -1515,7 +1609,7 @@ class WeibanCommunityPlugin(PluginBase):
             + ("\n".join(winner_lines) if winner_lines else "暂无中奖名单")
         )
         if result["adapter"] == "qq":
-            reply = Reply(
+            return Reply(
                 platform=result["platform"],
                 adapter=result["adapter"],
                 conversation_id=result["conversation_id"],
@@ -1526,15 +1620,13 @@ class WeibanCommunityPlugin(PluginBase):
                     "fallback_text": plain,
                 },
             )
-        else:
-            reply = Reply(
-                platform=result["platform"],
-                adapter=result["adapter"],
-                conversation_id=result["conversation_id"],
-                type="text",
-                content=plain,
-            )
-        await self.ctx.send_reply(reply)
+        return Reply(
+            platform=result["platform"],
+            adapter=result["adapter"],
+            conversation_id=result["conversation_id"],
+            type="text",
+            content=plain,
+        )
 
     async def _settle_due_activity(self) -> None:
         if not self.ctx or not self.config.enabled or not self.config.activity_enabled:
@@ -1553,26 +1645,49 @@ class WeibanCommunityPlugin(PluginBase):
             while current <= latest:
                 settlements.extend(await service.settle_activity_day(current, self.config))
                 current += timedelta(days=1)
+            if self.config.activity_announce and self.ctx.scheduler is not None:
+                for settlement in settlements:
+                    reply = self._activity_settlement_reply(settlement)
+                    if reply is None:
+                        continue
+                    identity = (
+                        f"{settlement['conversation_id']}:{settlement['date'].isoformat()}"
+                    )
+                    await enqueue_reply(
+                        repo.session,
+                        reply,
+                        idempotency_key=(
+                            "weiban:activity:"
+                            + sha256(identity.encode()).hexdigest()[:40]
+                        ),
+                        source=self.name,
+                    )
+                return
         if not self.config.activity_announce or not self.ctx.send_reply:
             return
         for settlement in settlements:
-            awards = settlement["awards"]
-            if not awards:
+            reply = self._activity_settlement_reply(settlement)
+            if reply is None:
                 continue
-            lines = [f"{settlement['date'].isoformat()} 群发言榜奖励："]
-            lines.extend(
-                f"{item['rank']}. {item['nickname']}  {item['message_count']}条  +{item['reward']}积分"
-                for item in awards
-            )
-            await self.ctx.send_reply(
-                Reply(
-                    platform=settlement["platform"],
-                    adapter=settlement["adapter"],
-                    conversation_id=settlement["conversation_id"],
-                    type="text",
-                    content="\n".join(lines),
-                )
-            )
+            await self.ctx.send_reply(reply)
+
+    @staticmethod
+    def _activity_settlement_reply(settlement: dict[str, Any]) -> Reply | None:
+        awards = settlement["awards"]
+        if not awards:
+            return None
+        lines = [f"{settlement['date'].isoformat()} 群发言榜奖励："]
+        lines.extend(
+            f"{item['rank']}. {item['nickname']}  {item['message_count']}条  +{item['reward']}积分"
+            for item in awards
+        )
+        return Reply(
+            platform=settlement["platform"],
+            adapter=settlement["adapter"],
+            conversation_id=settlement["conversation_id"],
+            type="text",
+            content="\n".join(lines),
+        )
 
     def _provider(self):
         provider = getattr(getattr(self.ctx, "conversations", None), "repository_provider", None)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 
 import anyio
 from loguru import logger
@@ -51,6 +52,13 @@ class AgentChatPlugin(PluginBase):
                 message.raw.get("mentions_bot"),
             )
             return False
+
+        telegram_command, telegram_argument = self._telegram_group_command(message)
+        if telegram_command in {"help", "status"} or (
+            telegram_command == "xbot" and not telegram_argument
+        ):
+            await self._send_telegram_group_command_reply(message, ctx, telegram_command)
+            return True
 
         content = self._clean_content(message)
         if not content:
@@ -159,12 +167,14 @@ class AgentChatPlugin(PluginBase):
             summaries, history = "", ""
         tool_permission = self._tool_permission_profile(message, ctx)
         agent_input = self._build_agent_input(message, content, history, summaries, tool_permission)
+        group_persona = await self._group_persona_prompt(message, ctx)
         logger.info(
-            "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={}",
+            "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={} group_persona_chars={}",
             message.id,
             len(agent_input),
             len(history),
             len(summaries),
+            len(group_persona),
         )
         source = self._source_for_message(message, ctx)
         attachments = self._llm_attachments(message)
@@ -172,8 +182,36 @@ class AgentChatPlugin(PluginBase):
         if self._agent_accepts_attachments(ctx.agent):
             kwargs["attachments"] = attachments
         if self._agent_accepts_channel_context(ctx.agent):
-            kwargs["channel_context"] = self._channel_context(message, ctx)
+            channel_context = self._channel_context(message, ctx)
+            if group_persona:
+                channel_context["group_persona_prompt"] = group_persona
+            kwargs["channel_context"] = channel_context
         return await ctx.agent.run_task(agent_input, **kwargs)
+
+    async def _group_persona_prompt(self, message: Message, ctx) -> str:
+        if message.platform != "wechat" or message.raw.get("scope") != "group":
+            return ""
+        conversations = getattr(ctx, "conversations", None)
+        if conversations is None:
+            return ""
+        conversation_id = message.conversation_id
+        normalized_id = (
+            conversation_id
+            if ":" in conversation_id
+            else f"{message.platform}:{message.adapter}:group:{conversation_id}"
+        )
+        try:
+            conversation = await conversations.get_conversation(normalized_id)
+        except Exception as exc:
+            logger.warning(
+                "AgentChatPlugin 读取群人设失败: conversation={} error={}",
+                normalized_id,
+                exc,
+            )
+            return ""
+        if not conversation or not conversation.agent_persona_enabled:
+            return ""
+        return str(conversation.agent_persona_prompt or "").strip()[:8000]
 
     def _channel_context(self, message: Message, ctx) -> dict:
         profile = self._tool_permission_profile(message, ctx)
@@ -322,6 +360,11 @@ class AgentChatPlugin(PluginBase):
 
     def _clean_content(self, message: Message) -> str:
         content = message.content or ""
+        telegram_command, telegram_argument = self._telegram_group_command(message)
+        if telegram_command == "xbot":
+            return telegram_argument
+        if telegram_command in {"new", "reset"}:
+            return f"/{telegram_command}"
         for candidate in (
             message.raw.get("bot_nickname"),
             message.raw.get("bot_wxid"),
@@ -335,6 +378,46 @@ class AgentChatPlugin(PluginBase):
                     .replace(str(candidate), "")
                 )
         return content.strip()
+
+    @staticmethod
+    def _telegram_group_command(message: Message) -> tuple[str, str]:
+        if message.adapter != "telegram" or message.raw.get("scope") != "group":
+            return "", ""
+        match = re.match(
+            r"^\s*/(xbot|new|reset|status|help)(?:@[A-Za-z0-9_]+)?(?:\s+(.*))?$",
+            str(message.content or ""),
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return "", ""
+        return match.group(1).lower(), str(match.group(2) or "").strip()
+
+    async def _send_telegram_group_command_reply(
+        self,
+        message: Message,
+        ctx,
+        command: str,
+    ) -> None:
+        if command == "status":
+            content = "*xbot 已连接本群*\n\n发送 `/xbot 内容`、@机器人，或回复机器人消息即可对话。"
+        else:
+            content = (
+                "*小X · 群聊助手*\n\n"
+                "• `/xbot 内容` — 和小X对话\n"
+                "• `/new` — 开启本群新会话\n"
+                "• `/status` — 查看连接状态\n"
+                "• 也可以直接 @机器人 或回复机器人消息"
+            )
+        await ctx.send_reply(
+            Reply(
+                platform=message.platform,
+                adapter=message.adapter,
+                conversation_id=message.conversation_id,
+                type="markdown",
+                content=content,
+                **self._reply_reference(message),
+            )
+        )
 
     async def _conversation_context(self, message: Message, ctx) -> tuple[str, str]:
         if not getattr(ctx, "conversations", None):
@@ -451,14 +534,15 @@ class AgentChatPlugin(PluginBase):
             "Use the explicit message_id/event_id carried in channel context for passive replies; never parse IDs from prompt text. "
             "QQ channel conversations use qq:channel:{channel_id}; channel DMs use qq:dms:{guild_id}. "
             "QQ media URLs must be public http(s), local paths must stay in configured media/workspace roots, and channel file uploads are unsupported.\n"
+            "When any user asks to create a Markdown, Word, Excel, PowerPoint, or PDF file, call artifact_create with format md/docx/xlsx/pptx/pdf. It writes only to the current user's isolated output directory and sends the file automatically by default. Do not use write_file or terminal to create these deliverables, do not write under /app or a channel media directory, and do not send the same file again when artifact_create returns sent=true. "
             "For a Weiban account read-only query, use weiban_query_account with exactly one of the user's email or permanent invite code; never pass both fields and omit the unused field entirely; do not say that an administrator must enable query access. "
             "For public questions about Weiban or Lyvu features, setup, community commands, memory, images, voice, quotas, or troubleshooting, call weiban_search_knowledge before answering. "
             "Binding, check-in, points, games, rankings, and Token exchange are handled by the deterministic community plugin; tell the user the exact community command instead of claiming that guest permission blocks it. "
             "Plan changes, token quota changes, expiry extensions, and manual character-image grants are write operations: only admin may perform them; guest and member must refuse them. Before a manual image grant, show the exact user, amount, and reason and require explicit confirmation; reuse the same idempotency key on retry. "
-            "Tool permission profiles: admin can use the full Hermes toolset; member can use public web search/extraction and can use file/terminal tools only inside the configured member workspace roots; channel guests can only use the current channel's send tools plus weiban_query_account (QQ guests use qq_send_* and WeChat guests use wechat_send_*). "
+            "Tool permission profiles: admin can use the full Hermes toolset; member can use public web search/extraction, can read files attached to the current or quoted message, and can use file/terminal tools inside the configured member workspace roots; channel guests can use the current channel's send tools, weiban_query_account, weiban_search_knowledge, and artifact_create. "
             "For member requests about recent news, current events, public websites, public documentation, or public package/project information, use web_search/web_extract normally. "
             "Members must not inspect unrelated local files, scan LAN/private network targets, access localhost/internal IPs/private IPs/.local hosts, manage processes, create cron jobs, delegate tasks, or execute arbitrary Python. "
-            "If a member task needs files, keep all reads/writes under the authorized workspace roots. If a request needs local host access, private network access, LAN discovery, or broader filesystem access, explain that it requires an 869 administrator.\n"
+            "For a member request about a current or quoted attachment, read its local_path directly and do not ask for administrator authorization. Keep all other reads/writes under the authorized workspace roots. If a request needs unrelated local host access, private network access, LAN discovery, or broader filesystem access, explain that it is unavailable.\n"
             "If the content asks about real project files, directories, plugins, skills, config, or runtime state, use tools before answering.\n"
             "Reply to the user in Chinese unless the user clearly asks for another language."
         )

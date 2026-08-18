@@ -19,6 +19,7 @@ import type {
   SystemStatus,
   IlinkQrCode,
   WechatConversation,
+  WechatGroupPersona,
   WechatMember,
   WechatMessage,
   WechatUserDetail,
@@ -27,6 +28,9 @@ import type {
   CommunityOverview,
   CommunityUser,
   CommunityLedgerEntry,
+  KnowledgeBase,
+  KnowledgePage,
+  KnowledgeRun,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_XBOT_API_BASE ?? "/api/v1";
@@ -119,6 +123,15 @@ export const api = {
     request<WechatMessage[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`),
   wechatMembers: (conversationId: string) =>
     request<WechatMember[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/members`),
+  wechatGroupPersona: (conversationId: string) =>
+    request<WechatGroupPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`),
+  updateWechatGroupPersona: (conversationId: string, payload: { enabled: boolean; prompt: string }) =>
+    request<WechatGroupPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  resetWechatGroupPersonaSession: (conversationId: string) =>
+    request<Record<string, unknown>>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona/reset-session`, { method: "POST" }),
   wechatProfilePage: (conversationId: string, limit = 30, cursor = "") =>
     request<WechatProfilePage>(`/wechat/conversations/${encodeURIComponent(conversationId)}/profiles?limit=${limit}&cursor=${encodeURIComponent(cursor)}`),
   wechatUsers: (limit = 500, q = "") =>
@@ -226,6 +239,35 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ delta, reason }),
     }),
+  knowledgeBases: () => request<KnowledgeBase[]>("/knowledge/bases"),
+  knowledgeBase: (conversationId: string) =>
+    request<KnowledgeBase>(`/knowledge/bases/${encodeURIComponent(conversationId)}`),
+  updateKnowledgeBase: (conversationId: string, enabled: boolean) =>
+    request<KnowledgeBase>(`/knowledge/bases/${encodeURIComponent(conversationId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  runKnowledgeBase: (conversationId: string) =>
+    request<{ conversation_id: string; started: boolean }>(`/knowledge/bases/${encodeURIComponent(conversationId)}/run`, { method: "POST" }),
+  knowledgePages: (conversationId: string, q = "") =>
+    request<KnowledgePage[]>(`/knowledge/bases/${encodeURIComponent(conversationId)}/pages?q=${encodeURIComponent(q)}&limit=500`),
+  knowledgePage: (conversationId: string, path: string) =>
+    request<{ conversation_id: string; relative_path: string; content: string }>(`/knowledge/bases/${encodeURIComponent(conversationId)}/page?path=${encodeURIComponent(path)}`),
+  knowledgeRuns: (conversationId: string) =>
+    request<KnowledgeRun[]>(`/knowledge/bases/${encodeURIComponent(conversationId)}/runs?limit=30`),
+  downloadKnowledgeVault: async (conversationId: string) => {
+    const token = getApiToken();
+    const response = await fetch(`${API_BASE}/knowledge/bases/${encodeURIComponent(conversationId)}/download`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) throw new Error(await response.text() || "下载 Vault 失败");
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "xbot-group-vault.zip";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 export function wsUrl(): string {

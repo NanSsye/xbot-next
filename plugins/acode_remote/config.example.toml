@@ -1,0 +1,22 @@
+[acode_remote]
+enabled = false
+base_url = "http://192.168.1.100:8787"
+admin_token = "replace-with-your-acode-admin-token"
+
+# 留空时复用 xbot Telegram 通道的 admin_user_ids。
+allowed_user_ids = []
+
+agent_label = "小X"
+max_threads = 30
+request_timeout_seconds = 20
+result_timeout_seconds = 1800
+poll_interval_seconds = 1.5
+album_delay_seconds = 5
+
+# 语音在插件内本地转写，不会发送到第三方转写接口。
+voice_transcription_enabled = true
+voice_transcription_model = "base"
+
+# 只清理 Telegram/aCode 自有附件目录；先 dry-run，再删除超过保留期的文件。
+maintenance_enabled = true
+retention_days = 30

@@ -202,6 +202,51 @@ async def test_wechat869_normalizes_group_text_and_mentions() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("push_content", "expected"),
+    [
+        ("禅落在群聊中发了一个表情", "禅落"),
+        ("禅落在群聊中@了你", "禅落"),
+        ("禅落 : 普通消息", "禅落"),
+        ("我在群聊中", "我在群聊中"),
+    ],
+)
+async def test_wechat869_cleans_group_event_description_from_sender_name(
+    push_content: str,
+    expected: str,
+) -> None:
+    adapter = Wechat869Adapter(Wechat869AdapterConfig())
+
+    message = await adapter.normalize({
+        "MsgId": "sender-name-event",
+        "MsgType": 1,
+        "FromUserName": "123@chatroom",
+        "Content": "member_wxid:\n消息",
+        "PushContent": push_content,
+        "IsGroup": True,
+    })
+
+    assert message.sender_name == expected
+
+
+@pytest.mark.anyio
+async def test_wechat869_prefers_real_nickname_over_push_content() -> None:
+    adapter = Wechat869Adapter(Wechat869AdapterConfig())
+
+    message = await adapter.normalize({
+        "MsgId": "sender-name-direct",
+        "MsgType": 1,
+        "FromUserName": "123@chatroom",
+        "Content": "member_wxid:\n消息",
+        "NickName": "禅落",
+        "PushContent": "错误描述在群聊中发了一个表情",
+        "IsGroup": True,
+    })
+
+    assert message.sender_name == "禅落"
+
+
+@pytest.mark.anyio
 async def test_wechat869_uses_msg_source_atuserlist_for_mentions() -> None:
     adapter = Wechat869Adapter(Wechat869AdapterConfig())
 

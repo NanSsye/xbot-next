@@ -101,6 +101,49 @@ async def test_agent_work_runs_in_background_without_blocking_next_message():
 
 
 @pytest.mark.anyio
+async def test_wechat_group_persona_is_passed_as_channel_system_context():
+    plugin = load_agent_chat_plugin()
+    calls = []
+
+    class Agent:
+        async def run_task(self, input_text, source="api", channel_context=None):
+            calls.append({"input": input_text, "source": source, "channel_context": channel_context})
+            return SimpleNamespace(output="done")
+
+    class Conversations:
+        async def get_conversation(self, conversation_id):
+            assert conversation_id == "wechat:wechat869:group:group-1@chatroom"
+            return SimpleNamespace(
+                agent_persona_enabled=True,
+                agent_persona_prompt="你叫群小助手，只用简短中文回答。",
+            )
+
+    settings = SimpleNamespace(
+        agent=SimpleNamespace(uses_hermes_runtime=True),
+        adapters=SimpleNamespace(wechat869=SimpleNamespace(default_profile="guest")),
+    )
+    ctx = SimpleNamespace(
+        agent=Agent(),
+        conversations=Conversations(),
+        settings=settings,
+        adapters=None,
+    )
+    message = Message(
+        id="wechat-persona-1",
+        platform="wechat",
+        adapter="wechat869",
+        conversation_id="group-1@chatroom",
+        sender_id="member-1",
+        content="你好",
+        raw={"scope": "group", "mentions_bot": True},
+    )
+
+    await plugin._run_agent(message, ctx, "你好")
+
+    assert calls[0]["channel_context"]["group_persona_prompt"] == "你叫群小助手，只用简短中文回答。"
+
+
+@pytest.mark.anyio
 async def test_agent_messages_stay_serial_within_one_conversation():
     plugin = load_agent_chat_plugin()
     agent = ControlledAgent()
@@ -160,6 +203,63 @@ async def test_telegram_agent_reply_uses_markdown() -> None:
         assert "telegram_reply_style: Use concise Telegram Markdown" in agent.inputs[0]
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.anyio
+async def test_telegram_group_xbot_command_sends_only_argument_to_agent() -> None:
+    plugin = load_agent_chat_plugin()
+    agent = ControlledAgent()
+    replies = []
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    ctx = SimpleNamespace(agent=agent, send_reply=send_reply, settings=None)
+    incoming = Message(
+        id="telegram-group-1",
+        platform="telegram",
+        adapter="telegram",
+        conversation_id="telegram:group:-123",
+        sender_id="42",
+        content="/xbot 帮我看看",
+        raw={"scope": "group", "mentions_bot": True},
+    )
+    try:
+        assert await plugin.on_message(incoming, ctx) is True
+        await asyncio.wait_for(agent.started_event("帮我看看").wait(), timeout=0.2)
+        task = next(iter(plugin._tasks))
+        agent.release("帮我看看")
+        await asyncio.wait_for(task, timeout=0.2)
+
+        assert replies[0].type == "markdown"
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.anyio
+async def test_telegram_group_help_is_replied_without_agent() -> None:
+    plugin = load_agent_chat_plugin()
+    replies = []
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    ctx = SimpleNamespace(agent=ControlledAgent(), send_reply=send_reply, settings=None)
+    incoming = Message(
+        id="telegram-group-help",
+        platform="telegram",
+        adapter="telegram",
+        conversation_id="telegram:group:-123",
+        sender_id="42",
+        content="/help",
+        raw={"scope": "group", "mentions_bot": True},
+    )
+
+    assert await plugin.on_message(incoming, ctx) is True
+    assert len(replies) == 1
+    assert replies[0].type == "markdown"
+    assert "/xbot 内容" in replies[0].content
+    assert ctx.agent.inputs == []
 
 
 @pytest.mark.anyio

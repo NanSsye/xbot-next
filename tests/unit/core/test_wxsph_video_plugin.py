@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,10 @@ def _plugin():
     loader = PluginLoader()
     plugin_dir = Path("plugins/wxsph_video")
     return loader.load_instance(plugin_dir, loader.load_manifest(plugin_dir))
+
+
+async def finish_tasks(plugin) -> None:
+    await asyncio.gather(*list(plugin._tasks))
 
 
 @pytest.mark.asyncio
@@ -39,6 +44,7 @@ async def test_qq_link_without_mention_sends_native_video_reply():
     )
 
     handled = await plugin.on_message(message, SimpleNamespace())
+    await finish_tasks(plugin)
 
     assert handled is True
     assert len(replies) == 1
@@ -131,6 +137,7 @@ async def test_qq_quoted_video_converts_to_mp3_without_mention():
     )
 
     handled = await plugin.on_message(message, SimpleNamespace())
+    await finish_tasks(plugin)
 
     assert handled is True
     assert len(replies) == 1
@@ -176,6 +183,36 @@ async def test_wechat_quoted_video_attachment_converts_to_mp3_without_mention():
     )
 
     handled = await plugin.on_message(message, SimpleNamespace())
+    await finish_tasks(plugin)
 
     assert handled is True
     assert sent == [("wechat869", "/tmp/wxsph_music/wechat-video.mp3", "wechat-video.mp3")]
+
+
+@pytest.mark.asyncio
+async def test_video_processing_releases_message_dispatch_immediately():
+    plugin = _plugin()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def parse(_url):
+        started.set()
+        await release.wait()
+        return "测试视频", None, "https://media.example.test/video", None
+
+    plugin._parse = parse
+    message = Message(
+        id="slow-video-message",
+        platform="qq",
+        adapter="qq",
+        conversation_id="qq:group:test",
+        sender_id="user-1",
+        content="https://v.douyin.com/slow123/",
+        raw={"scope": "group", "mentions_bot": False},
+    )
+
+    assert await plugin.on_message(message, SimpleNamespace()) is True
+    await asyncio.wait_for(started.wait(), timeout=0.2)
+    assert plugin._tasks
+    release.set()
+    await finish_tasks(plugin)

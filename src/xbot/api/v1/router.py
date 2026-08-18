@@ -10,6 +10,7 @@ from xbot.api.v1 import (
     config,
     conversations,
     events,
+    knowledge,
     messages,
     plugins,
     skills,
@@ -28,5 +29,6 @@ router.include_router(messages.router, prefix="/messages", tags=["messages"])
 router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
 router.include_router(config.router, prefix="/config", tags=["config"])
 router.include_router(events.router, prefix="/events", tags=["events"])
+router.include_router(knowledge.router, prefix="/knowledge", tags=["knowledge"])
 router.include_router(wechat.router, prefix="/wechat", tags=["wechat"])
 router.include_router(community.router, prefix="/community", tags=["community"])

@@ -1,6 +1,7 @@
 import {
   Check,
   CheckCircle2,
+  ChevronRight,
   CircleAlert,
   Eye,
   EyeOff,
@@ -303,7 +304,7 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
                   <strong>{section.title}</strong>
                   <small>{section.fields.length} 个字段</small>
                 </span>
-                {dirty ? <b>{dirty}</b> : <span className="config-section-rail__arrow">›</span>}
+                {dirty ? <b>{dirty}</b> : <ChevronRight className="config-section-rail__arrow" size={17} />}
               </button>
             );
           })}

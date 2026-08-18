@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,10 @@ async def _async_none():
     return None
 
 
+async def finish_tasks(plugin) -> None:
+    await asyncio.gather(*list(plugin._tasks))
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("platform", "adapter"),
@@ -135,6 +140,7 @@ async def test_image_note_is_handled_without_agent_and_sends_text_and_images(tmp
     plugin, replies = configured_plugin(module, tmp_path, session)
 
     handled = await plugin.on_message(incoming(platform, adapter), None)
+    await finish_tasks(plugin)
 
     assert handled is True
     assert [reply.type for reply in replies] == ["text", "image", "image"]
@@ -161,6 +167,7 @@ async def test_telegram_video_note_sends_description_and_video(tmp_path):
     plugin, replies = configured_plugin(module, tmp_path, session)
 
     assert await plugin.on_message(incoming("telegram", "telegram"), None) is True
+    await finish_tasks(plugin)
 
     assert [reply.type for reply in replies] == ["video"]
     assert replies[0].quote_message_id == "message-1"
@@ -184,6 +191,7 @@ async def test_telegram_image_note_combines_first_image_and_markdown_caption(tmp
     plugin, replies = configured_plugin(module, tmp_path, session)
 
     assert await plugin.on_message(incoming("telegram", "telegram"), None) is True
+    await finish_tasks(plugin)
 
     assert [reply.type for reply in replies] == ["image"]
     assert replies[0].metadata["parse_mode"] == "Markdown"
@@ -212,6 +220,7 @@ async def test_http_200_with_null_data_is_business_failure_and_stops_agent(tmp_p
     plugin, replies = configured_plugin(module, tmp_path, session)
 
     handled = await plugin.on_message(incoming("qq", "qq"), None)
+    await finish_tasks(plugin)
 
     assert handled is True
     assert len(replies) == 1
@@ -228,6 +237,7 @@ async def test_short_link_redirect_to_untrusted_host_is_rejected_before_parse(tm
     plugin, replies = configured_plugin(module, tmp_path, session)
 
     handled = await plugin.on_message(incoming("wechat", "wechat869", "https://xhslink.cn/abc123"), None)
+    await finish_tasks(plugin)
 
     assert handled is True
     assert session.posts == []
@@ -242,10 +252,32 @@ async def test_401_is_configuration_error_and_token_is_not_exposed(tmp_path):
     plugin, replies = configured_plugin(module, tmp_path, session)
 
     assert await plugin.on_message(incoming("qq", "qq"), None) is True
+    await finish_tasks(plugin)
 
     assert len(replies) == 1
     assert "配置" in replies[0].content
     assert "configured-secret" not in replies[0].content
+
+
+@pytest.mark.anyio
+async def test_link_processing_releases_message_dispatch_immediately(tmp_path):
+    module = load_plugin_module()
+    session = FakeSession(FakeResponse(200, payload=detail_data()))
+    plugin, _ = configured_plugin(module, tmp_path, session)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_process(message, url):
+        started.set()
+        await release.wait()
+
+    plugin._process_message = slow_process
+
+    assert await plugin.on_message(incoming("qq", "qq"), None) is True
+    await asyncio.wait_for(started.wait(), timeout=0.2)
+    assert plugin._tasks
+    release.set()
+    await finish_tasks(plugin)
 
 
 def test_url_validation_rejects_credentials_and_non_xhs_hosts():

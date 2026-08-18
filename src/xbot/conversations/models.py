@@ -18,6 +18,9 @@ class Conversation(BaseModel):
     raw_id: str
     title: str | None = None
     avatar_url: str | None = None
+    agent_persona_enabled: bool = False
+    agent_persona_prompt: str | None = None
+    agent_persona_updated_at: datetime | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

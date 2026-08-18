@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -8,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -19,9 +21,11 @@ from xbot.community.weiban_token_client import (
     grant_character_image_count,
     grant_token_pack,
 )
+from xbot.core.events import EventBus
 from xbot.messaging.models import Message
+from xbot.plugins.context import PluginContext
 from xbot.plugins.loader import PluginLoader
-from xbot.storage.models import Base, ConversationMessageRecord
+from xbot.storage.models import Base, ConversationMessageRecord, ReplyOutboxRecord
 
 
 @pytest_asyncio.fixture
@@ -261,11 +265,17 @@ async def test_config_update_reloads_plugin_and_is_visible_to_new_sessions(sessi
 
 
 @pytest.mark.asyncio
-async def test_plugin_does_not_claim_unrecognized_agent_conversation():
+async def test_plugin_does_not_claim_unrecognized_agent_conversation(monkeypatch):
     loader = PluginLoader()
     plugin_dir = Path("plugins/WeibanCommunity")
     plugin = loader.load_instance(plugin_dir, loader.load_manifest(plugin_dir))
     plugin.config = CommunityConfig()
+    milestone_checks = []
+
+    async def milestone_check(message):
+        milestone_checks.append(message.id)
+
+    monkeypatch.setattr(plugin, "_award_activity_milestone", milestone_check)
     message = Message(
         id="ordinary-message",
         platform="qq",
@@ -279,6 +289,107 @@ async def test_plugin_does_not_claim_unrecognized_agent_conversation():
     result = await plugin.on_message(message, SimpleNamespace())
 
     assert result is False
+    assert milestone_checks == []
+
+
+@pytest.mark.asyncio
+async def test_message_created_event_awards_milestone_without_blocking_dispatch(
+    session_factory, monkeypatch, tmp_path
+):
+    loader = PluginLoader()
+    plugin_dir = Path("plugins/WeibanCommunity")
+    plugin = loader.load_instance(plugin_dir, loader.load_manifest(plugin_dir))
+    events = EventBus()
+    replies = []
+
+    @asynccontextmanager
+    async def provider():
+        async with session_factory() as session, session.begin():
+            yield SimpleNamespace(session=session)
+
+    async def send_reply(reply):
+        replies.append(reply)
+
+    async def award(message):
+        return {"message_count": 60, "reward": 5, "balance": 15}
+
+    monkeypatch.setattr(plugin, "_award_activity_milestone", award)
+    ctx = PluginContext(
+        name="WeibanCommunity",
+        data_dir=tmp_path,
+        config={},
+        conversations=SimpleNamespace(repository_provider=provider),
+        send_reply=send_reply,
+        events=events,
+    )
+    await plugin.on_load(ctx)
+    try:
+        message = Message(
+            id="milestone-message",
+            platform="qq",
+            adapter="qq",
+            conversation_id="qq:group:test",
+            sender_id="user-1",
+            sender_name="群友",
+            content="普通发言",
+            raw={"scope": "group", "mentions_bot": False},
+        )
+
+        await events.publish(
+            "message.created", {"message": message.model_dump(mode="json")}
+        )
+        await asyncio.gather(*list(plugin._activity_tasks))
+
+        assert len(replies) == 1
+        assert "今日发言达到 60 条" in replies[0].content
+
+        await plugin.on_unload()
+        await events.publish(
+            "message.created", {"message": message.model_dump(mode="json")}
+        )
+        await asyncio.sleep(0)
+        assert len(replies) == 1
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_plugin_uses_runtime_scheduler_instead_of_local_settlement_loop(
+    session_factory, tmp_path
+):
+    loader = PluginLoader()
+    plugin_dir = Path("plugins/WeibanCommunity")
+    plugin = loader.load_instance(plugin_dir, loader.load_manifest(plugin_dir))
+    registrations = []
+    removals = []
+
+    @asynccontextmanager
+    async def provider():
+        async with session_factory() as session, session.begin():
+            yield SimpleNamespace(session=session)
+
+    class Scheduler:
+        def register(self, name, **kwargs):
+            registrations.append((name, kwargs))
+
+        async def unregister(self, name):
+            removals.append(name)
+
+    ctx = PluginContext(
+        name="WeibanCommunity",
+        data_dir=tmp_path,
+        config={},
+        conversations=SimpleNamespace(repository_provider=provider),
+        scheduler=Scheduler(),
+    )
+
+    await plugin.on_load(ctx)
+    assert plugin._settlement_task is None
+    assert registrations[0][0] == "weiban-community-settlement"
+    assert registrations[0][1]["interval_seconds"] == 60
+
+    await plugin.on_unload()
+    assert removals == ["weiban-community-settlement"]
 
 
 @pytest.mark.asyncio
@@ -1390,6 +1501,70 @@ async def test_horse_race_result_card_is_not_auto_recalled():
     assert "10. 中奖者10　+20 积分" in replies[0].content
     assert "中奖者11" not in replies[0].content
     assert "另有 2 人中奖" in replies[0].content
+
+
+@pytest.mark.asyncio
+async def test_scheduled_horse_race_announcements_are_written_to_outbox(
+    session_factory, monkeypatch
+):
+    loader = PluginLoader()
+    plugin_dir = Path("plugins/WeibanCommunity")
+    plugin = loader.load_instance(plugin_dir, loader.load_manifest(plugin_dir))
+    plugin.config = CommunityConfig(enabled=True, horse_race_enabled=True)
+
+    settled = {
+        "race_id": 11,
+        "platform": "qq",
+        "adapter": "qq",
+        "conversation_id": "qq:group:test",
+        "winning_horse": 1,
+        "winner_count": 1,
+        "payout_total": 200,
+        "winners": [{"nickname": "甲", "reward": 200}],
+    }
+    opened = {
+        "race_id": 12,
+        "platform": "qq",
+        "adapter": "qq",
+        "conversation_id": "qq:group:test",
+        "race_hour": 15,
+        "draw_minute": 55,
+        "counts": {1: 0, 2: 0, 3: 0, 4: 0},
+    }
+
+    async def settle(self, config):
+        return [settled]
+
+    async def open_races(self, config):
+        return [opened]
+
+    monkeypatch.setattr(CommunityService, "settle_due_horse_races", settle)
+    monkeypatch.setattr(CommunityService, "open_current_horse_races", open_races)
+
+    @asynccontextmanager
+    async def provider():
+        async with session_factory() as session, session.begin():
+            yield SimpleNamespace(session=session)
+
+    plugin.ctx = SimpleNamespace(
+        conversations=SimpleNamespace(repository_provider=provider),
+        scheduler=object(),
+        send_reply=None,
+    )
+
+    await plugin._process_horse_races()
+
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(ReplyOutboxRecord).order_by(ReplyOutboxRecord.idempotency_key)
+            )
+        ).scalars().all()
+    assert [row.idempotency_key for row in rows] == [
+        "weiban:horse:11:result",
+        "weiban:horse:12:opened",
+    ]
+    assert all(row.status == "pending" for row in rows)
 
 
 def test_all_community_keyboard_buttons_use_direct_callback():

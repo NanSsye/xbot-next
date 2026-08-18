@@ -9,6 +9,7 @@ from typing import Any
 
 from xbot.adapters.base import BaseAdapter
 from xbot.adapters.telegram.client import TelegramApiError, TelegramBotClient
+from xbot.adapters.telegram.formatting import telegram_markdown_chunks
 from xbot.core.config import TelegramAdapterConfig
 from xbot.core.logging import logger
 from xbot.messaging.models import Message, MessageEnvelope, Reply
@@ -39,6 +40,16 @@ class TelegramAdapter(BaseAdapter):
             logger.warning("TelegramAdapter 已启用但 Bot Token 未配置")
             return
         self.client = self.client or self._create_client()
+        try:
+            await self.configure_group_command_menu([
+                {"command": "xbot", "description": "和小X对话：/xbot 内容"},
+                {"command": "new", "description": "开启本群新会话"},
+                {"command": "status", "description": "查看 xbot 群聊状态"},
+                {"command": "help", "description": "查看群聊使用说明"},
+            ])
+            logger.info("TelegramAdapter 已配置 xbot 群聊菜单")
+        except TelegramApiError as exc:
+            logger.warning("TelegramAdapter 配置 xbot 群聊菜单失败，将继续启动: {}", exc)
         if self.queue is not None:
             self._task = asyncio.create_task(self._poll_loop(), name="xbot-telegram-adapter")
 
@@ -62,9 +73,40 @@ class TelegramAdapter(BaseAdapter):
         self.client = client
         reply_to = self._telegram_message_id(reply.quote_message_id)
         if reply.type in {"text", "markdown", "keyboard", "card", "link", "embed", "ark"}:
-            markup = self._inline_keyboard(reply.metadata) if reply.type in {"keyboard", "card"} else None
-            parse_mode = "Markdown" if reply.type == "markdown" else None
-            chunks = self._split_text(reply.content, max(1, min(4096, int(self.config.max_reply_chars))))
+            metadata = reply.metadata if isinstance(reply.metadata, dict) else {}
+            markup = self._inline_keyboard(metadata)
+            parse_mode = str(metadata.get("parse_mode") or "") or ("Markdown" if reply.type == "markdown" else None)
+            limit = max(1, min(4096, int(self.config.max_reply_chars)))
+            if parse_mode and parse_mode.lower() in {"markdown", "markdownv2"}:
+                rendered = telegram_markdown_chunks(reply.content, limit)
+                chunks = [item[0] for item in rendered]
+                plain_chunks = [item[1] for item in rendered]
+                parse_mode = "HTML"
+            else:
+                chunks = self._split_text(reply.content, limit)
+                plain_chunks = chunks
+            edit_message_id = self._telegram_message_id(str(metadata.get("edit_message_id") or ""))
+            if edit_message_id is not None and len(chunks) == 1:
+                kwargs = {
+                    "chat_id": target,
+                    "message_id": edit_message_id,
+                    "text": chunks[0],
+                    "parse_mode": parse_mode,
+                    "reply_markup": markup,
+                }
+                try:
+                    result = await client.edit_message_text(**kwargs)
+                except TelegramApiError as exc:
+                    if self._is_message_not_modified(exc):
+                        return {"message_id": str(edit_message_id), "message_ids": [str(edit_message_id)]}
+                    if not parse_mode or not self._is_markdown_parse_error(exc):
+                        raise
+                    logger.warning("Telegram 富文本解析失败，编辑消息已降级为纯文本")
+                    kwargs["parse_mode"] = None
+                    kwargs["text"] = plain_chunks[0]
+                    result = await client.edit_message_text(**kwargs)
+                result_id = str(result.get("message_id") or edit_message_id)
+                return {"message_id": result_id, "message_ids": [result_id]}
             result: dict[str, Any] = {}
             ids: list[str] = []
             for index, chunk in enumerate(chunks):
@@ -80,8 +122,9 @@ class TelegramAdapter(BaseAdapter):
                 except TelegramApiError as exc:
                     if not parse_mode or not self._is_markdown_parse_error(exc):
                         raise
-                    logger.warning("Telegram Markdown 解析失败，已降级为纯文本")
+                    logger.warning("Telegram 富文本解析失败，已降级为纯文本")
                     kwargs["parse_mode"] = None
+                    kwargs["text"] = plain_chunks[index]
                     result = await client.send_message(**kwargs)
                 if result.get("message_id") is not None:
                     ids.append(str(result["message_id"]))
@@ -94,13 +137,20 @@ class TelegramAdapter(BaseAdapter):
             source = str(metadata.get("url") or metadata.get("path") or reply.content or "").strip()
             if not source:
                 raise TelegramApiError("Telegram 媒体回复缺少 url/path")
+            caption = str(metadata.get("caption") or "")
+            caption_mode = str(metadata.get("parse_mode") or "") or None
+            plain_caption = caption
+            if caption and caption_mode and caption_mode.lower() in {"markdown", "markdownv2"}:
+                rendered_caption = telegram_markdown_chunks(caption, 1024)[0]
+                caption, plain_caption = rendered_caption
+                caption_mode = "HTML"
             group_sources = [str(item) for item in metadata.get("paths", []) if str(item).strip()]
             if media_kind == "image" and len(group_sources) > 1:
                 kwargs = {
                     "chat_id": target,
                     "sources": group_sources[:10],
-                    "caption": str(metadata.get("caption") or ""),
-                    "parse_mode": str(metadata.get("parse_mode") or "") or None,
+                    "caption": caption,
+                    "parse_mode": caption_mode,
                     "reply_to_message_id": reply_to,
                 }
                 try:
@@ -110,6 +160,7 @@ class TelegramAdapter(BaseAdapter):
                         raise
                     logger.warning("Telegram 相册说明 Markdown 解析失败，已降级为纯文本")
                     kwargs["parse_mode"] = None
+                    kwargs["caption"] = plain_caption
                     results = await client.send_media_group(**kwargs)
                 ids = [str(item["message_id"]) for item in results if item.get("message_id") is not None]
                 return {"message_id": ids[-1] if ids else "", "message_ids": ids}
@@ -117,8 +168,8 @@ class TelegramAdapter(BaseAdapter):
                 "kind": media_kind,
                 "chat_id": target,
                 "source": source,
-                "caption": str(metadata.get("caption") or ""),
-                "parse_mode": str(metadata.get("parse_mode") or "") or None,
+                "caption": caption,
+                "parse_mode": caption_mode,
                 "reply_to_message_id": reply_to,
                 "file_name": str(metadata.get("file_name") or ""),
             }
@@ -129,8 +180,42 @@ class TelegramAdapter(BaseAdapter):
                     raise
                 logger.warning("Telegram 媒体说明 Markdown 解析失败，已降级为纯文本")
                 kwargs["parse_mode"] = None
+                kwargs["caption"] = plain_caption
                 return await client.send_media(**kwargs)
         raise TelegramApiError(f"不支持的 Telegram Reply 类型: {reply.type}")
+
+    async def send_chat_action(self, conversation_id: str, action: str = "typing") -> bool:
+        target = self._target_from_conversation(conversation_id)
+        if target is None:
+            return False
+        client = self.client or self._create_client()
+        self.client = client
+        return await client.send_chat_action(chat_id=target, action=action)
+
+    async def configure_command_menu(
+        self,
+        chat_ids: list[str],
+        commands: list[dict[str, str]],
+    ) -> None:
+        client = self.client or self._create_client()
+        self.client = client
+        for chat_id in chat_ids:
+            await client.set_my_commands(
+                commands=commands,
+                scope={"type": "chat", "chat_id": chat_id},
+            )
+            await client.set_chat_menu_button(chat_id=chat_id)
+
+    async def configure_group_command_menu(
+        self,
+        commands: list[dict[str, str]],
+    ) -> None:
+        client = self.client or self._create_client()
+        self.client = client
+        await client.set_my_commands(
+            commands=commands,
+            scope={"type": "all_group_chats"},
+        )
 
     async def normalize(self, raw: dict) -> Message:
         update_id = int(raw.get("update_id") or 0)
@@ -160,6 +245,7 @@ class TelegramAdapter(BaseAdapter):
             "chat_id": chat_id,
             "chat_type": chat_type,
             "telegram_message_id": telegram_message_id,
+            "telegram_media_group_id": str(message.get("media_group_id") or ""),
             "message_id": f"{chat_id}:{telegram_message_id}" if telegram_message_id else f"update:{update_id}",
             "sender_id": sender_id,
             "sender_name": sender_name,
@@ -175,10 +261,13 @@ class TelegramAdapter(BaseAdapter):
             raw_data["telegram_callback_query"] = True
             raw_data["callback_query_id"] = str(callback.get("id") or "")
         identity = f"{chat_id}:{telegram_message_id}" if telegram_message_id else f"callback:{callback.get('id') if callback else update_id}"
+        if callback:
+            identity = f"callback:{callback.get('id') or update_id}"
+            raw_data["message_id"] = identity
         timestamp = (
             datetime.fromtimestamp(int(message["date"]), tz=UTC).replace(tzinfo=None)
             if message.get("date")
-            else datetime.utcnow()
+            else datetime.now(UTC).replace(tzinfo=None)
         )
         return Message(
             id=identity,
@@ -308,8 +397,23 @@ class TelegramAdapter(BaseAdapter):
         username = self.bot_username.casefold()
         if username and f"@{username}" in text.casefold():
             return True
+        command = self._group_command(text)
+        if command is not None:
+            _, target = command
+            return not target or bool(username and target.casefold() == username)
         entities = message.get("entities") if isinstance(message.get("entities"), list) else []
         return any(str(item.get("type") or "") == "mention" and username and f"@{username}" in text.casefold() for item in entities if isinstance(item, dict))
+
+    @staticmethod
+    def _group_command(text: str) -> tuple[str, str] | None:
+        match = re.match(
+            r"^\s*/(xbot|new|reset|status|help)(?:@([A-Za-z0-9_]+))?(?=\s|$)",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        return match.group(1).lower(), str(match.group(2) or "")
 
     @staticmethod
     def _update_message(raw: dict[str, Any]) -> dict[str, Any]:
@@ -353,7 +457,9 @@ class TelegramAdapter(BaseAdapter):
     def _inline_keyboard(metadata: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(metadata, dict):
             return None
-        value = metadata.get("inline_keyboard") or metadata.get("keyboard")
+        value = metadata.get("inline_keyboard")
+        if value is None:
+            value = metadata.get("keyboard")
         if isinstance(value, dict) and isinstance(value.get("inline_keyboard"), list):
             return value
         if isinstance(value, list):
@@ -364,6 +470,10 @@ class TelegramAdapter(BaseAdapter):
     def _is_markdown_parse_error(exc: TelegramApiError) -> bool:
         message = str(exc).lower()
         return "parse entities" in message or "can't parse" in message or "cant parse" in message
+
+    @staticmethod
+    def _is_message_not_modified(exc: TelegramApiError) -> bool:
+        return "message is not modified" in str(exc).lower()
 
     @staticmethod
     def _split_text(text: str, limit: int) -> list[str]:
@@ -378,8 +488,10 @@ class TelegramAdapter(BaseAdapter):
 
     @staticmethod
     def _extension(kind: str, item: dict[str, Any]) -> str:
-        mime = str(item.get("mime_type") or "")
-        return {"image": ".jpg", "video": ".mp4", "voice": ".ogg", "audio": ".mp3"}.get(kind, Path(str(item.get("file_name") or "")).suffix or (".bin" if not mime else ".bin"))
+        return {"image": ".jpg", "video": ".mp4", "voice": ".ogg", "audio": ".mp3"}.get(
+            kind,
+            Path(str(item.get("file_name") or "")).suffix or ".bin",
+        )
 
     def _create_client(self) -> TelegramBotClient:
         return self.client_factory() if self.client_factory else TelegramBotClient(self.config)

@@ -10,11 +10,11 @@ import asyncio
 import os
 import re
 import subprocess
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 import aiohttp
-
 from loguru import logger
 
 from xbot.messaging.models import Message, Reply
@@ -53,6 +53,8 @@ class WxsphVideoPlugin(PluginBase):
     version = "0.4.4"
 
     def __init__(self) -> None:
+        self._tasks: set[asyncio.Task] = set()
+        self._work_semaphore = asyncio.Semaphore(3)
         self._send_reply_fn = None
         self._enabled = True
         self._session: aiohttp.ClientSession | None = None
@@ -75,6 +77,12 @@ class WxsphVideoPlugin(PluginBase):
         logger.info("<green>WxsphVideoPlugin</green> 已加载 (v{} 视频+音乐)", self.version)
 
     async def on_unload(self) -> None:
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
         if self._session:
             await self._session.close()
         logger.info("<green>WxsphVideoPlugin</green> 已卸载")
@@ -88,7 +96,8 @@ class WxsphVideoPlugin(PluginBase):
             return False
 
         if MP3_CONVERT_TRIGGER.search(content):
-            return await self._convert_quoted_video(message)
+            self._schedule_work(message, lambda: self._convert_quoted_video(message))
+            return True
 
         # 检测链接
         match = LINK_PATTERN.search(content)
@@ -97,6 +106,41 @@ class WxsphVideoPlugin(PluginBase):
 
         share_url = match.group(0).rstrip(".,;!?，。；！？、")
         logger.info("WxsphVideoPlugin 检测到链接: {}", share_url)
+        self._schedule_work(
+            message,
+            lambda: self._process_link(message, content, share_url),
+        )
+        return True
+
+    def _schedule_work(
+        self, message: Message, work: Callable[[], Awaitable[object]]
+    ) -> None:
+        task = asyncio.create_task(
+            self._run_bounded(work),
+            name=f"wxsph-video-{message.id}",
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._on_task_done)
+
+    async def _run_bounded(self, work: Callable[[], Awaitable[object]]) -> None:
+        async with self._work_semaphore:
+            await work()
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "WxsphVideoPlugin 后台任务异常: task={} error_type={}",
+                task.get_name(),
+                type(exc).__name__,
+            )
+
+    async def _process_link(
+        self, message: Message, content: str, share_url: str
+    ) -> None:
 
         # 检测是否深度解析模式
         is_deep_parse = bool(DEEP_PARSE_TRIGGER.match(content))
@@ -116,7 +160,7 @@ class WxsphVideoPlugin(PluginBase):
                         content=f"解析失败，直接点链接看吧：{share_url}",
                     )
                 )
-            return True
+            return
 
         if want_music:
             await self._handle_music(message, video_url, title, cover, music_info)
@@ -124,7 +168,6 @@ class WxsphVideoPlugin(PluginBase):
             await self._handle_deep_parse(message, video_url, title, cover, share_url)
         else:
             await self._send_link_card(message, video_url, title, cover)
-        return True
 
     async def _convert_quoted_video(self, message: Message) -> bool:
         attachment = await self._quoted_video_attachment(message)

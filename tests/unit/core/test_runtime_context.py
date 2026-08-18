@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 import pytest
@@ -9,6 +10,7 @@ from xbot.messaging.models import Message, MessageEnvelope, Reply
 from xbot.plugins.manager import PluginManager
 from xbot.plugins.manifest import PluginManifest, PluginRouting
 from xbot.runtime.context import build_context
+from xbot.runtime.engine import XBotEngine
 
 
 class FakeAdapterRepository:
@@ -55,6 +57,104 @@ async def test_in_memory_message_store():
     recent = await ctx.messages.recent_messages()
     await ctx.storage.close()
     assert recent[-1].content == "hello"
+
+
+def test_context_injects_event_bus_into_plugins():
+    settings = load_settings("configs/xbot.toml")
+    settings.storage.persist_runtime_events = False
+    ctx = build_context(settings)
+
+    assert ctx.plugins._context("echo").events is ctx.events
+    assert ctx.plugins._context("echo").scheduler is ctx.scheduler
+
+
+@pytest.mark.anyio
+async def test_engine_stop_unloads_plugins_before_runtime_stops():
+    settings = load_settings("configs/xbot.toml")
+    settings.plugins.auto_load = False
+    calls = []
+
+    class Plugins:
+        async def unload_all(self):
+            calls.append("plugins")
+
+        def list_plugins(self):
+            return []
+
+    engine = XBotEngine(settings)
+    engine.attach_managers(plugins=Plugins(), skills=None, adapters=None)
+    await engine.start()
+
+    await engine.stop()
+
+    assert calls == ["plugins"]
+
+
+@pytest.mark.anyio
+async def test_engine_stop_quiesces_ingress_before_unloading_plugins():
+    settings = load_settings("configs/xbot.toml")
+    settings.plugins.auto_load = False
+    calls = []
+
+    class Scheduler:
+        async def stop(self):
+            calls.append("scheduler")
+
+    class Adapters:
+        async def stop_all(self):
+            calls.append("adapters")
+
+        def list_adapters(self):
+            return []
+
+    class Plugins:
+        async def unload_all(self):
+            calls.append("plugins")
+
+        def list_plugins(self):
+            return []
+
+    class Agent:
+        async def stop(self):
+            calls.append("agent")
+
+    class Queue:
+        async def close(self):
+            calls.append("queue")
+
+    async def consumer_task():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            calls.append("consumer")
+
+    engine = XBotEngine(settings)
+    engine.attach_managers(plugins=Plugins(), skills=None, adapters=Adapters())
+    engine.attach_agent(Agent())
+    engine.attach_scheduler(Scheduler())
+    engine.attach_messaging(consumer=object(), queue=Queue())
+    engine._status.state = "running"
+    engine._consumer_task = asyncio.create_task(consumer_task())
+    await asyncio.sleep(0)
+
+    await engine.stop()
+
+    assert calls == ["scheduler", "adapters", "consumer", "plugins", "agent", "queue"]
+
+
+@pytest.mark.anyio
+async def test_adapter_registry_rejects_reply_for_unavailable_adapter():
+    settings = load_settings("configs/xbot.toml")
+    registry = AdapterRegistry(settings.adapters)
+    reply = Reply(
+        platform="qq",
+        adapter="missing-adapter",
+        conversation_id="qq:group:test",
+        content="hello",
+    )
+
+    with pytest.raises(RuntimeError, match="missing-adapter"):
+        await registry.send(reply)
 
 
 class FakeMessageRepository:

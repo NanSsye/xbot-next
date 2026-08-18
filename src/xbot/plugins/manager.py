@@ -31,58 +31,94 @@ class PluginManager:
         self._conversations = None
         self._settings = None
         self._adapters = None
+        self._events = None
+        self._scheduler = None
         self._config_cache: dict[str, dict] = {}
 
-    def attach_runtime(self, *, agent=None, send_reply=None, conversations=None, settings=None, adapters=None) -> None:
+    def attach_runtime(
+        self,
+        *,
+        agent=None,
+        send_reply=None,
+        conversations=None,
+        settings=None,
+        adapters=None,
+        events=None,
+        scheduler=None,
+    ) -> None:
         self._agent = agent
         self._send_reply = send_reply
         self._conversations = conversations
         self._settings = settings
         self._adapters = adapters
+        self._events = events
+        self._scheduler = scheduler
 
     async def load_all(self) -> None:
         root = Path(self.config.directory)
         if not await asyncio.to_thread(root.exists):
             return
-        discovered: set[str] = set()
-        self._config_cache.clear()
         plugin_dirs = await asyncio.to_thread(
             lambda: sorted(p for p in root.iterdir() if p.is_dir())
         )
         for plugin_dir in plugin_dirs:
             try:
                 manifest = self.loader.load_manifest(plugin_dir)
-                discovered.add(manifest.name)
-                self._manifests[manifest.name] = manifest
-                self._paths[manifest.name] = plugin_dir
                 persisted_enabled = await self._get_persisted_enabled(manifest.name)
                 enabled = persisted_enabled if persisted_enabled is not None else manifest.enabled
-                await self._persist_manifest(manifest, plugin_dir, enabled)
-                if manifest.name in self._disabled:
-                    continue
+                if manifest.name in self._disabled or not enabled:
+                    await self._persist_manifest(manifest, plugin_dir, enabled)
+                    self._manifests[manifest.name] = manifest
+                    self._paths[manifest.name] = plugin_dir
+                    if manifest.name in self._plugins:
+                        await self._unload_instance(manifest.name)
                 if not enabled:
                     self._disabled.add(manifest.name)
                     continue
+                if manifest.name in self._disabled or manifest.name in self._plugins:
+                    continue
                 instance = self.loader.load_instance(plugin_dir, manifest)
+                self._config_cache.pop(manifest.name, None)
+                try:
+                    await self._call(
+                        instance.on_load,
+                        self._context(manifest.name, plugin_dir),
+                    )
+                    await self._persist_manifest(manifest, plugin_dir, enabled)
+                except Exception:
+                    await self._cleanup_failed_instance(manifest.name, instance)
+                    self._config_cache.pop(manifest.name, None)
+                    raise
+                self._manifests[manifest.name] = manifest
+                self._paths[manifest.name] = plugin_dir
                 self._plugins[manifest.name] = instance
-                await self._call(
-                    instance.on_load,
-                    self._context(manifest.name),
-                )
             except Exception as exc:
                 logger.warning(f"Failed to load plugin {plugin_dir}: {exc}")
-        for name in set(self._manifests) - discovered:
+        for name, path in list(self._paths.items()):
+            if await asyncio.to_thread(path.exists):
+                continue
             await self._unload_instance(name)
             self._manifests.pop(name, None)
             self._paths.pop(name, None)
+            self._disabled.discard(name)
 
     async def reload_all(self) -> None:
-        for name in list(self._plugins):
-            await self._unload_instance(name)
+        existing = list(self._plugins)
         await self.load_all()
+        for name in existing:
+            if name in self._plugins:
+                await self.reload(name)
+
+    async def unload_all(self) -> None:
+        for name in list(self._plugins):
+            try:
+                await self._unload_instance(name)
+            except Exception as exc:
+                self._plugins.pop(name, None)
+                self._config_cache.pop(name, None)
+                logger.exception("Failed to unload plugin {}: {}", name, exc)
 
     async def reload(self, name: str) -> bool:
-        await self._unload_instance(name)
         root = Path(self.config.directory)
         plugin_dir = self._paths.get(name)
         if plugin_dir is None:
@@ -98,23 +134,62 @@ class PluginManager:
                     continue
                 if manifest.name == name:
                     plugin_dir = candidate
-                    self._manifests[name] = manifest
-                    self._paths[name] = candidate
                     break
         if plugin_dir is None:
             return False
         try:
             manifest = self.loader.load_manifest(plugin_dir)
-            self._manifests[name] = manifest
-            self._paths[name] = plugin_dir
+            if manifest.name != name:
+                raise ValueError(
+                    f"Plugin manifest name changed from {name} to {manifest.name}"
+                )
             enabled = await self._get_persisted_enabled(name)
             enabled = manifest.enabled if enabled is None else enabled
-            await self._persist_manifest(manifest, plugin_dir, enabled)
             if not enabled or name in self._disabled:
+                await self._persist_manifest(manifest, plugin_dir, enabled)
+                await self._unload_instance(name)
+                self._manifests[name] = manifest
+                self._paths[name] = plugin_dir
                 return True
             instance = self.loader.load_instance(plugin_dir, manifest)
+            old_instance = self._plugins.get(name)
+            old_manifest = self._manifests.get(name)
+            old_path = self._paths.get(name)
+            missing = object()
+            old_config = self._config_cache.get(name, missing)
+            if old_instance is not None:
+                await self._call(old_instance.on_unload)
+                self._plugins.pop(name, None)
+            self._config_cache.pop(name, None)
+            try:
+                await self._call(instance.on_load, self._context(name, plugin_dir))
+                await self._persist_manifest(manifest, plugin_dir, enabled)
+            except Exception:
+                await self._cleanup_failed_instance(name, instance)
+                self._config_cache.pop(name, None)
+                if old_config is not missing:
+                    self._config_cache[name] = old_config
+                if old_instance is not None:
+                    try:
+                        await self._call(
+                            old_instance.on_load,
+                            self._context(name, old_path),
+                        )
+                        self._plugins[name] = old_instance
+                    except Exception as rollback_exc:
+                        logger.exception(
+                            "Failed to restore plugin {} after reload failure: {}",
+                            name,
+                            rollback_exc,
+                        )
+                if old_manifest is not None:
+                    self._manifests[name] = old_manifest
+                if old_path is not None:
+                    self._paths[name] = old_path
+                raise
             self._plugins[name] = instance
-            await self._call(instance.on_load, self._context(name))
+            self._manifests[name] = manifest
+            self._paths[name] = plugin_dir
             return True
         except Exception as exc:
             logger.warning("Failed to reload plugin {}: {}", name, exc)
@@ -215,12 +290,20 @@ class PluginManager:
         plugin_dir = self._paths.get(name)
         if manifest is None or plugin_dir is None:
             return False
-        self._disabled.discard(name)
-        await self._persist_enabled(name, True)
         if name not in self._plugins:
             instance = self.loader.load_instance(plugin_dir, manifest)
+            self._config_cache.pop(name, None)
+            try:
+                await self._call(instance.on_load, self._context(name, plugin_dir))
+                await self._persist_enabled(name, True)
+            except Exception:
+                await self._cleanup_failed_instance(name, instance)
+                self._config_cache.pop(name, None)
+                raise
             self._plugins[name] = instance
-            await self._call(instance.on_load, self._context(name))
+        else:
+            await self._persist_enabled(name, True)
+        self._disabled.discard(name)
         return True
 
     async def disable(self, name: str) -> bool:
@@ -232,10 +315,18 @@ class PluginManager:
         return True
 
     async def _unload_instance(self, name: str) -> None:
-        instance = self._plugins.pop(name, None)
-        self._config_cache.pop(name, None)
+        instance = self._plugins.get(name)
         if instance is not None:
             await self._call(instance.on_unload)
+            if self._plugins.get(name) is instance:
+                self._plugins.pop(name, None)
+        self._config_cache.pop(name, None)
+
+    async def _cleanup_failed_instance(self, name: str, instance: Any) -> None:
+        try:
+            await self._call(instance.on_unload)
+        except Exception as exc:
+            logger.warning("Failed to clean up plugin {} after load error: {}", name, exc)
 
     async def dispatch_message(self, message: Message) -> None:
         candidates = sorted(
@@ -289,8 +380,8 @@ class PluginManager:
             return await func(*args)
         return await anyio.to_thread.run_sync(lambda: func(*args))
 
-    def _context(self, name: str) -> PluginContext:
-        plugin_dir = Path(self.config.directory) / name
+    def _context(self, name: str, plugin_dir: Path | None = None) -> PluginContext:
+        plugin_dir = plugin_dir or Path(self.config.directory) / name
         return PluginContext(
             name=name,
             data_dir=plugin_dir / "data",
@@ -301,6 +392,8 @@ class PluginManager:
             conversations=self._conversations,
             settings=self._settings,
             adapters=self._adapters,
+            events=self._events,
+            scheduler=self._scheduler,
         )
 
     def _cached_plugin_config(self, plugin_dir: Path, name: str) -> dict:

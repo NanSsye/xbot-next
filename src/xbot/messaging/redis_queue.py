@@ -76,13 +76,17 @@ class RedisMessageQueue(MessageQueue):
             return envelope
 
     async def ack(self, envelope: MessageEnvelope) -> None:
-        redis_id = self._pending_ids.pop(envelope.id, None)
-        if redis_id:
+        redis_id = self._pending_ids.get(envelope.id)
+        if not redis_id:
+            return
+        try:
             await self._redis.xack(self.queue_name, self.group_name, redis_id)
+        finally:
+            if self._pending_ids.get(envelope.id) == redis_id:
+                self._pending_ids.pop(envelope.id, None)
 
     async def requeue(self, envelope: MessageEnvelope) -> None:
-        await self.ack(envelope)
-        await self.publish(envelope)
+        await self._move_to_queue(envelope, self.queue_name)
 
     async def dead_letter(self, envelope: MessageEnvelope) -> None:
         logger.error(
@@ -91,15 +95,10 @@ class RedisMessageQueue(MessageQueue):
             envelope.message.conversation_id,
             envelope.delivery_attempts,
         )
-        await self.ack(envelope)
         if self.dead_letter_queue:
-            await self._redis.xadd(
-                self.dead_letter_queue,
-                {
-                    "id": envelope.id,
-                    "payload": envelope.model_dump_json(),
-                },
-            )
+            await self._move_to_queue(envelope, self.dead_letter_queue)
+        else:
+            await self.ack(envelope)
 
     async def close(self) -> None:
         await self._redis.aclose()
@@ -118,6 +117,23 @@ class RedisMessageQueue(MessageQueue):
             if "BUSYGROUP" not in str(exc):
                 raise
         self._groups_ready = True
+
+    async def _move_to_queue(self, envelope: MessageEnvelope, destination: str) -> None:
+        await self._ensure_group()
+        redis_id = self._pending_ids.get(envelope.id)
+        async with self._redis.pipeline(transaction=True) as pipeline:
+            pipeline.xadd(
+                destination,
+                {
+                    "id": envelope.id,
+                    "payload": envelope.model_dump_json(),
+                },
+            )
+            if redis_id:
+                pipeline.xack(self.queue_name, self.group_name, redis_id)
+            await pipeline.execute()
+        if redis_id and self._pending_ids.get(envelope.id) == redis_id:
+            self._pending_ids.pop(envelope.id, None)
 
     async def _claim_pending(self) -> MessageEnvelope | None:
         claimed = await self._redis.xautoclaim(

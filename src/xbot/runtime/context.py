@@ -8,6 +8,7 @@ from xbot.agent.runtime import AgentRuntime
 from xbot.conversations.manager import ConversationManager
 from xbot.core.config import Settings
 from xbot.core.events import EventBus
+from xbot.knowledge import GroupKnowledgeService
 from xbot.messaging.consumer import MessageConsumer
 from xbot.messaging.dedupe import DedupeService
 from xbot.messaging.message_store import InMemoryMessageStore
@@ -16,6 +17,7 @@ from xbot.messaging.queue import MessageQueue
 from xbot.messaging.queue_factory import create_message_queue
 from xbot.plugins.manager import PluginManager
 from xbot.runtime.engine import XBotEngine
+from xbot.runtime.scheduler import Scheduler
 from xbot.skills.manager import SkillManager
 from xbot.storage.session import Storage
 
@@ -34,6 +36,8 @@ class AppContext:
     consumer: MessageConsumer
     agent: AgentRuntime
     engine: XBotEngine
+    scheduler: Scheduler
+    knowledge: GroupKnowledgeService
 
 
 def build_context(settings: Settings) -> AppContext:
@@ -109,16 +113,33 @@ def build_context(settings: Settings) -> AppContext:
         else None,
     )
     engine = XBotEngine(settings)
+    scheduler = Scheduler(session_factory=storage.session_factory)
+    knowledge = GroupKnowledgeService(
+        session_factory=storage.session_factory,
+        llm_config=settings.agent.llm,
+    )
     engine.attach_managers(plugins=plugins, skills=skills, adapters=adapters)
     engine.attach_storage(storage=storage, message_store=messages)
     engine.attach_agent(agent)
+    engine.attach_scheduler(scheduler)
+    scheduler.attach_reply_sender(engine.deliver_reply)
+    scheduler.register(
+        "group-knowledge-wiki",
+        interval_seconds=60,
+        handler=knowledge.scheduler_tick,
+        source="knowledge",
+        run_immediately=True,
+    )
     agent.attach_reply_sender(engine.send_reply)
+    agent.attach_knowledge(knowledge)
     plugins.attach_runtime(
         agent=agent,
         send_reply=engine.send_reply,
         conversations=conversations,
         settings=settings,
         adapters=adapters,
+        events=events,
+        scheduler=scheduler,
     )
     consumer = MessageConsumer(
         dedupe=DedupeService(),
@@ -150,4 +171,6 @@ def build_context(settings: Settings) -> AppContext:
         consumer=consumer,
         agent=agent,
         engine=engine,
+        scheduler=scheduler,
+        knowledge=knowledge,
     )

@@ -16,6 +16,7 @@ from xbot.adapters.wechat869.client import Wechat869Client
 from xbot.adapters.wechat869.media import Wechat869MediaResolver
 from xbot.core.config import Wechat869AdapterConfig
 from xbot.core.logging import logger
+from xbot.messaging.display_names import clean_sender_name
 from xbot.messaging.models import Message, MessageEnvelope, Reply
 from xbot.messaging.queue import MessageQueue
 
@@ -45,6 +46,8 @@ DISPLAY_NAME_KEYS = (
     "sender_nick_name",
     "ActualNickName",
     "actual_nick_name",
+)
+PUSH_CONTENT_KEYS = (
     "PushContent",
     "push_content",
 )
@@ -702,11 +705,11 @@ class Wechat869Adapter(BaseAdapter):
         return ""
 
     def _extract_sender_name(self, raw: dict, sender_id: str) -> str | None:
-        direct = self._pick_text(raw, DISPLAY_NAME_KEYS)
-        name = self._name_from_push_content(direct)
-        if name and name != sender_id:
-            return name
-        return None
+        direct = clean_sender_name(self._pick_text(raw, DISPLAY_NAME_KEYS), sender_id=sender_id)
+        if direct:
+            return direct
+        push_name = self._name_from_push_content(self._pick_text(raw, PUSH_CONTENT_KEYS))
+        return clean_sender_name(push_name, sender_id=sender_id)
 
     def _name_from_push_content(self, value: str) -> str:
         text = (value or "").strip()

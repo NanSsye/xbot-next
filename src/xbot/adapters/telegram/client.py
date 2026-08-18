@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -12,9 +13,16 @@ from xbot.core.config import TelegramAdapterConfig
 
 
 class TelegramApiError(RuntimeError):
-    def __init__(self, message: str, *, error_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.error_code = error_code
+        self.retry_after = retry_after
 
 
 class TelegramBotClient:
@@ -48,6 +56,29 @@ class TelegramBotClient:
             payload["text"] = text[:200]
         return bool(await self.request("answerCallbackQuery", json=payload))
 
+    async def send_chat_action(self, *, chat_id: str, action: str = "typing") -> bool:
+        return bool(await self.request(
+            "sendChatAction",
+            json={"chat_id": chat_id, "action": action},
+        ))
+
+    async def set_my_commands(
+        self,
+        *,
+        commands: list[dict[str, str]],
+        scope: dict[str, Any],
+    ) -> bool:
+        return bool(await self.request(
+            "setMyCommands",
+            json={"commands": commands, "scope": scope},
+        ))
+
+    async def set_chat_menu_button(self, *, chat_id: str) -> bool:
+        return bool(await self.request(
+            "setChatMenuButton",
+            json={"chat_id": chat_id, "menu_button": {"type": "commands"}},
+        ))
+
     async def send_message(
         self,
         *,
@@ -64,6 +95,27 @@ class TelegramBotClient:
             payload["reply_markup"] = reply_markup
         self._with_reply(payload, reply_to_message_id)
         result = await self.request("sendMessage", json=payload)
+        return result if isinstance(result, dict) else {}
+
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: str,
+        message_id: int,
+        text: str,
+        parse_mode: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        result = await self.request("editMessageText", json=payload)
         return result if isinstance(result, dict) else {}
 
     async def send_media(
@@ -90,7 +142,7 @@ class TelegramBotClient:
             raise TelegramApiError(f"Telegram 不支持媒体类型: {kind}") from exc
         payload: dict[str, Any] = {"chat_id": chat_id}
         if caption:
-            payload["caption"] = caption[:1024]
+            payload["caption"] = caption if parse_mode else caption[:1024]
         if parse_mode:
             payload["parse_mode"] = parse_mode
         self._with_reply(payload, reply_to_message_id)
@@ -130,7 +182,7 @@ class TelegramBotClient:
                 "media": f"attach://media{index}" if is_local else source,
             }
             if index == 0 and caption:
-                item["caption"] = caption[:1024]
+                item["caption"] = caption if parse_mode else caption[:1024]
                 if parse_mode:
                     item["parse_mode"] = parse_mode
             media.append(item)
@@ -190,16 +242,37 @@ class TelegramBotClient:
         session = await self._get_session()
         timeout = aiohttp.ClientTimeout(total=request_timeout or max(5.0, float(self.config.connect_timeout_seconds)))
         try:
-            async with session.post(self._api_url(method), timeout=timeout, **kwargs) as response:
-                try:
-                    payload = await response.json(content_type=None)
-                except (aiohttp.ContentTypeError, ValueError):
-                    raise TelegramApiError(f"Telegram {method} 返回了无效响应", error_code=response.status) from None
-                if not isinstance(payload, dict) or not payload.get("ok"):
+            for attempt in range(2):
+                async with session.post(self._api_url(method), timeout=timeout, **kwargs) as response:
+                    try:
+                        payload = await response.json(content_type=None)
+                    except (aiohttp.ContentTypeError, ValueError):
+                        raise TelegramApiError(f"Telegram {method} 返回了无效响应", error_code=response.status) from None
+                    if isinstance(payload, dict) and payload.get("ok"):
+                        return payload.get("result")
                     description = str(payload.get("description") or "Bot API 调用失败") if isinstance(payload, dict) else "Bot API 调用失败"
-                    error_code = payload.get("error_code") if isinstance(payload, dict) else response.status
-                    raise TelegramApiError(f"Telegram {method} 失败: {description}", error_code=int(error_code) if error_code else None)
-                return payload.get("result")
+                    error_code = (
+                        payload.get("error_code") or response.status
+                        if isinstance(payload, dict)
+                        else response.status
+                    )
+                    parameters = payload.get("parameters") if isinstance(payload, dict) else None
+                    retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
+                    retry_seconds = float(retry_after) if isinstance(retry_after, (int, float)) else None
+                    if (
+                        int(error_code or 0) == 429
+                        and retry_seconds is not None
+                        and attempt == 0
+                        and "json" in kwargs
+                    ):
+                        await asyncio.sleep(min(30.0, max(0.1, retry_seconds)))
+                        continue
+                    raise TelegramApiError(
+                        f"Telegram {method} 失败: {description}",
+                        error_code=int(error_code) if error_code else None,
+                        retry_after=retry_seconds,
+                    )
+            raise TelegramApiError(f"Telegram {method} 请求失败")
         except TelegramApiError:
             raise
         except (aiohttp.ClientError, TimeoutError):

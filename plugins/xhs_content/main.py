@@ -45,6 +45,8 @@ class XhsContentPlugin(PluginBase):
     version = "0.1.0"
 
     def __init__(self) -> None:
+        self._tasks: set[asyncio.Task] = set()
+        self._work_semaphore = asyncio.Semaphore(3)
         self._session: aiohttp.ClientSession | None = None
         self._send_reply = None
         self._data_dir = Path("data/plugins/xhs_content")
@@ -79,6 +81,12 @@ class XhsContentPlugin(PluginBase):
         )
 
     async def on_unload(self) -> None:
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
         if self._session and not self._session.closed:
             await self._session.close()
         self._session = None
@@ -87,10 +95,25 @@ class XhsContentPlugin(PluginBase):
         match = XHS_LINK.search(message.content or "")
         if not match:
             return False
+        task = asyncio.create_task(
+            self._run_bounded(message, match.group(0)),
+            name=f"xhs-content-{message.id}",
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._on_task_done)
+        return True
+
+    async def _run_bounded(self, message: Message, matched_url: str) -> None:
+        async with self._work_semaphore:
+            await self._process_message(message, matched_url)
+
+    async def _process_message(self, message: Message, matched_url: str) -> None:
         started = time.monotonic()
         work_id = "unknown"
         try:
-            source_url = self._validate_url(match.group(0).rstrip(".,;!?，。；！？、"), ALLOWED_LINK_HOSTS)
+            source_url = self._validate_url(
+                matched_url.rstrip(".,;!?，。；！？、"), ALLOWED_LINK_HOSTS
+            )
             resolved_url = await self._resolve_share_url(source_url)
             data = await self._parse_detail(resolved_url)
             work_id = self._work_id(data)
@@ -120,7 +143,18 @@ class XhsContentPlugin(PluginBase):
                 int((time.monotonic() - started) * 1000),
             )
             await self._send_text(message, "小红书解析服务暂时不可用，请稍后再试。")
-        return True
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "XhsContentPlugin 后台任务异常: task={} error_type={}",
+                task.get_name(),
+                type(exc).__name__,
+            )
 
     async def _parse_detail(self, url: str) -> dict[str, Any]:
         if not self._base_url or not self._api_token:

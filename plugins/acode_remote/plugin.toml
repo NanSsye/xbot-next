@@ -1,0 +1,21 @@
+name = "acode_remote"
+version = "0.4.1"
+entry = "main:AcodeRemotePlugin"
+author = "xbot"
+description = "Telegram private-chat selector and bridge for existing aCode/Codex tasks."
+enabled = true
+
+[routing]
+enabled = true
+priority = 9000
+fallback = false
+exclusive = false
+message_types = ["text", "image", "file", "video", "voice", "event"]
+platforms = ["telegram"]
+adapters = ["telegram"]
+scopes = ["private"]
+
+[permissions]
+network = true
+filesystem = true
+admin = true

@@ -179,9 +179,9 @@ class AdapterRegistry:
 
     async def send(self, reply: Reply) -> object | None:
         adapter = self._adapters.get(reply.adapter)
-        if adapter:
-            return await adapter.send(reply)
-        return None
+        if adapter is None:
+            raise RuntimeError(f"Reply adapter is unavailable: {reply.adapter}")
+        return await adapter.send(reply)
 
     def _effective_enabled(self, name: str) -> bool:
         if name in self._enabled_overrides:

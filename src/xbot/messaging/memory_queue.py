@@ -24,6 +24,7 @@ class MemoryMessageQueue(MessageQueue):
 
     async def requeue(self, envelope: MessageEnvelope) -> None:
         await self._queue.put(envelope)
+        self._queue.task_done()
 
     async def dead_letter(self, envelope: MessageEnvelope) -> None:
         logger.error(
@@ -32,3 +33,4 @@ class MemoryMessageQueue(MessageQueue):
             envelope.message.conversation_id,
             envelope.delivery_attempts,
         )
+        self._queue.task_done()

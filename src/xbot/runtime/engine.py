@@ -23,6 +23,7 @@ class XBotEngine:
         self._consumer_task: asyncio.Task | None = None
         self._restart_task: asyncio.Task | None = None
         self._agent = None
+        self._scheduler = None
 
     def attach_managers(self, plugins, skills, adapters) -> None:
         self._plugins = plugins
@@ -40,6 +41,9 @@ class XBotEngine:
     def attach_agent(self, agent) -> None:
         self._agent = agent
 
+    def attach_scheduler(self, scheduler) -> None:
+        self._scheduler = scheduler
+
     async def start(self) -> None:
         if self._status.state == "running":
             return
@@ -52,6 +56,8 @@ class XBotEngine:
             await self._agent.start()
         if self._adapters:
             await self._adapters.start_enabled()
+        if self._scheduler:
+            await self._scheduler.start()
         if self._consumer and self._queue and self._consumer_task is None:
             self._start_consumer_task()
         self._status.state = "running"
@@ -64,15 +70,24 @@ class XBotEngine:
             self._status.state = "stopped"
             return
         self._status.state = "stopping"
-        if self._agent:
-            await self._agent.stop()
+        if self._scheduler:
+            await self._scheduler.stop()
         if self._adapters:
             await self._adapters.stop_all()
+        if self._restart_task:
+            self._restart_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._restart_task
+            self._restart_task = None
         if self._consumer_task:
             self._consumer_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._consumer_task
             self._consumer_task = None
+        if self._plugins:
+            await self._plugins.unload_all()
+        if self._agent:
+            await self._agent.stop()
         if self._queue:
             await self._queue.close()
         self._status.state = "stopped"
@@ -94,6 +109,9 @@ class XBotEngine:
         elif self._storage and self.settings.storage.persist_runtime_events:
             async with self._storage.session_factory() as session, session.begin():
                 await self._storage.messages(session).save_reply(reply)
+        return await self.deliver_reply(reply)
+
+    async def deliver_reply(self, reply) -> object | None:
         if self._adapters:
             return await self._adapters.send(reply)
         return None

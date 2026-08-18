@@ -12,6 +12,7 @@ from xbot.agent.hermes_runtime import (
     _configure_hermes_auxiliary_client,
     _ensure_hermes_home_files,
     _ensure_hermes_import_path,
+    _group_persona_identity_override,
     _permission_profile_for_source,
     _restore_session_history,
     _session_id_for_source,
@@ -95,7 +96,15 @@ def test_permission_scoped_channel_source_selects_hermes_toolsets():
         "wechat",
         "weiban-readonly",
         "weiban-knowledge",
+        "artifacts",
     ]
+
+
+def test_group_persona_replaces_soul_identity_without_wrapper():
+    prompt = _group_persona_identity_override({"group_persona_prompt": " 你叫小法，回答简洁。 "})
+
+    assert prompt == "你叫小法，回答简洁。"
+    assert _group_persona_identity_override({}) is None
     assert "file" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "terminal" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
     assert "wechat" in _toolsets_for_source("channel:wechat:wechat869:group@chatroom:member")
@@ -108,6 +117,7 @@ def test_permission_scoped_channel_source_selects_hermes_toolsets():
         "weiban-readonly",
         "weiban-knowledge",
         "weiban-admin",
+        "artifacts",
     ]
 
 
@@ -130,6 +140,8 @@ def test_permission_scoped_channel_source_shares_hermes_session_with_allowed_sou
         "wechat",
         "weiban-readonly",
         "weiban-knowledge",
+        "weiban-admin",
+        "artifacts",
     ]
 
 
@@ -199,6 +211,7 @@ def test_weiban_readonly_tool_is_registered_for_every_permission_profile():
         "wechat_send_music_card",
         "weiban_query_account",
         "weiban_search_knowledge",
+        "artifact_create",
     }
 
 
@@ -241,6 +254,7 @@ async def test_guest_runtime_uses_direct_policy_filtered_tools_without_deferred_
             {"function": {"name": "qq_recall"}},
             {"function": {"name": "qq_react"}},
             {"function": {"name": "weiban_query_account"}},
+            {"function": {"name": "artifact_create"}},
             {"function": {"name": "tool_search"}},
             {"function": {"name": "tool_describe"}},
             {"function": {"name": "tool_call"}},
@@ -285,11 +299,13 @@ async def test_guest_runtime_uses_direct_policy_filtered_tools_without_deferred_
         "qq_send_text",
         "qq_send_markdown",
         "weiban_query_account",
+        "artifact_create",
     }
     assert guest_agent.valid_tool_names == {
         "qq_send_text",
         "qq_send_markdown",
         "weiban_query_account",
+        "artifact_create",
     }
     assert {item["function"]["name"] for item in member_agent.tools} == {
         "tool_search",
@@ -301,7 +317,9 @@ async def test_guest_runtime_uses_direct_policy_filtered_tools_without_deferred_
         "tool_describe",
         "tool_call",
     }
-    assert tool_definition_calls == [(["qq", "weiban-readonly"], True, True)]
+    assert tool_definition_calls == [
+        (["qq", "weiban-readonly", "weiban-knowledge", "artifacts"], True, True),
+    ]
 
 
 def test_hermes_sqlite_gate_rejects_vulnerable_runtime(monkeypatch):
@@ -342,11 +360,14 @@ def test_upgraded_hermes_aiagent_constructor_contract(tmp_path, monkeypatch):
             skip_context_files=True,
             skip_memory=True,
         )
+        agent._soul_identity_override = "你叫小球子。"
+        stable_prompt = agent._build_system_prompt_parts()["stable"]
     finally:
         session_db.close()
 
     assert agent.session_id == "xbot-constructor-contract"
     assert agent.enabled_toolsets == ["wechat"]
+    assert stable_prompt.startswith("你叫小球子。")
 
 
 def test_upgraded_hermes_auxiliary_client_contract():
@@ -523,6 +544,31 @@ def test_member_tool_policy_limits_files_to_workspace(tmp_path, monkeypatch):
     assert "授权工作目录外" in denial
 
 
+def test_member_tool_policy_allows_only_current_message_attachment(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    media_dir = tmp_path / "data" / "wechat869" / "media"
+    media_dir.mkdir(parents=True)
+    current_attachment = media_dir / "current.docx"
+    current_attachment.write_bytes(b"docx")
+    unrelated_attachment = media_dir / "other.docx"
+    unrelated_attachment.write_bytes(b"other")
+    config = AgentConfig()
+    policy = _tool_policy_for_source(
+        config,
+        "channel:wechat:wechat869:user:member",
+        attachments=[{"local_path": "data/wechat869/media/current.docx"}],
+    )
+
+    assert _tool_policy_denial(
+        "read_file", {"path": "data/wechat869/media/current.docx"}, policy,
+    ) is None
+    denial = _tool_policy_denial(
+        "read_file", {"path": "data/wechat869/media/other.docx"}, policy,
+    )
+    assert denial
+    assert "授权工作目录外" in denial
+
+
 def test_guest_policy_allows_only_wechat_send_tools():
     policy = {"profile": "guest"}
     assert _tool_policy_denial("wechat_send_text", {"text": "hi"}, policy) is None
@@ -534,6 +580,7 @@ def test_guest_policy_allows_only_wechat_send_tools():
     assert _tool_policy_denial("wechat_send_music_card", {"music_url": "https://example.com/a.mp3"}, policy) is None
     assert _tool_policy_denial("weiban_query_account", {"email": "user@example.com"}, policy) is None
     assert _tool_policy_denial("weiban_search_knowledge", {"query": "怎么绑定"}, policy) is None
+    assert _tool_policy_denial("artifact_create", {"format": "docx", "filename": "a.docx"}, policy) is None
     assert _tool_policy_denial("read_file", {"path": "a.txt"}, policy)
     assert _tool_policy_denial("terminal", {"command": "dir"}, policy)
     assert _tool_policy_denial("weiban_update_account", {"email": "user@example.com"}, policy)

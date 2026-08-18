@@ -102,6 +102,7 @@ async def test_consumer_requeues_after_storage_failure_then_succeeds():
     try:
         await queue.publish(_envelope(_message("retry-ok")))
         await asyncio.wait_for(_until(lambda: engine.dispatched == ["retry-ok"]), timeout=2)
+        await asyncio.wait_for(queue._queue.join(), timeout=1)
         assert conversations.calls == 2
         assert dedupe.forgotten == ["wechat:wechat869:retry-ok", "wechat:wechat869:retry-ok"]
     finally:
@@ -168,6 +169,43 @@ async def test_consumer_skips_duplicate_without_processing():
 
 
 @pytest.mark.anyio
+async def test_consumer_acknowledges_processed_and_duplicate_messages():
+    class TrackingQueue:
+        def __init__(self):
+            self.acked = []
+
+        async def ack(self, envelope):
+            self.acked.append(envelope.id)
+
+    queue = TrackingQueue()
+    consumer = MessageConsumer(
+        dedupe=DedupeService(),
+        pipeline=FakePipeline(),
+        conversations=OkConversations(),
+        engine=OkEngine(),
+        per_conversation_serial=False,
+    )
+    envelope = _envelope(_message("ack-once"))
+
+    await consumer._handle_and_ack(queue, envelope)
+    await consumer._handle_and_ack(queue, envelope)
+
+    assert queue.acked == [envelope.id, envelope.id]
+
+
+@pytest.mark.anyio
+async def test_memory_queue_dead_letter_completes_consumed_item():
+    queue = MemoryMessageQueue()
+    envelope = _envelope(_message("dead-letter-accounting"))
+    await queue.publish(envelope)
+
+    consumed = await queue.consume()
+    await queue.dead_letter(consumed)
+
+    await asyncio.wait_for(queue._queue.join(), timeout=1)
+
+
+@pytest.mark.anyio
 async def test_consumer_timeout_requeues_message():
     queue = MemoryMessageQueue()
     requeued = []
@@ -218,3 +256,5 @@ async def test_consumer_event_publish_does_not_block_dispatch():
     await consumer.handle(envelope)
     assert engine.dispatched == ["event-not-blocking"]
     assert not slow.is_set()
+    await consumer._cancel_active_tasks()
+    assert consumer._event_tasks == set()
