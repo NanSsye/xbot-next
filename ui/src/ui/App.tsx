@@ -1,6 +1,7 @@
 import {
   Activity,
   Bot,
+  BookOpenText,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
@@ -8,25 +9,34 @@ import {
   Clock3,
   FileText,
   LogIn,
+  MessageCircle,
   ShieldAlert,
   Monitor,
   MessagesSquare,
   Moon,
   Network,
   Package,
+  PanelLeft,
+  Paperclip,
   Pause,
   Play,
+  Plus,
   QrCode,
   RefreshCw,
   RotateCcw,
+  Scissors,
   Search,
   Send,
   Settings,
+  Settings2,
+  Smile,
   Sparkles,
   Sun,
   Trash2,
+  UserRound,
   Users,
   Wrench,
+  X,
   XCircle,
 } from "lucide-react";
 import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,13 +61,15 @@ import type {
   SystemStatus,
   UiEvent,
   WechatConversation,
+  WechatGroupPersona,
   WechatMember,
   WechatMessage,
   WechatUserDetail,
 } from "../types";
 import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
+import { KnowledgeCenter } from "./KnowledgeCenter";
 
-type View = "agentChat" | "chat" | "wechat" | "profiles" | "groupOps" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
+type View = "agentChat" | "chat" | "wechat" | "profiles" | "groupOps" | "knowledge" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
 type DeliveryMode = "console" | "channel";
 type ThemeMode = "system" | "light" | "dark";
 type ConsoleMessage = {
@@ -75,6 +87,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof MessagesSquare }> 
   { id: "wechat", label: "微信", icon: MessagesSquare },
   { id: "profiles", label: "画像", icon: Users },
   { id: "groupOps", label: "群管", icon: ShieldAlert },
+  { id: "knowledge", label: "知识库", icon: BookOpenText },
   { id: "overview", label: "总览", icon: Activity },
   { id: "agent", label: "Agent", icon: Bot },
   { id: "tasks", label: "任务", icon: Activity },
@@ -1073,6 +1086,7 @@ export function App() {
         {view === "settings" && (
           <SettingsView onConfigApplied={handleConfigApplied} />
         )}
+        {view === "knowledge" && <KnowledgeCenter />}
         </PageErrorBoundary>
       </main>
     </div>
@@ -1621,9 +1635,18 @@ function WechatWorkbench(props: {
   const [syncing, setSyncing] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [groupPersona, setGroupPersona] = useState<WechatGroupPersona | null>(null);
+  const [personaEnabled, setPersonaEnabled] = useState(false);
+  const [personaDraft, setPersonaDraft] = useState("");
+  const [personaLoading, setPersonaLoading] = useState(false);
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaError, setPersonaError] = useState("");
+  const [personaNotice, setPersonaNotice] = useState("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const selectedConversation = props.conversations.find((item) => item.id === props.selectedConversationId);
+  const selectedIsGroup = selectedConversation?.scope === "group";
+  const personaTooLong = personaDraft.length > 8000;
   const members = props.members;
   const forceScrollBottom = useCallback(() => {
     const node = messageListRef.current;
@@ -1636,6 +1659,35 @@ function WechatWorkbench(props: {
     const timer = window.setTimeout(forceScrollBottom, 120);
     return () => { window.cancelAnimationFrame(raf); window.clearTimeout(timer); };
   }, [props.messages.length, props.selectedConversationId, forceScrollBottom]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!props.selectedConversationId || !selectedIsGroup) {
+      setGroupPersona(null);
+      setPersonaEnabled(false);
+      setPersonaDraft("");
+      setPersonaLoading(false);
+      setPersonaError("");
+      setPersonaNotice("");
+      return () => { cancelled = true; };
+    }
+    setPersonaLoading(true);
+    setPersonaError("");
+    setPersonaNotice("");
+    void api.wechatGroupPersona(props.selectedConversationId)
+      .then((persona) => {
+        if (cancelled) return;
+        setGroupPersona(persona);
+        setPersonaEnabled(persona.enabled);
+        setPersonaDraft(persona.prompt);
+      })
+      .catch((error) => {
+        if (!cancelled) setPersonaError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setPersonaLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [props.selectedConversationId, selectedIsGroup]);
   async function submitWechat() {
     if (!props.selectedConversationId || sending || (!draft.trim() && !file)) return;
     setSending(true);
@@ -1665,13 +1717,56 @@ function WechatWorkbench(props: {
       setSyncing(false);
     }
   }
+
+  async function saveGroupPersona(enabled = personaEnabled) {
+    if (!props.selectedConversationId || personaSaving) return;
+    const prompt = personaDraft.trim();
+    if (personaTooLong) {
+      setPersonaError(`人设内容超出上限 ${personaDraft.length - 8000} 个字，请删减后再保存。`);
+      return;
+    }
+    if (enabled && !prompt) {
+      setPersonaError("启用群专属人设前，请先填写人设内容。");
+      return;
+    }
+    setPersonaSaving(true);
+    setPersonaError("");
+    setPersonaNotice("");
+    try {
+      const persona = await api.updateWechatGroupPersona(props.selectedConversationId, { enabled, prompt });
+      setGroupPersona(persona);
+      setPersonaEnabled(persona.enabled);
+      setPersonaDraft(persona.prompt);
+      setPersonaNotice(persona.enabled ? "群专属人设已保存，下一条消息立即生效。" : "已恢复全局人设，下一条消息立即生效。");
+    } catch (error) {
+      setPersonaError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPersonaSaving(false);
+    }
+  }
+
+  async function resetGroupPersonaSession() {
+    if (!props.selectedConversationId || personaSaving) return;
+    if (!window.confirm("确定清空这个群的 Agent 历史会话吗？群人设配置会保留。")) return;
+    setPersonaSaving(true);
+    setPersonaError("");
+    setPersonaNotice("");
+    try {
+      await api.resetWechatGroupPersonaSession(props.selectedConversationId);
+      setPersonaNotice("本群历史会话已清空，下一条消息会以当前人设开启新会话。");
+    } catch (error) {
+      setPersonaError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPersonaSaving(false);
+    }
+  }
   return (
     <section className={`wechat-page ${detailOpen ? "wechat-page--detail" : ""} ${drawerOpen ? "wechat-page--drawer-open" : ""}`}>
       <aside className="wechat-rail">
         <div className="wechat-avatar">微</div>
-        <div className="wechat-rail__icon active">💬</div>
-        <div className="wechat-rail__icon">👥</div>
-        <div className="wechat-rail__icon">⚙</div>
+        <div className="wechat-rail__icon active" title="会话"><MessageCircle size={19} strokeWidth={2} /></div>
+        <div className="wechat-rail__icon" title="联系人"><UserRound size={19} strokeWidth={2} /></div>
+        <div className="wechat-rail__icon" title="设置"><Settings2 size={19} strokeWidth={2} /></div>
       </aside>
       {drawerOpen || detailOpen ? <button className="wechat-drawer-backdrop" onClick={() => { setDrawerOpen(false); setDetailOpen(false); }} aria-label="关闭抽屉" /> : null}
       <aside className="wechat-sessions">
@@ -1691,21 +1786,21 @@ function WechatWorkbench(props: {
       </aside>
       <main className="wechat-chat">
         <header className="wechat-chat__header">
-          <button className="wechat-drawer-button" onClick={() => setDrawerOpen(true)}>会话</button>
-          <div><b>{selectedConversation ? conversationTitle(selectedConversation) : "请选择微信会话"}</b>{selectedConversation?.scope === "group" ? <span>（{members.length}）</span> : null}</div>
+          <button className="wechat-drawer-button" onClick={() => setDrawerOpen(true)}><PanelLeft size={17} />会话</button>
+          <div className="wechat-chat__title"><b>{selectedConversation ? conversationTitle(selectedConversation) : "请选择微信会话"}</b>{selectedConversation?.scope === "group" ? <span>（{members.length}）</span> : null}</div>
           <div className="wechat-header-actions">
-            <button className="wechat-more" disabled={syncing} onClick={() => void syncWechat()}>{syncing ? "同步中" : "同步"}</button>
-            <button className="wechat-more" onClick={() => setDetailOpen((v) => !v)}>•••</button>
+            <button className="wechat-header-button" disabled={syncing} onClick={() => void syncWechat()}><RefreshCw size={16} />{syncing ? "同步中" : "同步"}</button>
+            <button className="wechat-header-button wechat-header-button--icon" aria-label={detailOpen ? "关闭会话详情" : "打开会话详情"} title={detailOpen ? "关闭会话详情" : "打开会话详情"} onClick={() => setDetailOpen((v) => !v)}><Settings2 size={18} /></button>
           </div>
         </header>
         <div className="wechat-message-list" ref={messageListRef}>
           {props.messages.length ? props.messages.map((message) => <WechatMessage key={`${message.id}-${message.timestamp}`} message={message} />) : <EmptyState title="暂无聊天记录" text="选择左侧微信会话后展示消息。" />}<div ref={messageEndRef} />
         </div>
         <footer className="wechat-input">
-          <button className="wechat-emoji-toggle" type="button" onClick={() => setEmojiOpen((value) => !value)}>😊</button>
+          <button className="wechat-emoji-toggle" type="button" aria-label="选择表情" title="选择表情" onClick={() => setEmojiOpen((value) => !value)}><Smile size={20} /></button>
           {emojiOpen ? <div className="wechat-emoji-panel">{QUICK_EMOJIS.map((emoji) => <button key={emoji} type="button" onClick={() => pickEmoji(emoji)}>{emoji}</button>)}</div> : null}
-          <label className={`wechat-file-button ${file ? "wechat-file-button--active" : ""}`}>📁<input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
-          {file ? <button className="wechat-file-chip" type="button" title="移除文件" onClick={() => setFile(null)}>{file.name} ×</button> : <span className="wechat-cut">✂</span>}
+          <label className={`wechat-file-button ${file ? "wechat-file-button--active" : ""}`} title="选择文件"><Paperclip size={19} /><span className="sr-only">选择文件</span><input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
+          {file ? <button className="wechat-file-chip" type="button" title="移除文件" onClick={() => setFile(null)}><span>{file.name}</span><X size={14} /></button> : <span className="wechat-cut" title="剪切板"><Scissors size={18} /></span>}
           <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入消息/表情，Enter 发送" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) void submitWechat(); }} />
           <button className="wechat-send-button" disabled={sending || (!draft.trim() && !file)} onClick={() => void submitWechat()}>{sending ? "发送中" : "发送"}</button>
         </footer>
@@ -1719,11 +1814,49 @@ function WechatWorkbench(props: {
                 <WechatAvatar className="wechat-member__avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><span>{member.nickname || member.user_id}</span>
               </button>
             ))}
-            <button className="wechat-member"><div className="wechat-member__avatar dashed">＋</div><span>添加</span></button>
+            <button className="wechat-member"><div className="wechat-member__avatar dashed"><Plus size={20} /></div><span>添加</span></button>
           </div>
           <div className="wechat-info-row"><b>群聊名称</b><span>{selectedConversation ? conversationTitle(selectedConversation) : "-"}</span></div>
           <div className="wechat-info-row"><b>群ID</b><span>{selectedConversation?.raw_id || "-"}</span></div>
-          <div className="wechat-info-row"><b>查找聊天内容</b><span>›</span></div>
+          {selectedIsGroup ? (
+            <section className="wechat-persona-card">
+              <div className="wechat-persona-card__head">
+                <div><b>群专属人设</b><small>启用后替换全局人设，下一条消息立即生效</small></div>
+                <span className={personaEnabled ? "is-enabled" : ""}>{personaEnabled ? "已启用" : "全局人设"}</span>
+              </div>
+              {personaLoading ? <p className="wechat-persona-card__hint">正在读取人设配置…</p> : (
+                <>
+                  <label className="wechat-persona-toggle">
+                    <input type="checkbox" checked={personaEnabled} onChange={(event) => { setPersonaEnabled(event.target.checked); setPersonaNotice(""); setPersonaError(""); }} />
+                    <span>使用本群人设替换全局人设</span>
+                  </label>
+                  <label className="wechat-persona-card__label" htmlFor="wechat-group-persona">人设内容</label>
+                  <textarea
+                    id="wechat-group-persona"
+                    value={personaDraft}
+                    aria-invalid={personaTooLong || Boolean(personaError)}
+                    aria-describedby="wechat-group-persona-meta wechat-group-persona-status"
+                    onChange={(event) => { setPersonaDraft(event.target.value); setPersonaNotice(""); setPersonaError(""); }}
+                    placeholder="例如：你叫小传，是本群的专业法律顾问。回答简洁、严谨，先给结论，再说明依据；不确定时明确说明，不编造法律条文。"
+                  />
+                  <div id="wechat-group-persona-meta" className={`wechat-persona-card__meta ${personaTooLong ? "is-over-limit" : ""}`}>
+                    <span>{personaDraft.length} / 8000 字{personaTooLong ? `，超出 ${personaDraft.length - 8000} 字` : ""}</span>
+                    {groupPersona?.updated_at ? <span>更新于 {formatDate(groupPersona.updated_at)}</span> : null}
+                  </div>
+                  <div id="wechat-group-persona-status" className="wechat-persona-card__status" aria-live="polite" aria-atomic="true">
+                    {personaTooLong || personaError ? <p className="wechat-persona-card__error">{personaTooLong ? `请删减 ${personaDraft.length - 8000} 个字后再保存。` : personaError}</p> : null}
+                    {!personaTooLong && !personaError && personaNotice ? <p className="wechat-persona-card__success">{personaNotice}</p> : null}
+                  </div>
+                  <div className="wechat-persona-card__actions">
+                    <button type="button" disabled={personaSaving || personaTooLong} onClick={() => void saveGroupPersona()}>{personaSaving ? "保存中" : "保存并生效"}</button>
+                    <button type="button" disabled={personaSaving || personaTooLong || !groupPersona?.enabled} onClick={() => void saveGroupPersona(false)}>恢复全局</button>
+                    <button type="button" disabled={personaSaving} onClick={() => void resetGroupPersonaSession()}>清空本群会话</button>
+                  </div>
+                </>
+              )}
+            </section>
+          ) : null}
+          <div className="wechat-info-row wechat-info-row--action"><b>查找聊天内容</b><ChevronRight size={18} /></div>
         </aside>
       ) : null}
       {props.userDetail ? <WechatMemberModal detail={props.userDetail} onClose={props.clearUser} /> : null}
@@ -1794,7 +1927,7 @@ function ProfileEditModal({
   return (
     <div className="wechat-modal-backdrop" onClick={onClose}>
       <div className="wechat-modal profile-edit-modal" onClick={(event) => event.stopPropagation()}>
-        <button className="wechat-modal__close" onClick={onClose}>×</button>
+        <button className="wechat-modal__close" aria-label="关闭" title="关闭" onClick={onClose}><X size={20} /></button>
         <div className="wechat-profile-head"><WechatAvatar className="wechat-profile-avatar" src={member.avatar_url || detail?.contact.avatar_url} text={name} /><div><h3>编辑画像</h3><p>{name} · {member.user_id}</p></div></div>
         <label className="profile-edit-field"><span>用户画像</span><textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="输入/修改用户画像" /></label>
         <label className="profile-edit-field"><span>标签</span><input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="多个标签用逗号分隔，例如：活跃, 潜在客户" /></label>
@@ -1810,7 +1943,7 @@ function WechatMemberModal({ detail, onClose }: { detail: WechatUserDetail; onCl
   return (
     <div className="wechat-modal-backdrop" onClick={onClose}>
       <div className="wechat-modal" onClick={(event) => event.stopPropagation()}>
-        <button className="wechat-modal__close" onClick={onClose}>×</button>
+        <button className="wechat-modal__close" aria-label="关闭" title="关闭" onClick={onClose}><X size={20} /></button>
         <div className="wechat-profile-head"><WechatAvatar className="wechat-profile-avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><div><h3>{member.nickname || member.user_id}</h3><p>{member.user_id}</p></div></div>
         <div className="wechat-profile-stats"><span>发言 {detail.stats.message_count}</span><span>图片 {detail.stats.image_count}</span><span>标签 {detail.profile.tags.length}</span></div>
         <section><b>AI 用户画像</b><p>{detail.profile.summary}</p><div className="wechat-tags">{detail.profile.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></section>

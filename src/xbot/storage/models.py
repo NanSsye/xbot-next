@@ -188,6 +188,9 @@ class ConversationRecord(Base):
     raw_id: Mapped[str] = mapped_column(String(256), index=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_persona_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    agent_persona_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_persona_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -298,4 +301,86 @@ class UserProfileRecord(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     tags_json: Mapped[str] = mapped_column(Text, default="[]")
     stats_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class GroupKnowledgeBaseRecord(Base):
+    __tablename__ = "group_knowledge_bases"
+
+    conversation_id: Mapped[str] = mapped_column(String(512), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=43200)
+    cursor_record_id: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(32), default="idle", index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    person_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class GroupKnowledgeRunRecord(Base):
+    __tablename__ = "group_knowledge_runs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_group_knowledge_run_idempotency"),
+        Index("ix_group_knowledge_runs_conversation_started", "conversation_id", "started_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(512), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    from_cursor: Mapped[int] = mapped_column(Integer, default=0)
+    to_cursor: Mapped[int] = mapped_column(Integer, default=0)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    page_change_count: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class GroupKnowledgeSourceRecord(Base):
+    __tablename__ = "group_knowledge_sources"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "source_type", "source_key", name="uq_group_knowledge_source_scope"),
+        Index("ix_group_knowledge_sources_conversation_created", "conversation_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(512), index=True)
+    source_type: Mapped[str] = mapped_column(String(32), index=True)
+    source_key: Mapped[str] = mapped_column(String(512))
+    message_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(String(EXTERNAL_MESSAGE_ID_LENGTH), nullable=True)
+    attachment_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    sha256: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    relative_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    extract_status: Mapped[str] = mapped_column(String(32), default="ready")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class GroupKnowledgePageRecord(Base):
+    __tablename__ = "group_knowledge_pages"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "relative_path", name="uq_group_knowledge_page_path"),
+        Index("ix_group_knowledge_pages_conversation_updated", "conversation_id", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(512), index=True)
+    relative_path: Mapped[str] = mapped_column(String(1024))
+    title: Mapped[str] = mapped_column(String(512), index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    source_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    content_hash: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

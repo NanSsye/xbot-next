@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import hashlib
 import ipaddress
 import json
 import os
@@ -38,6 +39,7 @@ _MEMBER_TOOLSETS = [
     "session_search",
     "clarify",
     "vision",
+    "artifacts",
 ]
 
 _MEMBER_DENIED_TOOLS = {
@@ -191,6 +193,7 @@ def _ensure_hermes_import_path() -> Path:
     vendor_text = str(vendor_dir)
     if vendor_text not in sys.path:
         sys.path.insert(0, vendor_text)
+    from xbot.agent.tools.hermes_artifacts import register_xbot_artifact_tools
     from xbot.agent.tools.hermes_qq import register_xbot_qq_tools
     from xbot.agent.tools.hermes_telegram import register_xbot_telegram_tools
     from xbot.agent.tools.hermes_wechat import register_xbot_wechat_tools
@@ -200,6 +203,11 @@ def _ensure_hermes_import_path() -> Path:
     register_xbot_qq_tools()
     register_xbot_telegram_tools()
     register_xbot_weiban_tools()
+    register_xbot_artifact_tools()
+    import toolsets
+
+    if "artifact_create" not in toolsets._HERMES_CORE_TOOLS:
+        toolsets._HERMES_CORE_TOOLS.append("artifact_create")
     return vendor_dir
 
 
@@ -366,12 +374,12 @@ def _toolsets_for_source(source: str) -> list[str]:
     is_telegram = ":telegram:" in (source or "")
     channel_toolset = "telegram" if is_telegram else "qq" if is_qq else "wechat"
     if profile == "guest":
-        return [channel_toolset, "weiban-readonly"]
+        return [channel_toolset, "weiban-readonly", "artifacts"]
     if profile == "member":
         return [channel_toolset, *[item for item in _MEMBER_TOOLSETS if item not in {"qq", "telegram", "wechat"}]]
     if source.startswith(("api", "terminal")):
-        return ["hermes-api-server", channel_toolset, "weiban-readonly"]
-    return ["hermes-api-server", channel_toolset, "weiban-readonly"]
+        return ["hermes-api-server", channel_toolset, "weiban-readonly", "artifacts"]
+    return ["hermes-api-server", channel_toolset, "weiban-readonly", "artifacts"]
 
 
 def _permission_profile_for_source(source: str) -> str:
@@ -402,6 +410,25 @@ def _session_id_for_source(source: str) -> str:
     safe = "".join(ch if ch.isalnum() else "-" for ch in session_source.strip().lower())
     safe = "-".join(part for part in safe.split("-") if part)
     return f"xbot-{safe[:96] or 'default'}"
+
+
+def _artifact_output_dir(source: str, channel_context: dict[str, Any] | None) -> Path:
+    channel = dict(channel_context or {})
+    platform = "telegram" if ":telegram:" in source else "qq" if ":qq:" in source else "wechat"
+    identity = "\0".join((
+        platform,
+        str(channel.get("conversation_id") or _session_source_for_source(source)),
+        str(channel.get("sender_id") or "anonymous"),
+    ))
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    output_dir = hermes_home_dir() / "outputs" / platform / digest
+    output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return output_dir.resolve()
+
+
+def _group_persona_identity_override(channel_context: dict[str, Any] | None) -> str | None:
+    prompt = str((channel_context or {}).get("group_persona_prompt") or "").strip()[:8000]
+    return prompt or None
 
 
 def clear_hermes_session(source: str | None = None) -> dict[str, Any]:
@@ -497,13 +524,14 @@ def _resolve_member_path(raw_path: str, policy: dict[str, Any]) -> Path:
 
 
 def _member_path_allowed(raw_path: str, policy: dict[str, Any]) -> bool:
-    roots = policy.get("workspace_roots") or []
-    if not roots:
-        return False
     try:
         resolved = _resolve_member_path(raw_path, policy)
     except Exception:
         return False
+    attachment_paths = policy.get("attachment_paths") or []
+    if any(resolved == Path(path) for path in attachment_paths):
+        return True
+    roots = policy.get("workspace_roots") or []
     return any(_is_relative_to(resolved, Path(root)) for root in roots)
 
 
@@ -572,6 +600,7 @@ def _tool_policy_denial(function_name: str, function_args: dict[str, Any], polic
             "telegram_send_voice", "telegram_send_video",
         }
         allowed.add("weiban_query_account")
+        allowed.add("artifact_create")
         if function_name in allowed:
             return None
         if channel == "qq":
@@ -589,7 +618,7 @@ def _tool_policy_denial(function_name: str, function_args: dict[str, Any], polic
         return "WeChat 会话不能调用 QQ 工具。"
     if channel != "telegram" and name.startswith("telegram_"):
         return "非 Telegram 会话不能调用 Telegram 工具。"
-    if channel == "telegram" and (name.startswith("qq_") or name.startswith("wechat_send_")):
+    if channel == "telegram" and name.startswith(("qq_", "wechat_send_")):
         return "Telegram 会话不能调用其他通道的发送工具。"
     if name in _MEMBER_DENIED_TOOLS or any(name.startswith(prefix) for prefix in _MEMBER_DENIED_PREFIXES):
         return f"普通成员不能调用 {name}。"
@@ -666,15 +695,38 @@ def _install_hermes_tool_policy_wrapper() -> None:
     run_agent.handle_function_call = model_tools.handle_function_call
 
 
-def _tool_policy_for_source(config: AgentConfig, source: str) -> dict[str, Any]:
+def _tool_policy_for_source(
+    config: AgentConfig,
+    source: str,
+    *,
+    attachments: list[dict] | None = None,
+) -> dict[str, Any]:
     profile = _permission_profile_for_source(source)
     policy_config = config.member_policy
     if profile == "member" and not policy_config.enabled:
         profile = "admin"
+    attachment_paths: list[Path] = []
+    for attachment in attachments or []:
+        if not isinstance(attachment, dict):
+            continue
+        raw_path = attachment.get("local_path") or attachment.get("path")
+        if not raw_path:
+            continue
+        resolved: Path | None = None
+        try:
+            path = Path(str(raw_path)).expanduser()
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            resolved = path.resolve()
+        except Exception:
+            resolved = None
+        if resolved is not None and resolved.is_file():
+            attachment_paths.append(resolved)
     return {
         "profile": profile,
         "channel": "telegram" if ":telegram:" in (source or "") else "qq" if ":qq:" in (source or "") else "wechat" if ":wechat" in (source or "") else "",
         "workspace_roots": _member_workspace_roots(config),
+        "attachment_paths": attachment_paths,
         "cwd": Path.cwd(),
         "allow_terminal": bool(policy_config.allow_terminal),
         "allow_public_web": bool(policy_config.allow_public_web),
@@ -762,9 +814,15 @@ async def run_hermes_agent(
         from hermes_state import SessionDB
         from run_agent import AIAgent
 
+        from xbot.agent.tools.hermes_artifacts import (
+            reset_artifact_context,
+            set_artifact_context,
+        )
         from xbot.agent.tools.hermes_qq import reset_send_context as reset_qq_send_context
         from xbot.agent.tools.hermes_qq import set_send_context as set_qq_send_context
-        from xbot.agent.tools.hermes_telegram import reset_send_context as reset_telegram_send_context
+        from xbot.agent.tools.hermes_telegram import (
+            reset_send_context as reset_telegram_send_context,
+        )
         from xbot.agent.tools.hermes_telegram import set_send_context as set_telegram_send_context
         from xbot.agent.tools.hermes_wechat import reset_send_context, set_send_context
 
@@ -781,11 +839,21 @@ async def run_hermes_agent(
         session_db = SessionDB()
         session_source = _session_source_for_source(source)
         session_id = _session_id_for_source(source)
-        tool_policy = _tool_policy_for_source(config, source)
+        tool_policy = _tool_policy_for_source(config, source, attachments=attachments)
         token = _HERMES_TOOL_POLICY.set(tool_policy)
         send_token = None
         qq_send_token = None
         telegram_send_token = None
+        artifact_output_dir = _artifact_output_dir(source, channel_context)
+        runtime_channel = dict(channel_context or {})
+        runtime_channel["media_roots"] = [
+            *list(runtime_channel.get("media_roots") or []),
+            str(artifact_output_dir),
+        ]
+        artifact_token = set_artifact_context({
+            "output_dir": str(artifact_output_dir),
+            "channel": tool_policy.get("channel") or "wechat",
+        })
         session_parts = session_source.split(":", 3)
         if (
             send_reply is not None
@@ -824,7 +892,7 @@ async def run_hermes_agent(
             and session_parts[0] == "channel"
             and session_parts[1] == "qq"
         ):
-            channel = dict(channel_context or {})
+            channel = runtime_channel
             async def send_qq_reply(**kwargs: Any) -> object | None:
                 from xbot.messaging.models import Reply
 
@@ -861,7 +929,7 @@ async def run_hermes_agent(
             and session_parts[0] == "channel"
             and session_parts[1] == "telegram"
         ):
-            channel = dict(channel_context or {})
+            channel = runtime_channel
 
             async def send_telegram_reply(**kwargs: Any) -> object | None:
                 from xbot.messaging.models import Reply
@@ -912,6 +980,9 @@ async def run_hermes_agent(
             tool_complete_callback=tool_complete_callback,
             stream_delta_callback=stream_delta_callback,
         )
+        # Replace the SOUL.md identity for this group without changing the
+        # shared file used by other conversations.
+        agent._soul_identity_override = _group_persona_identity_override(channel_context)
         if tool_policy["profile"] == "guest":
             agent.tools = _guest_direct_tools(source, tool_policy)
             agent.valid_tool_names = {
@@ -946,6 +1017,7 @@ async def run_hermes_agent(
                 reset_qq_send_context(qq_send_token)
             if telegram_send_token is not None:
                 reset_telegram_send_context(telegram_send_token)
+            reset_artifact_context(artifact_token)
             _HERMES_TOOL_POLICY.reset(token)
         if isinstance(result, dict):
             output = result.get("final_response") or result.get("response") or result.get("content") or ""

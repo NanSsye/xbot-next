@@ -186,11 +186,15 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts: List[str] = []
 
-    # Try SOUL.md as primary identity unless the caller explicitly skipped it.
-    # Some execution modes (cron) still want HERMES_HOME persona while keeping
-    # cwd project instructions disabled.
+    # A channel-scoped identity replaces SOUL.md for this agent instance. The
+    # shared file must not be rewritten because several groups can run with
+    # different identities at the same time.
     _soul_loaded = False
-    if agent.load_soul_identity or not agent.skip_context_files:
+    _soul_override = getattr(agent, "_soul_identity_override", None)
+    if isinstance(_soul_override, str) and _soul_override.strip():
+        stable_parts.append(_soul_override.strip())
+        _soul_loaded = True
+    elif agent.load_soul_identity or not agent.skip_context_files:
         _soul_content = _r.load_soul_md(_ctx_len)
         if _soul_content:
             stable_parts.append(_soul_content)

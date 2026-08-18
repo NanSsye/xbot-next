@@ -101,6 +101,49 @@ async def test_agent_work_runs_in_background_without_blocking_next_message():
 
 
 @pytest.mark.anyio
+async def test_wechat_group_persona_is_passed_as_channel_system_context():
+    plugin = load_agent_chat_plugin()
+    calls = []
+
+    class Agent:
+        async def run_task(self, input_text, source="api", channel_context=None):
+            calls.append({"input": input_text, "source": source, "channel_context": channel_context})
+            return SimpleNamespace(output="done")
+
+    class Conversations:
+        async def get_conversation(self, conversation_id):
+            assert conversation_id == "wechat:wechat869:group:group-1@chatroom"
+            return SimpleNamespace(
+                agent_persona_enabled=True,
+                agent_persona_prompt="你叫群小助手，只用简短中文回答。",
+            )
+
+    settings = SimpleNamespace(
+        agent=SimpleNamespace(uses_hermes_runtime=True),
+        adapters=SimpleNamespace(wechat869=SimpleNamespace(default_profile="guest")),
+    )
+    ctx = SimpleNamespace(
+        agent=Agent(),
+        conversations=Conversations(),
+        settings=settings,
+        adapters=None,
+    )
+    message = Message(
+        id="wechat-persona-1",
+        platform="wechat",
+        adapter="wechat869",
+        conversation_id="group-1@chatroom",
+        sender_id="member-1",
+        content="你好",
+        raw={"scope": "group", "mentions_bot": True},
+    )
+
+    await plugin._run_agent(message, ctx, "你好")
+
+    assert calls[0]["channel_context"]["group_persona_prompt"] == "你叫群小助手，只用简短中文回答。"
+
+
+@pytest.mark.anyio
 async def test_agent_messages_stay_serial_within_one_conversation():
     plugin = load_agent_chat_plugin()
     agent = ControlledAgent()

@@ -39,6 +39,9 @@ class ConversationRepository:
             raw_id=conversation.raw_id,
             title=conversation.title,
             avatar_url=conversation.avatar_url,
+            agent_persona_enabled=conversation.agent_persona_enabled,
+            agent_persona_prompt=conversation.agent_persona_prompt,
+            agent_persona_updated_at=conversation.agent_persona_updated_at,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )
@@ -256,6 +259,9 @@ class ConversationRepository:
             raw_id=record.raw_id,
             title=record.title,
             avatar_url=getattr(record, "avatar_url", None),
+            agent_persona_enabled=record.agent_persona_enabled,
+            agent_persona_prompt=record.agent_persona_prompt,
+            agent_persona_updated_at=record.agent_persona_updated_at,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

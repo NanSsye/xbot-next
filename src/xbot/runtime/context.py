@@ -8,6 +8,7 @@ from xbot.agent.runtime import AgentRuntime
 from xbot.conversations.manager import ConversationManager
 from xbot.core.config import Settings
 from xbot.core.events import EventBus
+from xbot.knowledge import GroupKnowledgeService
 from xbot.messaging.consumer import MessageConsumer
 from xbot.messaging.dedupe import DedupeService
 from xbot.messaging.message_store import InMemoryMessageStore
@@ -34,6 +35,7 @@ class AppContext:
     consumer: MessageConsumer
     agent: AgentRuntime
     engine: XBotEngine
+    knowledge: GroupKnowledgeService
 
 
 def build_context(settings: Settings) -> AppContext:
@@ -109,10 +111,15 @@ def build_context(settings: Settings) -> AppContext:
         else None,
     )
     engine = XBotEngine(settings)
+    knowledge = GroupKnowledgeService(
+        session_factory=storage.session_factory,
+        llm_config=settings.agent.llm,
+    )
     engine.attach_managers(plugins=plugins, skills=skills, adapters=adapters)
     engine.attach_storage(storage=storage, message_store=messages)
     engine.attach_agent(agent)
     agent.attach_reply_sender(engine.send_reply)
+    agent.attach_knowledge(knowledge)
     plugins.attach_runtime(
         agent=agent,
         send_reply=engine.send_reply,
@@ -150,4 +157,5 @@ def build_context(settings: Settings) -> AppContext:
         consumer=consumer,
         agent=agent,
         engine=engine,
+        knowledge=knowledge,
     )
