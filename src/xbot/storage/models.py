@@ -256,6 +256,7 @@ class ConversationRecord(Base):
     agent_persona_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     agent_persona_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_persona_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    agent_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

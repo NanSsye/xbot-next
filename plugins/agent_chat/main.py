@@ -167,7 +167,8 @@ class AgentChatPlugin(PluginBase):
             summaries, history = "", ""
         tool_permission = self._tool_permission_profile(message, ctx)
         agent_input = self._build_agent_input(message, content, history, summaries, tool_permission)
-        group_persona = await self._group_persona_prompt(message, ctx)
+        group_overrides = await self._group_agent_overrides(message, ctx)
+        group_persona = group_overrides.get("group_persona_prompt", "")
         logger.info(
             "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={} group_persona_chars={}",
             message.id,
@@ -183,17 +184,16 @@ class AgentChatPlugin(PluginBase):
             kwargs["attachments"] = attachments
         if self._agent_accepts_channel_context(ctx.agent):
             channel_context = self._channel_context(message, ctx)
-            if group_persona:
-                channel_context["group_persona_prompt"] = group_persona
+            channel_context.update(group_overrides)
             kwargs["channel_context"] = channel_context
         return await ctx.agent.run_task(agent_input, **kwargs)
 
-    async def _group_persona_prompt(self, message: Message, ctx) -> str:
+    async def _group_agent_overrides(self, message: Message, ctx) -> dict[str, str]:
         if message.platform != "wechat" or message.raw.get("scope") != "group":
-            return ""
+            return {}
         conversations = getattr(ctx, "conversations", None)
         if conversations is None:
-            return ""
+            return {}
         conversation_id = message.conversation_id
         normalized_id = (
             conversation_id
@@ -208,10 +208,18 @@ class AgentChatPlugin(PluginBase):
                 normalized_id,
                 exc,
             )
-            return ""
-        if not conversation or not conversation.agent_persona_enabled:
-            return ""
-        return str(conversation.agent_persona_prompt or "").strip()[:8000]
+            return {}
+        if not conversation:
+            return {}
+        overrides: dict[str, str] = {}
+        if conversation.agent_persona_enabled:
+            prompt = str(conversation.agent_persona_prompt or "").strip()[:8000]
+            if prompt:
+                overrides["group_persona_prompt"] = prompt
+        model = str(getattr(conversation, "agent_model", None) or "").strip()[:256]
+        if model:
+            overrides["group_model"] = model
+        return overrides
 
     def _channel_context(self, message: Message, ctx) -> dict:
         profile = self._tool_permission_profile(message, ctx)

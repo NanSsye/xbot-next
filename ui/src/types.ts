@@ -292,6 +292,11 @@ export type ConfigApplyResult = {
   snapshot: ConfigSnapshot;
 };
 
+export type LlmModelDiscovery = {
+  models: string[];
+  count: number;
+};
+
 export type WechatConversation = Conversation & {
   message_count: number;
   avatar_members?: string[];
@@ -302,6 +307,9 @@ export type WechatGroupPersona = {
   conversation_id: string;
   enabled: boolean;
   prompt: string;
+  model?: string | null;
+  default_model: string;
+  enabled_models: string[];
   updated_at?: string | null;
 };
 

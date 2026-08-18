@@ -6,7 +6,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class XBotConfig(BaseModel):
@@ -130,12 +130,58 @@ class AgentLLMConfig(BaseModel):
     base_url: str = "https://api.openai.com/v1"
     api_key: str | None = None
     model: str = "gpt-4.1-mini"
+    enabled_models: list[str] = Field(default_factory=list)
     context_window_tokens: int | None = None
     timeout_seconds: int = 60
     max_attempts: int = 3
     retry_backoff_seconds: float = 1.0
     max_tokens: int = 2000
     temperature: float = 0.2
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_enabled_models(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "enabled_models" in data:
+            return data
+        normalized = dict(data)
+        model = str(normalized.get("model") or "gpt-4.1-mini").strip()
+        normalized["enabled_models"] = [model]
+        return normalized
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str) -> str:
+        model = value.strip()
+        if not model:
+            raise ValueError("全局默认模型不能为空")
+        if len(model) > 256:
+            raise ValueError("模型名称不能超过 256 个字符")
+        return model
+
+    @field_validator("enabled_models")
+    @classmethod
+    def _normalize_enabled_models(cls, value: list[str]) -> list[str]:
+        models: list[str] = []
+        seen: set[str] = set()
+        for raw_model in value:
+            model = str(raw_model).strip()
+            if not model or model in seen:
+                continue
+            if len(model) > 256:
+                raise ValueError("模型名称不能超过 256 个字符")
+            seen.add(model)
+            models.append(model)
+        if not models:
+            raise ValueError("至少启用一个模型")
+        if len(models) > 500:
+            raise ValueError("最多启用 500 个模型")
+        return models
+
+    @model_validator(mode="after")
+    def _validate_default_model(self) -> "AgentLLMConfig":
+        if self.model not in self.enabled_models:
+            raise ValueError("全局默认模型必须属于已启用模型")
+        return self
 
 
 class AgentMCPServerConfig(BaseModel):
@@ -425,6 +471,10 @@ def load_settings(
         data.setdefault("agent", {}).setdefault("llm", {})["base_url"] = llm_base_url
     if llm_model := env.get("XBOT_LLM_MODEL"):
         data.setdefault("agent", {}).setdefault("llm", {})["model"] = llm_model
+    if llm_enabled_models := env.get("XBOT_LLM_ENABLED_MODELS"):
+        data.setdefault("agent", {}).setdefault("llm", {})["enabled_models"] = _env_list(
+            llm_enabled_models
+        )
     if llm_context_window := env.get("XBOT_LLM_CONTEXT_WINDOW_TOKENS"):
         data.setdefault("agent", {}).setdefault("llm", {})["context_window_tokens"] = _env_int(llm_context_window)
     if llm_timeout := env.get("XBOT_LLM_TIMEOUT_SECONDS"):

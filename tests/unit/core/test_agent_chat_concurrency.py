@@ -116,6 +116,7 @@ async def test_wechat_group_persona_is_passed_as_channel_system_context():
             return SimpleNamespace(
                 agent_persona_enabled=True,
                 agent_persona_prompt="你叫群小助手，只用简短中文回答。",
+                agent_model="group-model",
             )
 
     settings = SimpleNamespace(
@@ -141,6 +142,7 @@ async def test_wechat_group_persona_is_passed_as_channel_system_context():
     await plugin._run_agent(message, ctx, "你好")
 
     assert calls[0]["channel_context"]["group_persona_prompt"] == "你叫群小助手，只用简短中文回答。"
+    assert calls[0]["channel_context"]["group_model"] == "group-model"
 
 
 @pytest.mark.anyio

@@ -1642,6 +1642,7 @@ function WechatWorkbench(props: {
   const [groupPersona, setGroupPersona] = useState<WechatGroupPersona | null>(null);
   const [personaEnabled, setPersonaEnabled] = useState(false);
   const [personaDraft, setPersonaDraft] = useState("");
+  const [groupModel, setGroupModel] = useState("");
   const [personaLoading, setPersonaLoading] = useState(false);
   const [personaSaving, setPersonaSaving] = useState(false);
   const [personaError, setPersonaError] = useState("");
@@ -1669,6 +1670,7 @@ function WechatWorkbench(props: {
       setGroupPersona(null);
       setPersonaEnabled(false);
       setPersonaDraft("");
+      setGroupModel("");
       setPersonaLoading(false);
       setPersonaError("");
       setPersonaNotice("");
@@ -1683,6 +1685,7 @@ function WechatWorkbench(props: {
         setGroupPersona(persona);
         setPersonaEnabled(persona.enabled);
         setPersonaDraft(persona.prompt);
+        setGroupModel(persona.model ?? "");
       })
       .catch((error) => {
         if (!cancelled) setPersonaError(error instanceof Error ? error.message : String(error));
@@ -1722,7 +1725,7 @@ function WechatWorkbench(props: {
     }
   }
 
-  async function saveGroupPersona(enabled = personaEnabled) {
+  async function saveGroupPersona(enabled = personaEnabled, model = groupModel) {
     if (!props.selectedConversationId || personaSaving) return;
     const prompt = personaDraft.trim();
     if (personaTooLong) {
@@ -1737,11 +1740,13 @@ function WechatWorkbench(props: {
     setPersonaError("");
     setPersonaNotice("");
     try {
-      const persona = await api.updateWechatGroupPersona(props.selectedConversationId, { enabled, prompt });
+      const persona = await api.updateWechatGroupPersona(props.selectedConversationId, { enabled, prompt, model: model || null });
       setGroupPersona(persona);
       setPersonaEnabled(persona.enabled);
       setPersonaDraft(persona.prompt);
-      setPersonaNotice(persona.enabled ? "群专属人设已保存，下一条消息立即生效。" : "已恢复全局人设，下一条消息立即生效。");
+      setGroupModel(persona.model ?? "");
+      const applied = [persona.enabled ? "群专属人设" : "全局人设", persona.model ? `模型 ${persona.model}` : `默认模型 ${persona.default_model}`];
+      setPersonaNotice(`已保存：${applied.join("，")}。下一条消息立即生效。`);
     } catch (error) {
       setPersonaError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1825,8 +1830,8 @@ function WechatWorkbench(props: {
           {selectedIsGroup ? (
             <section className="wechat-persona-card">
               <div className="wechat-persona-card__head">
-                <div><b>群专属人设</b><small>启用后替换全局人设，下一条消息立即生效</small></div>
-                <span className={personaEnabled ? "is-enabled" : ""}>{personaEnabled ? "已启用" : "全局人设"}</span>
+                <div><b>群 Agent 配置</b><small>人设和模型可独立覆盖，下一条消息立即生效</small></div>
+                <span className={personaEnabled || Boolean(groupModel) ? "is-enabled" : ""}>{personaEnabled || groupModel ? "本群覆盖" : "继承全局"}</span>
               </div>
               {personaLoading ? <p className="wechat-persona-card__hint">正在读取人设配置…</p> : (
                 <>
@@ -1834,6 +1839,16 @@ function WechatWorkbench(props: {
                     <input type="checkbox" checked={personaEnabled} onChange={(event) => { setPersonaEnabled(event.target.checked); setPersonaNotice(""); setPersonaError(""); }} />
                     <span>使用本群人设替换全局人设</span>
                   </label>
+                  <label className="wechat-persona-card__label" htmlFor="wechat-group-model">本群模型</label>
+                  <select
+                    id="wechat-group-model"
+                    value={groupModel}
+                    onChange={(event) => { setGroupModel(event.target.value); setPersonaNotice(""); setPersonaError(""); }}
+                  >
+                    <option value="">继承全局默认 · {groupPersona?.default_model ?? "-"}</option>
+                    {(groupPersona?.enabled_models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select>
+                  <p className="wechat-persona-card__hint">留空时自动使用全局默认模型；模型池在“系统配置中心”统一管理。</p>
                   <label className="wechat-persona-card__label" htmlFor="wechat-group-persona">人设内容</label>
                   <textarea
                     id="wechat-group-persona"
@@ -1853,7 +1868,7 @@ function WechatWorkbench(props: {
                   </div>
                   <div className="wechat-persona-card__actions">
                     <button type="button" disabled={personaSaving || personaTooLong} onClick={() => void saveGroupPersona()}>{personaSaving ? "保存中" : "保存并生效"}</button>
-                    <button type="button" disabled={personaSaving || personaTooLong || !groupPersona?.enabled} onClick={() => void saveGroupPersona(false)}>恢复全局</button>
+                    <button type="button" disabled={personaSaving || personaTooLong || (!groupPersona?.enabled && !groupPersona?.model)} onClick={() => void saveGroupPersona(false, "")}>全部恢复全局</button>
                     <button type="button" disabled={personaSaving} onClick={() => void resetGroupPersonaSession()}>清空本群会话</button>
                   </div>
                 </>

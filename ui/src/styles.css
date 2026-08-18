@@ -2437,7 +2437,9 @@ td {
 .wechat-persona-toggle input:focus-visible { outline: 3px solid color-mix(in srgb, #22c55e 28%, transparent); outline-offset: 3px; }
 .wechat-persona-card__label { margin-bottom: -6px; color: var(--text-strong); font-size: var(--type-meta); font-weight: 750; }
 .wechat-persona-card textarea { width: 100%; min-height: 190px; resize: vertical; padding: 12px; border: 1px solid var(--border); border-radius: 12px; outline: 0; background: var(--card); color: var(--text); line-height: 1.6; }
+.wechat-persona-card select { width: 100%; min-height: 44px; padding: 10px 36px 10px 12px; border: 1px solid var(--border); border-radius: 12px; outline: 0; background: var(--card); color: var(--text); }
 .wechat-persona-card textarea:focus-visible { border-color: #22c55e; box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 18%, transparent); }
+.wechat-persona-card select:focus-visible { border-color: #22c55e; box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 18%, transparent); }
 .wechat-persona-card textarea[aria-invalid="true"] { border-color: color-mix(in srgb, #dc2626 70%, var(--border)); }
 .wechat-persona-card__meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--type-meta); }
 .wechat-persona-card__meta.is-over-limit { color: #dc2626; font-weight: 700; }
@@ -4285,6 +4287,172 @@ td {
   color: var(--text-strong);
 }
 
+.model-pool {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--config-line);
+  border-radius: 14px;
+  background: var(--config-inset);
+}
+
+.model-pool__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-pool__identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-pool__identity > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.model-pool__identity > div,
+.model-pool__item > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.model-pool__identity strong {
+  color: var(--text-strong);
+  font-size: var(--type-meta);
+}
+
+.model-pool__identity small,
+.model-pool__item small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.model-pool__discover {
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+.model-pool__notice {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--config-surface);
+  color: var(--muted);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+.model-pool__notice--warn { color: var(--warn); }
+.model-pool__notice--error { color: var(--danger-text); }
+.model-pool__notice--success { color: var(--ok); }
+
+.model-pool__search {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--config-line);
+  border-radius: 11px;
+  background: var(--config-surface);
+  color: var(--muted);
+}
+
+.model-pool__search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 58%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.model-pool__search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.model-pool__list {
+  display: grid;
+  max-height: 320px;
+  gap: 7px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.model-pool__item {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: 20px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--config-line);
+  border-radius: 11px;
+  background: var(--config-surface);
+  cursor: pointer;
+}
+
+.model-pool__item:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--config-line));
+}
+
+.model-pool__item:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.model-pool__item.is-checked {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--config-line));
+  background: var(--accent-subtle);
+}
+
+.model-pool__item input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.model-pool__item strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--type-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-pool__item > svg { color: var(--accent); }
+
+.model-pool__empty {
+  padding: 16px;
+  border: 1px dashed var(--config-line);
+  border-radius: 11px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--type-meta);
+  line-height: 1.5;
+}
+
 .config-field__secret-status {
   display: flex;
   align-items: center;
@@ -5025,6 +5193,16 @@ td {
 
   .config-section-intro {
     flex-direction: column;
+  }
+
+  .model-pool__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-pool__discover {
+    width: 100%;
+    justify-content: center;
   }
 
   .config-field__meta {

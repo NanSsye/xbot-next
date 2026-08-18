@@ -21,6 +21,7 @@ class Conversation(BaseModel):
     agent_persona_enabled: bool = False
     agent_persona_prompt: str | None = None
     agent_persona_updated_at: datetime | None = None
+    agent_model: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
