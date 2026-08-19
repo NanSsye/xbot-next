@@ -443,15 +443,15 @@ def _artifact_output_dir(source: str, channel_context: dict[str, Any] | None) ->
     return output_dir.resolve()
 
 
-def _group_persona_identity_override(channel_context: dict[str, Any] | None) -> str | None:
-    prompt = str((channel_context or {}).get("group_persona_prompt") or "").strip()[:8000]
+def _persona_identity_override(channel_context: dict[str, Any] | None) -> str | None:
+    prompt = str((channel_context or {}).get("persona_prompt") or "").strip()[:8000]
     return prompt or None
 
 
 def _model_for_channel(config: AgentConfig, channel_context: dict[str, Any] | None) -> str:
-    group_model = str((channel_context or {}).get("group_model") or "").strip()
-    if group_model and group_model in config.llm.enabled_models:
-        return group_model
+    conversation_model = str((channel_context or {}).get("conversation_model") or "").strip()
+    if conversation_model and conversation_model in config.llm.enabled_models:
+        return conversation_model
     return config.llm.model
 
 
@@ -1005,9 +1005,9 @@ async def run_hermes_agent(
             tool_complete_callback=tool_complete_callback,
             stream_delta_callback=stream_delta_callback,
         )
-        # Replace the SOUL.md identity for this group without changing the
-        # shared file used by other conversations.
-        agent._soul_identity_override = _group_persona_identity_override(channel_context)
+        # Replace the SOUL.md identity for this conversation without changing
+        # the shared file used by other conversations.
+        agent._soul_identity_override = _persona_identity_override(channel_context)
         if tool_policy["profile"] == "guest":
             agent.tools = _guest_direct_tools(source, tool_policy)
             agent.valid_tool_names = {

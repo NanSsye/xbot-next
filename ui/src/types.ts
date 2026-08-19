@@ -303,8 +303,9 @@ export type WechatConversation = Conversation & {
   last_message?: WechatMessage | null;
 };
 
-export type WechatGroupPersona = {
+export type WechatConversationPersona = {
   conversation_id: string;
+  scope: "group" | "private";
   enabled: boolean;
   prompt: string;
   model?: string | null;

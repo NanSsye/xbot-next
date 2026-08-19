@@ -20,10 +20,11 @@ class AgentChatPlugin(PluginBase):
         if message.type not in {"text", "image", "file", "voice", "video", "event"} or not message.content:
             logger.info("AgentChatPlugin 跳过不支持或空消息: id={} type={}", message.id, message.type)
             return False
-        if self._should_defer_unquoted_ilink_media(message):
+        if self._should_defer_unquoted_wechat_media(message):
             logger.info(
-                "AgentChatPlugin 跳过 iLink 未引用媒体消息: id={} type={}",
+                "AgentChatPlugin 跳过微信私聊未引用媒体消息: id={} adapter={} type={}",
                 message.id,
+                message.adapter,
                 message.type,
             )
             return False
@@ -210,10 +211,11 @@ class AgentChatPlugin(PluginBase):
             return bool(message.raw.get("mentions_bot")) or message.raw.get("qq_event_type") == "MESSAGE_CREATE"
         return message.platform == "web"
 
-    def _should_defer_unquoted_ilink_media(self, message: Message) -> bool:
+    def _should_defer_unquoted_wechat_media(self, message: Message) -> bool:
         return (
-            message.adapter == "wechat_ilink"
-            and message.type in {"image", "file"}
+            message.platform == "wechat"
+            and message.raw.get("scope") == "private"
+            and message.type in {"image", "file", "voice", "video"}
             and not isinstance(message.raw.get("quote"), dict)
         )
 

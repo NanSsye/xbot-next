@@ -62,6 +62,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         ca-certificates \
         curl \
         git \
+        libreoffice-writer \
         nodejs \
         npm \
     && rm -rf /var/lib/apt/lists/*

@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from xbot.adapters.wechat869.legacy_word import convert_legacy_word
 from xbot.core.config import Wechat869AdapterConfig
 from xbot.core.logging import logger
 from xbot.core.timeutils import utc_now
@@ -167,11 +168,17 @@ class Wechat869MediaResolver:
         attachment = self._base_attachment("file", data, filename, file_meta, quoted=quoted, status=status, error=error)
         if file_bytes:
             path, sha256 = self._save_bytes(file_bytes, conversation_id=conversation_id, msg_id=msg_id, filename=filename)
+            converted = await convert_legacy_word(path)
+            if converted:
+                filename, path, sha256, converted_size = converted
+                attachment["metadata"]["converted_from"] = Path(file_meta.get("filename") or filename).name
+            else:
+                converted_size = len(file_bytes)
             attachment.update(
                 {
                     "local_path": str(path),
                     "sha256": sha256,
-                    "size": len(file_bytes),
+                    "size": converted_size,
                     "mime": mimetypes.guess_type(filename)[0] or "application/octet-stream",
                     "download_status": "downloaded",
                 }

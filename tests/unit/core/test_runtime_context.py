@@ -767,7 +767,21 @@ async def test_agent_chat_plugin_passes_media_attachments_to_agent():
 
 
 @pytest.mark.anyio
-async def test_agent_chat_plugin_skips_unquoted_ilink_media():
+@pytest.mark.parametrize(
+    ("adapter", "message_type", "content"),
+    [
+        ("wechat_ilink", "file", "测试.txt"),
+        ("wechat869", "image", "[图片]"),
+        ("wechat869", "file", "测试.txt"),
+        ("wechat869", "voice", "[语音]"),
+        ("wechat869", "video", "[视频]"),
+    ],
+)
+async def test_agent_chat_plugin_skips_unquoted_wechat_private_media(
+    adapter: str,
+    message_type: str,
+    content: str,
+):
     settings = load_settings("configs/xbot.toml")
     settings.storage.persist_runtime_events = False
     ctx = build_context(settings)
@@ -777,14 +791,14 @@ async def test_agent_chat_plugin_skips_unquoted_ilink_media():
     try:
         message = Message(
             platform="wechat",
-            adapter="wechat_ilink",
+            adapter=adapter,
             conversation_id="ilink:u1",
             sender_id="u1",
-            type="file",
-            content="测试.txt",
+            type=message_type,
+            content=content,
             raw={
                 "scope": "private",
-                "attachments": [{"kind": "file", "filename": "测试.txt"}],
+                "attachments": [{"kind": message_type, "filename": "测试.txt"}],
             },
         )
         await ctx.consumer.handle(MessageEnvelope.from_message(message))
@@ -798,7 +812,8 @@ async def test_agent_chat_plugin_skips_unquoted_ilink_media():
 
 
 @pytest.mark.anyio
-async def test_agent_chat_plugin_passes_quoted_ilink_media_to_agent():
+@pytest.mark.parametrize("adapter", ["wechat_ilink", "wechat869"])
+async def test_agent_chat_plugin_passes_quoted_wechat_media_to_agent(adapter: str):
     settings = load_settings("configs/xbot.toml")
     settings.storage.persist_runtime_events = False
     ctx = build_context(settings)
@@ -808,7 +823,7 @@ async def test_agent_chat_plugin_passes_quoted_ilink_media_to_agent():
     try:
         message = Message(
             platform="wechat",
-            adapter="wechat_ilink",
+            adapter=adapter,
             conversation_id="ilink:u1",
             sender_id="u1",
             type="text",
