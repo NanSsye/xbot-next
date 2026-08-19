@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from xbot.api.v1.wechat import (
-    WechatGroupPersonaUpdate,
-    get_wechat_group_persona,
-    reset_wechat_group_persona_session,
-    update_wechat_group_persona,
+    WechatConversationPersonaUpdate,
+    get_wechat_conversation_persona,
+    reset_wechat_conversation_persona_session,
+    update_wechat_conversation_persona,
 )
 from xbot.storage.models import Base, ConversationRecord
 
@@ -73,12 +73,12 @@ def anyio_backend():
 @pytest.mark.anyio
 async def test_group_persona_can_be_saved_read_and_disabled(persona_context):
     conversation_id = "wechat:wechat869:group:group-1@chatroom"
-    saved = await update_wechat_group_persona(
+    saved = await update_wechat_conversation_persona(
         conversation_id,
-        WechatGroupPersonaUpdate(enabled=True, prompt=" 你叫小群，只说简短中文。 ", model="model-group"),
+        WechatConversationPersonaUpdate(enabled=True, prompt=" 你叫小群，只说简短中文。 ", model="model-group"),
         persona_context,
     )
-    loaded = await get_wechat_group_persona(conversation_id, persona_context)
+    loaded = await get_wechat_conversation_persona(conversation_id, persona_context)
 
     assert saved["data"]["enabled"] is True
     assert loaded["data"]["prompt"] == "你叫小群，只说简短中文。"
@@ -88,9 +88,9 @@ async def test_group_persona_can_be_saved_read_and_disabled(persona_context):
     assert loaded["data"]["updated_at"]
     assert persona_context.agent.sources == ["channel:wechat:wechat869:group-1@chatroom"]
 
-    disabled = await update_wechat_group_persona(
+    disabled = await update_wechat_conversation_persona(
         conversation_id,
-        WechatGroupPersonaUpdate(enabled=False, prompt=loaded["data"]["prompt"], model=None),
+        WechatConversationPersonaUpdate(enabled=False, prompt=loaded["data"]["prompt"], model=None),
         persona_context,
     )
     assert disabled["data"]["enabled"] is False
@@ -103,29 +103,46 @@ async def test_group_persona_can_be_saved_read_and_disabled(persona_context):
 
 
 @pytest.mark.anyio
-async def test_group_persona_rejects_empty_enabled_prompt_and_private_chat(persona_context):
+async def test_private_persona_can_be_saved_and_read(persona_context):
+    conversation_id = "wechat:wechat869:private:user-1"
+
+    saved = await update_wechat_conversation_persona(
+        conversation_id,
+        WechatConversationPersonaUpdate(
+            enabled=True,
+            prompt="你是这个联系人的专属法律顾问。",
+            model="model-group",
+        ),
+        persona_context,
+    )
+    loaded = await get_wechat_conversation_persona(conversation_id, persona_context)
+
+    assert saved["data"]["scope"] == "private"
+    assert loaded["data"]["enabled"] is True
+    assert loaded["data"]["prompt"] == "你是这个联系人的专属法律顾问。"
+    assert loaded["data"]["model"] == "model-group"
+    assert persona_context.agent.sources == ["channel:wechat:wechat869:user-1"]
+
+
+@pytest.mark.anyio
+async def test_conversation_persona_rejects_empty_prompt_and_disabled_model(persona_context):
     with pytest.raises(HTTPException, match="人设内容不能为空"):
-        await update_wechat_group_persona(
+        await update_wechat_conversation_persona(
             "wechat:wechat869:group:group-1@chatroom",
-            WechatGroupPersonaUpdate(enabled=True, prompt="   "),
-            persona_context,
-        )
-    with pytest.raises(HTTPException, match="only available for WeChat groups"):
-        await get_wechat_group_persona(
-            "wechat:wechat869:private:user-1",
+            WechatConversationPersonaUpdate(enabled=True, prompt="   "),
             persona_context,
         )
     with pytest.raises(HTTPException, match="不在管理员启用的模型池"):
-        await update_wechat_group_persona(
+        await update_wechat_conversation_persona(
             "wechat:wechat869:group:group-1@chatroom",
-            WechatGroupPersonaUpdate(enabled=False, prompt="", model="not-allowed"),
+            WechatConversationPersonaUpdate(enabled=False, prompt="", model="not-allowed"),
             persona_context,
         )
 
 
 @pytest.mark.anyio
-async def test_group_persona_session_reset_targets_only_selected_group(persona_context):
-    result = await reset_wechat_group_persona_session(
+async def test_persona_session_reset_targets_only_selected_conversation(persona_context):
+    result = await reset_wechat_conversation_persona_session(
         "wechat:wechat869:group:group-1@chatroom",
         persona_context,
     )

@@ -36,10 +36,11 @@ class AgentChatPlugin(PluginBase):
         if message.type not in {"text", "image", "file", "voice", "video", "event"} or not message.content:
             logger.info("AgentChatPlugin 跳过不支持或空消息: id={} type={}", message.id, message.type)
             return False
-        if self._should_defer_unquoted_ilink_media(message):
+        if self._should_defer_unquoted_wechat_media(message):
             logger.info(
-                "AgentChatPlugin 跳过 iLink 未引用媒体消息: id={} type={}",
+                "AgentChatPlugin 跳过微信私聊未引用媒体消息: id={} adapter={} type={}",
                 message.id,
+                message.adapter,
                 message.type,
             )
             return False
@@ -159,15 +160,15 @@ class AgentChatPlugin(PluginBase):
             summaries, history = "", ""
         tool_permission = self._tool_permission_profile(message, ctx)
         agent_input = self._build_agent_input(message, content, history, summaries, tool_permission)
-        group_overrides = await self._group_agent_overrides(message, ctx)
-        group_persona = group_overrides.get("group_persona_prompt", "")
+        conversation_overrides = await self._conversation_agent_overrides(message, ctx)
+        persona = conversation_overrides.get("persona_prompt", "")
         logger.info(
-            "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={} group_persona_chars={}",
+            "AgentChatPlugin 上下文完成: id={} input_chars={} history_chars={} summary_chars={} persona_chars={}",
             message.id,
             len(agent_input),
             len(history),
             len(summaries),
-            len(group_persona),
+            len(persona),
         )
         source = self._source_for_message(message, ctx)
         attachments = self._llm_attachments(message)
@@ -176,27 +177,28 @@ class AgentChatPlugin(PluginBase):
             kwargs["attachments"] = attachments
         if self._agent_accepts_channel_context(ctx.agent):
             channel_context = self._channel_context(message, ctx)
-            channel_context.update(group_overrides)
+            channel_context.update(conversation_overrides)
             kwargs["channel_context"] = channel_context
         return await ctx.agent.run_task(agent_input, **kwargs)
 
-    async def _group_agent_overrides(self, message: Message, ctx) -> dict[str, str]:
-        if message.platform != "wechat" or message.raw.get("scope") != "group":
+    async def _conversation_agent_overrides(self, message: Message, ctx) -> dict[str, str]:
+        if message.platform != "wechat" or message.raw.get("scope") not in {"group", "private"}:
             return {}
         conversations = getattr(ctx, "conversations", None)
         if conversations is None:
             return {}
         conversation_id = message.conversation_id
+        scope = message.raw["scope"]
         normalized_id = (
             conversation_id
             if ":" in conversation_id
-            else f"{message.platform}:{message.adapter}:group:{conversation_id}"
+            else f"{message.platform}:{message.adapter}:{scope}:{conversation_id}"
         )
         try:
             conversation = await conversations.get_conversation(normalized_id)
         except Exception as exc:
             logger.warning(
-                "AgentChatPlugin 读取群人设失败: conversation={} error={}",
+                "AgentChatPlugin 读取会话人设失败: conversation={} error={}",
                 normalized_id,
                 exc,
             )
@@ -207,10 +209,10 @@ class AgentChatPlugin(PluginBase):
         if conversation.agent_persona_enabled:
             prompt = str(conversation.agent_persona_prompt or "").strip()[:8000]
             if prompt:
-                overrides["group_persona_prompt"] = prompt
+                overrides["persona_prompt"] = prompt
         model = str(getattr(conversation, "agent_model", None) or "").strip()[:256]
         if model:
-            overrides["group_model"] = model
+            overrides["conversation_model"] = model
         return overrides
 
     def _channel_context(self, message: Message, ctx) -> dict:
@@ -351,10 +353,11 @@ class AgentChatPlugin(PluginBase):
             return bool(message.raw.get("mentions_bot")) or message.raw.get("qq_event_type") == "MESSAGE_CREATE"
         return message.platform == "web"
 
-    def _should_defer_unquoted_ilink_media(self, message: Message) -> bool:
+    def _should_defer_unquoted_wechat_media(self, message: Message) -> bool:
         return (
-            message.adapter == "wechat_ilink"
-            and message.type in {"image", "file"}
+            message.platform == "wechat"
+            and message.raw.get("scope") == "private"
+            and message.type in {"image", "file", "voice", "video"}
             and not isinstance(message.raw.get("quote"), dict)
         )
 

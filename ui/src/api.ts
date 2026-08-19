@@ -19,7 +19,7 @@ import type {
   SystemStatus,
   IlinkQrCode,
   WechatConversation,
-  WechatGroupPersona,
+  WechatConversationPersona,
   WechatMember,
   WechatMessage,
   WechatUserDetail,
@@ -120,14 +120,14 @@ export const api = {
     request<WechatMessage[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`),
   wechatMembers: (conversationId: string) =>
     request<WechatMember[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/members`),
-  wechatGroupPersona: (conversationId: string) =>
-    request<WechatGroupPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`),
-  updateWechatGroupPersona: (conversationId: string, payload: { enabled: boolean; prompt: string; model?: string | null }) =>
-    request<WechatGroupPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`, {
+  wechatConversationPersona: (conversationId: string) =>
+    request<WechatConversationPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`),
+  updateWechatConversationPersona: (conversationId: string, payload: { enabled: boolean; prompt: string; model?: string | null }) =>
+    request<WechatConversationPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
-  resetWechatGroupPersonaSession: (conversationId: string) =>
+  resetWechatConversationPersonaSession: (conversationId: string) =>
     request<Record<string, unknown>>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona/reset-session`, { method: "POST" }),
   wechatProfilePage: (conversationId: string, limit = 30, cursor = "") =>
     request<WechatProfilePage>(`/wechat/conversations/${encodeURIComponent(conversationId)}/profiles?limit=${limit}&cursor=${encodeURIComponent(cursor)}`),

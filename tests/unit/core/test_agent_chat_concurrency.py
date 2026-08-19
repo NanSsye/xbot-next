@@ -101,7 +101,18 @@ async def test_agent_work_runs_in_background_without_blocking_next_message():
 
 
 @pytest.mark.anyio
-async def test_wechat_group_persona_is_passed_as_channel_system_context():
+@pytest.mark.parametrize(
+    ("scope", "raw_id", "stored_id"),
+    [
+        ("group", "group-1@chatroom", "wechat:wechat869:group:group-1@chatroom"),
+        ("private", "user-1", "wechat:wechat869:private:user-1"),
+    ],
+)
+async def test_wechat_conversation_persona_is_passed_as_channel_system_context(
+    scope: str,
+    raw_id: str,
+    stored_id: str,
+):
     plugin = load_agent_chat_plugin()
     calls = []
 
@@ -112,7 +123,7 @@ async def test_wechat_group_persona_is_passed_as_channel_system_context():
 
     class Conversations:
         async def get_conversation(self, conversation_id):
-            assert conversation_id == "wechat:wechat869:group:group-1@chatroom"
+            assert conversation_id == stored_id
             return SimpleNamespace(
                 agent_persona_enabled=True,
                 agent_persona_prompt="你叫群小助手，只用简短中文回答。",
@@ -133,16 +144,16 @@ async def test_wechat_group_persona_is_passed_as_channel_system_context():
         id="wechat-persona-1",
         platform="wechat",
         adapter="wechat869",
-        conversation_id="group-1@chatroom",
+        conversation_id=raw_id,
         sender_id="member-1",
         content="你好",
-        raw={"scope": "group", "mentions_bot": True},
+        raw={"scope": scope, "mentions_bot": scope == "group"},
     )
 
     await plugin._run_agent(message, ctx, "你好")
 
-    assert calls[0]["channel_context"]["group_persona_prompt"] == "你叫群小助手，只用简短中文回答。"
-    assert calls[0]["channel_context"]["group_model"] == "group-model"
+    assert calls[0]["channel_context"]["persona_prompt"] == "你叫群小助手，只用简短中文回答。"
+    assert calls[0]["channel_context"]["conversation_model"] == "group-model"
 
 
 @pytest.mark.anyio

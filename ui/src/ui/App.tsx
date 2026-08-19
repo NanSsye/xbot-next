@@ -61,7 +61,7 @@ import type {
   SystemStatus,
   UiEvent,
   WechatConversation,
-  WechatGroupPersona,
+  WechatConversationPersona,
   WechatMember,
   WechatMessage,
   WechatUserDetail,
@@ -1635,10 +1635,10 @@ function WechatWorkbench(props: {
   const [syncing, setSyncing] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [groupPersona, setGroupPersona] = useState<WechatGroupPersona | null>(null);
+  const [conversationPersona, setConversationPersona] = useState<WechatConversationPersona | null>(null);
   const [personaEnabled, setPersonaEnabled] = useState(false);
   const [personaDraft, setPersonaDraft] = useState("");
-  const [groupModel, setGroupModel] = useState("");
+  const [conversationModel, setConversationModel] = useState("");
   const [personaLoading, setPersonaLoading] = useState(false);
   const [personaSaving, setPersonaSaving] = useState(false);
   const [personaError, setPersonaError] = useState("");
@@ -1647,6 +1647,7 @@ function WechatWorkbench(props: {
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const selectedConversation = props.conversations.find((item) => item.id === props.selectedConversationId);
   const selectedIsGroup = selectedConversation?.scope === "group";
+  const conversationLabel = selectedIsGroup ? "本群" : "此私聊";
   const personaTooLong = personaDraft.length > 8000;
   const members = props.members;
   const forceScrollBottom = useCallback(() => {
@@ -1662,11 +1663,11 @@ function WechatWorkbench(props: {
   }, [props.messages.length, props.selectedConversationId, forceScrollBottom]);
   useEffect(() => {
     let cancelled = false;
-    if (!props.selectedConversationId || !selectedIsGroup) {
-      setGroupPersona(null);
+    if (!props.selectedConversationId || !selectedConversation) {
+      setConversationPersona(null);
       setPersonaEnabled(false);
       setPersonaDraft("");
-      setGroupModel("");
+      setConversationModel("");
       setPersonaLoading(false);
       setPersonaError("");
       setPersonaNotice("");
@@ -1675,13 +1676,13 @@ function WechatWorkbench(props: {
     setPersonaLoading(true);
     setPersonaError("");
     setPersonaNotice("");
-    void api.wechatGroupPersona(props.selectedConversationId)
+    void api.wechatConversationPersona(props.selectedConversationId)
       .then((persona) => {
         if (cancelled) return;
-        setGroupPersona(persona);
+        setConversationPersona(persona);
         setPersonaEnabled(persona.enabled);
         setPersonaDraft(persona.prompt);
-        setGroupModel(persona.model ?? "");
+        setConversationModel(persona.model ?? "");
       })
       .catch((error) => {
         if (!cancelled) setPersonaError(error instanceof Error ? error.message : String(error));
@@ -1690,7 +1691,7 @@ function WechatWorkbench(props: {
         if (!cancelled) setPersonaLoading(false);
       });
     return () => { cancelled = true; };
-  }, [props.selectedConversationId, selectedIsGroup]);
+  }, [props.selectedConversationId, selectedConversation?.id]);
   async function submitWechat() {
     if (!props.selectedConversationId || sending || (!draft.trim() && !file)) return;
     setSending(true);
@@ -1721,7 +1722,7 @@ function WechatWorkbench(props: {
     }
   }
 
-  async function saveGroupPersona(enabled = personaEnabled, model = groupModel) {
+  async function saveConversationPersona(enabled = personaEnabled, model = conversationModel) {
     if (!props.selectedConversationId || personaSaving) return;
     const prompt = personaDraft.trim();
     if (personaTooLong) {
@@ -1729,19 +1730,19 @@ function WechatWorkbench(props: {
       return;
     }
     if (enabled && !prompt) {
-      setPersonaError("启用群专属人设前，请先填写人设内容。");
+      setPersonaError(`启用${conversationLabel}专属人设前，请先填写人设内容。`);
       return;
     }
     setPersonaSaving(true);
     setPersonaError("");
     setPersonaNotice("");
     try {
-      const persona = await api.updateWechatGroupPersona(props.selectedConversationId, { enabled, prompt, model: model || null });
-      setGroupPersona(persona);
+      const persona = await api.updateWechatConversationPersona(props.selectedConversationId, { enabled, prompt, model: model || null });
+      setConversationPersona(persona);
       setPersonaEnabled(persona.enabled);
       setPersonaDraft(persona.prompt);
-      setGroupModel(persona.model ?? "");
-      const applied = [persona.enabled ? "群专属人设" : "全局人设", persona.model ? `模型 ${persona.model}` : `默认模型 ${persona.default_model}`];
+      setConversationModel(persona.model ?? "");
+      const applied = [persona.enabled ? `${conversationLabel}专属人设` : "全局人设", persona.model ? `模型 ${persona.model}` : `默认模型 ${persona.default_model}`];
       setPersonaNotice(`已保存：${applied.join("，")}。下一条消息立即生效。`);
     } catch (error) {
       setPersonaError(error instanceof Error ? error.message : String(error));
@@ -1750,15 +1751,15 @@ function WechatWorkbench(props: {
     }
   }
 
-  async function resetGroupPersonaSession() {
+  async function resetConversationPersonaSession() {
     if (!props.selectedConversationId || personaSaving) return;
-    if (!window.confirm("确定清空这个群的 Agent 历史会话吗？群人设配置会保留。")) return;
+    if (!window.confirm(`确定清空${selectedIsGroup ? "这个群" : "这个私聊"}的 Agent 历史会话吗？专属人设配置会保留。`)) return;
     setPersonaSaving(true);
     setPersonaError("");
     setPersonaNotice("");
     try {
-      await api.resetWechatGroupPersonaSession(props.selectedConversationId);
-      setPersonaNotice("本群历史会话已清空，下一条消息会以当前人设开启新会话。");
+      await api.resetWechatConversationPersonaSession(props.selectedConversationId);
+      setPersonaNotice(`${conversationLabel}历史会话已清空，下一条消息会以当前人设开启新会话。`);
     } catch (error) {
       setPersonaError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1812,60 +1813,64 @@ function WechatWorkbench(props: {
       </main>
       {detailOpen ? (
         <aside className="wechat-detail">
-          <div className="wechat-search"><Search size={16} /><input placeholder="搜索群成员" /></div>
-          <div className="wechat-member-grid">
-            {members.slice(0, 24).map((member) => (
-              <button key={member.user_id} className="wechat-member" onClick={() => void props.loadUser(member.user_id)}>
-                <WechatAvatar className="wechat-member__avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><span>{member.nickname || member.user_id}</span>
-              </button>
-            ))}
-            <button className="wechat-member"><div className="wechat-member__avatar dashed"><Plus size={20} /></div><span>添加</span></button>
-          </div>
-          <div className="wechat-info-row"><b>群聊名称</b><span>{selectedConversation ? conversationTitle(selectedConversation) : "-"}</span></div>
-          <div className="wechat-info-row"><b>群ID</b><span>{selectedConversation?.raw_id || "-"}</span></div>
           {selectedIsGroup ? (
+            <>
+              <div className="wechat-search"><Search size={16} /><input placeholder="搜索群成员" /></div>
+              <div className="wechat-member-grid">
+                {members.slice(0, 24).map((member) => (
+                  <button key={member.user_id} className="wechat-member" onClick={() => void props.loadUser(member.user_id)}>
+                    <WechatAvatar className="wechat-member__avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><span>{member.nickname || member.user_id}</span>
+                  </button>
+                ))}
+                <button className="wechat-member"><div className="wechat-member__avatar dashed"><Plus size={20} /></div><span>添加</span></button>
+              </div>
+            </>
+          ) : null}
+          <div className="wechat-info-row"><b>{selectedIsGroup ? "群聊名称" : "联系人"}</b><span>{selectedConversation ? conversationTitle(selectedConversation) : "-"}</span></div>
+          <div className="wechat-info-row"><b>{selectedIsGroup ? "群ID" : "联系人ID"}</b><span>{selectedConversation?.raw_id || "-"}</span></div>
+          {selectedConversation ? (
             <section className="wechat-persona-card">
               <div className="wechat-persona-card__head">
-                <div><b>群 Agent 配置</b><small>人设和模型可独立覆盖，下一条消息立即生效</small></div>
-                <span className={personaEnabled || Boolean(groupModel) ? "is-enabled" : ""}>{personaEnabled || groupModel ? "本群覆盖" : "继承全局"}</span>
+                <div><b>{selectedIsGroup ? "群聊" : "私聊"} Agent 配置</b><small>人设和模型可独立覆盖，下一条消息立即生效</small></div>
+                <span className={personaEnabled || Boolean(conversationModel) ? "is-enabled" : ""}>{personaEnabled || conversationModel ? `${conversationLabel}覆盖` : "继承全局"}</span>
               </div>
               {personaLoading ? <p className="wechat-persona-card__hint">正在读取人设配置…</p> : (
                 <>
                   <label className="wechat-persona-toggle">
                     <input type="checkbox" checked={personaEnabled} onChange={(event) => { setPersonaEnabled(event.target.checked); setPersonaNotice(""); setPersonaError(""); }} />
-                    <span>使用本群人设替换全局人设</span>
+                    <span>使用{conversationLabel}人设替换全局人设</span>
                   </label>
-                  <label className="wechat-persona-card__label" htmlFor="wechat-group-model">本群模型</label>
+                  <label className="wechat-persona-card__label" htmlFor="wechat-conversation-model">{conversationLabel}模型</label>
                   <select
-                    id="wechat-group-model"
-                    value={groupModel}
-                    onChange={(event) => { setGroupModel(event.target.value); setPersonaNotice(""); setPersonaError(""); }}
+                    id="wechat-conversation-model"
+                    value={conversationModel}
+                    onChange={(event) => { setConversationModel(event.target.value); setPersonaNotice(""); setPersonaError(""); }}
                   >
-                    <option value="">继承全局默认 · {groupPersona?.default_model ?? "-"}</option>
-                    {(groupPersona?.enabled_models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
+                    <option value="">继承全局默认 · {conversationPersona?.default_model ?? "-"}</option>
+                    {(conversationPersona?.enabled_models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}
                   </select>
                   <p className="wechat-persona-card__hint">留空时自动使用全局默认模型；模型池在“系统配置中心”统一管理。</p>
-                  <label className="wechat-persona-card__label" htmlFor="wechat-group-persona">人设内容</label>
+                  <label className="wechat-persona-card__label" htmlFor="wechat-conversation-persona">人设内容</label>
                   <textarea
-                    id="wechat-group-persona"
+                    id="wechat-conversation-persona"
                     value={personaDraft}
                     aria-invalid={personaTooLong || Boolean(personaError)}
-                    aria-describedby="wechat-group-persona-meta wechat-group-persona-status"
+                    aria-describedby="wechat-conversation-persona-meta wechat-conversation-persona-status"
                     onChange={(event) => { setPersonaDraft(event.target.value); setPersonaNotice(""); setPersonaError(""); }}
                     placeholder="例如：你叫小传，是本群的专业法律顾问。回答简洁、严谨，先给结论，再说明依据；不确定时明确说明，不编造法律条文。"
                   />
-                  <div id="wechat-group-persona-meta" className={`wechat-persona-card__meta ${personaTooLong ? "is-over-limit" : ""}`}>
+                  <div id="wechat-conversation-persona-meta" className={`wechat-persona-card__meta ${personaTooLong ? "is-over-limit" : ""}`}>
                     <span>{personaDraft.length} / 8000 字{personaTooLong ? `，超出 ${personaDraft.length - 8000} 字` : ""}</span>
-                    {groupPersona?.updated_at ? <span>更新于 {formatDate(groupPersona.updated_at)}</span> : null}
+                    {conversationPersona?.updated_at ? <span>更新于 {formatDate(conversationPersona.updated_at)}</span> : null}
                   </div>
-                  <div id="wechat-group-persona-status" className="wechat-persona-card__status" aria-live="polite" aria-atomic="true">
+                  <div id="wechat-conversation-persona-status" className="wechat-persona-card__status" aria-live="polite" aria-atomic="true">
                     {personaTooLong || personaError ? <p className="wechat-persona-card__error">{personaTooLong ? `请删减 ${personaDraft.length - 8000} 个字后再保存。` : personaError}</p> : null}
                     {!personaTooLong && !personaError && personaNotice ? <p className="wechat-persona-card__success">{personaNotice}</p> : null}
                   </div>
                   <div className="wechat-persona-card__actions">
-                    <button type="button" disabled={personaSaving || personaTooLong} onClick={() => void saveGroupPersona()}>{personaSaving ? "保存中" : "保存并生效"}</button>
-                    <button type="button" disabled={personaSaving || personaTooLong || (!groupPersona?.enabled && !groupPersona?.model)} onClick={() => void saveGroupPersona(false, "")}>全部恢复全局</button>
-                    <button type="button" disabled={personaSaving} onClick={() => void resetGroupPersonaSession()}>清空本群会话</button>
+                    <button type="button" disabled={personaSaving || personaTooLong} onClick={() => void saveConversationPersona()}>{personaSaving ? "保存中" : "保存并生效"}</button>
+                    <button type="button" disabled={personaSaving || personaTooLong || (!conversationPersona?.enabled && !conversationPersona?.model)} onClick={() => void saveConversationPersona(false, "")}>全部恢复全局</button>
+                    <button type="button" disabled={personaSaving} onClick={() => void resetConversationPersonaSession()}>清空{selectedIsGroup ? "本群" : "私聊"}会话</button>
                   </div>
                 </>
               )}

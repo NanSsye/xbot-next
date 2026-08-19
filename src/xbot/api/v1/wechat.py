@@ -36,7 +36,7 @@ class WechatProfileUpdate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class WechatGroupPersonaUpdate(BaseModel):
+class WechatConversationPersonaUpdate(BaseModel):
     enabled: bool = False
     prompt: str = Field(default="", max_length=8000)
     model: str | None = Field(default=None, max_length=256)
@@ -79,12 +79,13 @@ def _raw_conversation_id(conversation_id: str) -> str:
     return conversation_id
 
 
-def _group_persona_dict(conversation: ConversationRecord, ctx: AppContext) -> dict:
+def _conversation_persona_dict(conversation: ConversationRecord, ctx: AppContext) -> dict:
     enabled_models = list(ctx.settings.agent.llm.enabled_models)
     configured_model = conversation.agent_model
     model = configured_model if configured_model in enabled_models else None
     return {
         "conversation_id": conversation.id,
+        "scope": conversation.scope,
         "enabled": bool(conversation.agent_persona_enabled),
         "prompt": conversation.agent_persona_prompt or "",
         "model": model,
@@ -98,11 +99,11 @@ def _group_persona_dict(conversation: ConversationRecord, ctx: AppContext) -> di
     }
 
 
-def _require_wechat_group(conversation: ConversationRecord | None) -> ConversationRecord:
+def _require_wechat_conversation(conversation: ConversationRecord | None) -> ConversationRecord:
     if conversation is None:
         raise HTTPException(status_code=404, detail="conversation not found")
-    if conversation.platform != "wechat" or conversation.scope != "group":
-        raise HTTPException(status_code=400, detail="group persona is only available for WeChat groups")
+    if conversation.platform != "wechat" or conversation.scope not in {"group", "private"}:
+        raise HTTPException(status_code=400, detail="persona is only available for WeChat conversations")
     return conversation
 
 
@@ -697,52 +698,52 @@ async def send_wechat_message(
 
 
 @router.get("/conversations/{conversation_id}/persona")
-async def get_wechat_group_persona(
+async def get_wechat_conversation_persona(
     conversation_id: str,
     ctx: AppContext = Depends(get_context),
 ) -> dict:
     async with ctx.storage.session_factory() as session:
-        conversation = _require_wechat_group(
+        conversation = _require_wechat_conversation(
             await session.get(ConversationRecord, conversation_id)
         )
-        return {"success": True, "data": _group_persona_dict(conversation, ctx)}
+        return {"success": True, "data": _conversation_persona_dict(conversation, ctx)}
 
 
 @router.put("/conversations/{conversation_id}/persona")
-async def update_wechat_group_persona(
+async def update_wechat_conversation_persona(
     conversation_id: str,
-    payload: WechatGroupPersonaUpdate,
+    payload: WechatConversationPersonaUpdate,
     ctx: AppContext = Depends(get_context),
 ) -> dict:
     prompt = payload.prompt.strip()
     model = str(payload.model or "").strip() or None
     if payload.enabled and not prompt:
-        raise HTTPException(status_code=400, detail="启用群专属人设时，人设内容不能为空")
+        raise HTTPException(status_code=400, detail="启用会话专属人设时，人设内容不能为空")
     if model is not None and model not in ctx.settings.agent.llm.enabled_models:
         raise HTTPException(status_code=400, detail="所选模型不在管理员启用的模型池中")
     async with ctx.storage.session_factory() as session, session.begin():
-        conversation = _require_wechat_group(
+        conversation = _require_wechat_conversation(
             await session.get(ConversationRecord, conversation_id)
         )
         conversation.agent_persona_enabled = payload.enabled
         conversation.agent_persona_prompt = prompt or None
         conversation.agent_persona_updated_at = utc_now()
         conversation.agent_model = model
-        data = _group_persona_dict(conversation, ctx)
+        data = _conversation_persona_dict(conversation, ctx)
         source = f"channel:wechat:{conversation.adapter}:{conversation.raw_id}"
     # Hermes caches the complete system prompt per conversation. Clear only
-    # this group so the next turn rebuilds it from the new identity.
+    # the selected conversation so the next turn uses the new identity.
     ctx.agent.clear_session_history(source)
     return {"success": True, "data": data}
 
 
 @router.post("/conversations/{conversation_id}/persona/reset-session")
-async def reset_wechat_group_persona_session(
+async def reset_wechat_conversation_persona_session(
     conversation_id: str,
     ctx: AppContext = Depends(get_context),
 ) -> dict:
     async with ctx.storage.session_factory() as session:
-        conversation = _require_wechat_group(
+        conversation = _require_wechat_conversation(
             await session.get(ConversationRecord, conversation_id)
         )
         source = f"channel:wechat:{conversation.adapter}:{conversation.raw_id}"
