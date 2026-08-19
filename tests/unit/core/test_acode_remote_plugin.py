@@ -68,6 +68,7 @@ def plugin_context(tmp_path: Path, replies: list[Any], *, adapters: Any = None) 
             "base_url": "http://acode.test:8787",
             "admin_token": "a" * 32,
             "allowed_user_ids": [],
+            "turn_result_api": False,
         },
         settings=settings,
         send_reply=send_reply,
@@ -575,7 +576,7 @@ async def test_watcher_returns_only_agent_result_to_telegram(tmp_path: Path) -> 
 
     async def request(method: str, path: str):
         assert method == "GET"
-        assert path == f"/sessions/{thread_id}/events"
+        assert path.startswith(f"/sessions/{thread_id}/events?")
         return {
             "events": [
                 {
@@ -623,6 +624,103 @@ async def test_watcher_returns_only_agent_result_to_telegram(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_watcher_uses_event_cursor_and_reads_direct_agent_messages(tmp_path: Path) -> None:
+    module = load_plugin_module()
+    plugin = module.AcodeRemotePlugin()
+    replies: list[Any] = []
+    await plugin.on_load(plugin_context(tmp_path, replies))
+    thread_id = "33333333-3333-3333-3333-333333333335"
+    run_key = add_pending_run(plugin, thread_id)
+    paths: list[str] = []
+
+    async def request(method: str, path: str):
+        assert method == "GET"
+        paths.append(path)
+        if len(paths) == 1:
+            return {
+                "events": [],
+                "nextCursor": 100,
+                "hasMore": True,
+            }
+        return {
+            "events": [
+                {
+                    "message": {
+                        "type": "session-output",
+                        "payload": {
+                            "eventType": "agentMessage",
+                            "jsonPayload": {
+                                "id": "agent-final",
+                                "type": "agentMessage",
+                                "phase": "final_answer",
+                                "text": "分页后的真实回复。",
+                            },
+                        },
+                    }
+                },
+                {
+                    "message": {
+                        "type": "session-finished",
+                        "payload": {"turn": {"id": "turn-new", "status": "completed"}},
+                    }
+                },
+                {
+                    "message": {
+                        "type": "session-output",
+                        "payload": {
+                            "eventType": "agentMessage",
+                            "jsonPayload": {
+                                "type": "agentMessage",
+                                "text": "其他 turn 的内容不能串进来。",
+                            },
+                        },
+                    }
+                },
+            ],
+            "nextCursor": 103,
+            "hasMore": False,
+        }
+
+    plugin._request = request
+    await plugin._watch_run(run_key)
+
+    assert "since=" in paths[0]
+    assert paths[1] == f"/sessions/{thread_id}/events?after=100&limit=500"
+    assert replies[-1].content == "分页后的真实回复。"
+    await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_watcher_prefers_compact_turn_result_api(tmp_path: Path) -> None:
+    module = load_plugin_module()
+    plugin = module.AcodeRemotePlugin()
+    replies: list[Any] = []
+    await plugin.on_load(plugin_context(tmp_path, replies))
+    plugin._turn_result_api = True
+    thread_id = "33333333-3333-3333-3333-333333333336"
+    run_key = add_pending_run(plugin, thread_id)
+    paths: list[str] = []
+
+    async def request(method: str, path: str):
+        assert method == "GET"
+        paths.append(path)
+        return {
+            "found": True,
+            "turnId": "turn-new",
+            "status": "completed",
+            "text": "通过精简结果接口返回。",
+        }
+
+    plugin._request = request
+    await plugin._watch_run(run_key)
+
+    assert paths == [f"/api/threads/{thread_id}/turns/turn-new/result"]
+    assert replies[-1].content == "通过精简结果接口返回。"
+    assert run_key not in plugin._runs
+    await plugin.on_unload()
+
+
+@pytest.mark.asyncio
 async def test_watcher_ignores_unscoped_stale_finish_and_uses_final_turn_items(tmp_path: Path) -> None:
     module = load_plugin_module()
     plugin = module.AcodeRemotePlugin()
@@ -632,7 +730,8 @@ async def test_watcher_ignores_unscoped_stale_finish_and_uses_final_turn_items(t
     run_key = add_pending_run(plugin, thread_id, message_id="77")
 
     async def request(method: str, path: str):
-        assert (method, path) == ("GET", f"/sessions/{thread_id}/events")
+        assert method == "GET"
+        assert path.startswith(f"/sessions/{thread_id}/events?")
         return {"events": [
             {
                 "message": {
@@ -973,7 +1072,8 @@ async def test_on_load_recovers_finished_turn_and_delivers_once(tmp_path: Path) 
     replies: list[Any] = []
 
     async def request(method: str, path: str):
-        assert (method, path) == ("GET", f"/sessions/{thread_id}/events")
+        assert method == "GET"
+        assert path.startswith(f"/sessions/{thread_id}/events?")
         return {"events": [
             {
                 "message": {
@@ -1052,7 +1152,8 @@ async def test_watcher_continues_after_timeout_without_repeating_notice(tmp_path
 
     async def request(method: str, path: str):
         nonlocal calls
-        assert (method, path) == ("GET", f"/sessions/{thread_id}/events")
+        assert method == "GET"
+        assert path.startswith(f"/sessions/{thread_id}/events?")
         calls += 1
         if calls < 3:
             return {"events": []}

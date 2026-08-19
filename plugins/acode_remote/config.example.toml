@@ -11,6 +11,7 @@ max_threads = 30
 request_timeout_seconds = 20
 result_timeout_seconds = 1800
 poll_interval_seconds = 1.5
+turn_result_api = true
 album_delay_seconds = 5
 
 # 语音在插件内本地转写，不会发送到第三方转写接口。

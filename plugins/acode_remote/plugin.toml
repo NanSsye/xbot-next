@@ -1,5 +1,5 @@
 name = "acode_remote"
-version = "0.4.1"
+version = "0.4.2"
 entry = "main:AcodeRemotePlugin"
 author = "xbot"
 description = "Telegram private-chat selector and bridge for existing aCode/Codex tasks."

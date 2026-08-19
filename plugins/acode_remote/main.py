@@ -35,7 +35,7 @@ class AttachmentError(ValueError):
 
 class AcodeRemotePlugin(PluginBase):
     name = "acode_remote"
-    version = "0.4.1"
+    version = "0.4.2"
 
     def __init__(self) -> None:
         self._ctx: PluginContext | None = None
@@ -75,6 +75,7 @@ class AcodeRemotePlugin(PluginBase):
         self._voice_lock = asyncio.Lock()
         self._retention_days = 30
         self._maintenance_enabled = True
+        self._turn_result_api = True
 
     async def on_load(self, ctx: PluginContext) -> None:
         self._ctx = ctx
@@ -104,6 +105,7 @@ class AcodeRemotePlugin(PluginBase):
         )
         self._retention_days = self._bounded_int(config.get("retention_days"), 30, 7, 3650)
         self._maintenance_enabled = bool(config.get("maintenance_enabled", True))
+        self._turn_result_api = bool(config.get("turn_result_api", True))
         await asyncio.to_thread(self._harden_config_permissions, ctx.data_dir.parent / "config.toml")
         self._selections = await asyncio.to_thread(self._read_state, ctx.data_dir / "selections.json")
         self._favorites = await asyncio.to_thread(
@@ -1145,6 +1147,7 @@ class AcodeRemotePlugin(PluginBase):
         tool_steps: list[str] = []
         running_tools: dict[str, int] = {}
         processed_count = 0
+        event_cursor: int | None = None
         last_live_content = ""
         timeout_due_at = (
             started_at + self._result_timeout
@@ -1158,13 +1161,57 @@ class AcodeRemotePlugin(PluginBase):
         )
         try:
             while True:
-                payload = await self._request("GET", f"/sessions/{thread_id}/events")
+                if self._turn_result_api:
+                    try:
+                        result = await self._request(
+                            "GET",
+                            f"/api/threads/{thread_id}/turns/{turn_id}/result",
+                        )
+                    except AcodeApiError as exc:
+                        if exc.status != 404:
+                            raise
+                        self._turn_result_api = False
+                    else:
+                        if isinstance(result, dict) and bool(result.get("found")):
+                            status = str(result.get("status") or "running").lower()
+                            output = str(result.get("text") or "").strip()
+                            if status in {
+                                "completed", "cancelled", "interrupted", "failed", "error",
+                            }:
+                                await self._deliver_result(
+                                    run_key,
+                                    output,
+                                    self._finished_status({"turn": {"status": status}}),
+                                )
+                                return
+                            live_content = self._live_progress(output, [])
+                            if live_content != last_live_content:
+                                await self._update_live_message(run_key, live_content)
+                                last_live_content = live_content
+                        if time.time() >= timeout_due_at:
+                            await self._deliver_timeout(run_key)
+                        await asyncio.sleep(self._poll_interval)
+                        continue
+                if event_cursor is None:
+                    event_path = (
+                        f"/sessions/{thread_id}/events"
+                        f"?since={max(0.0, started_at - 2):.3f}&limit=500"
+                    )
+                else:
+                    event_path = f"/sessions/{thread_id}/events?after={event_cursor}&limit=500"
+                payload = await self._request("GET", event_path)
                 entries = payload.get("events") if isinstance(payload, dict) else []
                 current_entries = entries if isinstance(entries, list) else []
-                if len(current_entries) < processed_count:
-                    processed_count = 0
-                new_entries = current_entries[processed_count:]
-                processed_count = len(current_entries)
+                next_cursor = payload.get("nextCursor") if isinstance(payload, dict) else None
+                paged_events = isinstance(next_cursor, int) and not isinstance(next_cursor, bool)
+                if paged_events:
+                    new_entries = current_entries
+                    event_cursor = max(event_cursor or 0, next_cursor)
+                else:
+                    if len(current_entries) < processed_count:
+                        processed_count = 0
+                    new_entries = current_entries[processed_count:]
+                    processed_count = len(current_entries)
                 finished = False
                 for entry in new_entries:
                     event = entry.get("message") if isinstance(entry, dict) else None
@@ -1186,7 +1233,7 @@ class AcodeRemotePlugin(PluginBase):
                                     tool_steps.clear()
                                 latest_agent_id = self._event_item_id(event_payload) or latest_agent_id or "agent"
                                 agent_chunks.setdefault(latest_agent_id, []).append(chunk)
-                        elif output_type == "item/completed":
+                        elif output_type in {"item/completed", "agentMessage"}:
                             text = self._completed_agent_text(event_payload)
                             if text:
                                 completed_messages.append(text)
@@ -1198,6 +1245,7 @@ class AcodeRemotePlugin(PluginBase):
                             completed_messages.append(finished_text)
                         final_status = self._finished_status(event_payload)
                         finished = True
+                        break
 
                 partial = "".join(agent_chunks.get(latest_agent_id, [])) if latest_agent_id else ""
                 if finished:
@@ -1214,6 +1262,8 @@ class AcodeRemotePlugin(PluginBase):
                     last_live_content = live_content
                 if time.time() >= timeout_due_at:
                     await self._deliver_timeout(run_key)
+                if paged_events and bool(payload.get("hasMore")):
+                    continue
                 await asyncio.sleep(self._poll_interval)
         except asyncio.CancelledError:
             raise
@@ -2165,10 +2215,14 @@ class AcodeRemotePlugin(PluginBase):
     @staticmethod
     def _completed_agent_text(payload: dict[str, Any]) -> str:
         json_payload = payload.get("jsonPayload")
-        item = json_payload.get("item") if isinstance(json_payload, dict) else None
-        if not isinstance(item, dict) or item.get("type") != "agentMessage":
+        if not isinstance(json_payload, dict):
             return ""
-        return str(item.get("text") or "").strip()
+        item = json_payload.get("item")
+        if isinstance(item, dict) and item.get("type") == "agentMessage":
+            return str(item.get("text") or "").strip()
+        if payload.get("eventType") == "agentMessage" and json_payload.get("type") == "agentMessage":
+            return str(json_payload.get("text") or "").strip()
+        return ""
 
     @staticmethod
     def _finished_agent_text(payload: dict[str, Any]) -> str:
