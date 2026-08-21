@@ -131,6 +131,10 @@ terminal:
 context:
   engine: "compressor"
 
+compression:
+  enabled: true
+  threshold: 0.80
+
 memory:
   memory_enabled: true
   user_profile_enabled: true
@@ -999,6 +1003,7 @@ async def run_hermes_agent(
             skip_context_files=False,
             skip_memory=False,
             max_tokens=config.llm.max_tokens,
+            context_length=config.llm.context_window_tokens,
             tool_delay=0,
             tool_progress_callback=tool_progress_callback,
             tool_start_callback=tool_start_callback,

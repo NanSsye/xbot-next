@@ -518,6 +518,7 @@ def init_agent(
     checkpoint_max_file_size_mb: int = 10,
     pass_session_id: bool = False,
     requested_provider: str = None,
+    context_length: int = None,
 ):
     """
     Initialize the AI Agent.
@@ -550,6 +551,7 @@ def init_agent(
         clarify_callback (callable): Callback function(question, choices) -> str for interactive user questions.
             Provided by the platform layer (CLI or gateway). If None, the clarify tool returns an error.
         max_tokens (int): Maximum tokens for model responses (optional, uses model default if not set)
+        context_length (int): Explicit runtime context window for the active model (optional).
         reasoning_config (Dict): OpenRouter reasoning configuration override (e.g. {"effort": "none"} to disable thinking).
             If None, defaults to {"enabled": True, "effort": "medium"} for OpenRouter. Set to disable/customize reasoning.
         prefill_messages (List[Dict]): Messages to prepend to conversation history as prefilled context.
@@ -1835,10 +1837,10 @@ def init_agent(
     _compression_cfg = _agent_cfg.get("compression", {})
     if not isinstance(_compression_cfg, dict):
         _compression_cfg = {}
-    compression_threshold = float(_compression_cfg.get("threshold", 0.50))
+    compression_threshold = float(_compression_cfg.get("threshold", 0.80))
     # Per-model/route compaction-threshold override. Codex gpt-5.4 / gpt-5.5
     # raise to 85% (the Codex backend caps both families at 272K, so the
-    # default 50% would compact at ~136K — half the usable context). Gated by
+    # previous 50% default compacted at ~136K — half the usable context). Gated by
     # an opt-out config flag so the user can fall back to the global threshold;
     # when the override fires we stash a one-time notification (replayed on the
     # first turn) that tells the user what changed and how to revert. The
@@ -2071,7 +2073,21 @@ def init_agent(
             _aux_context_config = int(_aux_context_config)
         except (TypeError, ValueError):
             _aux_context_config = None
-    agent._aux_compression_context_length_config = _aux_context_config
+    runtime_context_length = None
+    if context_length is not None:
+        if isinstance(context_length, bool):
+            raise ValueError("context_length must be a positive integer")
+        try:
+            runtime_context_length = int(context_length)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("context_length must be a positive integer") from exc
+        if runtime_context_length <= 0:
+            raise ValueError("context_length must be a positive integer")
+    agent._aux_compression_context_length_config = (
+        _aux_context_config
+        if _aux_context_config is not None
+        else runtime_context_length
+    )
 
     # Read explicit model output-token override from config when the
     # caller did not pass one directly.
@@ -2102,7 +2118,9 @@ def init_agent(
     agent._session_init_model_config["max_tokens"] = agent.max_tokens
 
     # Read explicit context_length override from model config
-    if isinstance(_model_cfg, dict):
+    if runtime_context_length is not None:
+        _config_context_length = runtime_context_length
+    elif isinstance(_model_cfg, dict):
         _config_context_length = _model_cfg.get("context_length")
     else:
         _config_context_length = None
@@ -2142,7 +2160,11 @@ def init_agent(
     # live switch/fallback paths already clear this override; keep direct-start
     # overrides consistent with them and let provider metadata resolve the
     # active model's window instead.
-    if _config_context_length is not None and isinstance(_model_cfg, dict):
+    if (
+        runtime_context_length is None
+        and _config_context_length is not None
+        and isinstance(_model_cfg, dict)
+    ):
         _configured_default_model = str(_model_cfg.get("default") or "").strip()
         _configured_default_runtime_model = _configured_default_model
         _active_runtime_model = agent.model
