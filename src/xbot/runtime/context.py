@@ -8,6 +8,7 @@ from xbot.agent.runtime import AgentRuntime
 from xbot.conversations.manager import ConversationManager
 from xbot.core.config import Settings
 from xbot.core.events import EventBus
+from xbot.core.proxy import apply_proxy_environment
 from xbot.knowledge import GroupKnowledgeService
 from xbot.messaging.consumer import MessageConsumer
 from xbot.messaging.dedupe import DedupeService
@@ -39,6 +40,7 @@ class AppContext:
 
 
 def build_context(settings: Settings) -> AppContext:
+    apply_proxy_environment(settings.network.proxy)
     events = EventBus()
     storage = Storage(settings.storage)
     message_queue = create_message_queue(settings.queue)

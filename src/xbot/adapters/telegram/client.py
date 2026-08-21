@@ -9,6 +9,7 @@ from typing import Any
 import aiohttp
 
 from xbot.core.config import TelegramAdapterConfig
+from xbot.core.proxy import create_aiohttp_session
 
 
 class TelegramApiError(RuntimeError):
@@ -207,7 +208,7 @@ class TelegramBotClient:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = create_aiohttp_session()
             self._owns_session = True
         return self._session
 

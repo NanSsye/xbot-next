@@ -70,6 +70,23 @@ def test_config_api_masks_secrets_applies_live_change_and_rejects_stale_revision
         assert "api-test-secret" not in serialized
         assert "qq-secret" not in serialized
 
+        proxy_response = client.put(
+            "/api/v1/config",
+            json={
+                "revision": snapshot["revision"],
+                "changes": [
+                    {"path": "network.proxy.url", "value": "http://user:password@proxy.internal:1080"},
+                    {"path": "network.proxy.enabled", "value": True},
+                ],
+            },
+        )
+        assert proxy_response.status_code == 200
+        assert "user:password" not in proxy_response.text
+        proxy_result = proxy_response.json()["data"]
+        assert proxy_result["restart_required"] == []
+        assert proxy_result["applied"] == ["network.proxy.enabled", "network.proxy.url"]
+        snapshot = proxy_result["snapshot"]
+
         update_response = client.put(
             "/api/v1/config",
             json={

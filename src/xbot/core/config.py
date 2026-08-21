@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from xbot.core.proxy import NetworkConfig, merge_proxy_env
+
 
 class XBotConfig(BaseModel):
     name: str = "xbot"
@@ -344,6 +346,7 @@ class Settings(BaseModel):
     queue: QueueSettings = Field(default_factory=QueueSettings)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     plugins: PluginConfig = Field(default_factory=PluginConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
@@ -429,6 +432,7 @@ def load_settings(
         else _load_dotenv(path.parent.parent / ".env")
     )
     env = {**dotenv_values, **os.environ}
+    merge_proxy_env(data, env)
     if server_host := env.get("XBOT_SERVER_HOST") or env.get("XBOT_HOST"):
         data.setdefault("server", {})["host"] = server_host
     if server_port := env.get("XBOT_SERVER_PORT") or env.get("XBOT_PORT"):
