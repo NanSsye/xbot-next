@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from xbot.core.config import QQAdapterConfig
+from xbot.core.proxy import create_aiohttp_session
 
 
 class QQBotApiError(RuntimeError):
@@ -611,7 +612,7 @@ class QQBotClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=max(5.0, float(self.config.connect_timeout_seconds)))
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            self._session = create_aiohttp_session(timeout=timeout)
             self._owns_session = True
         return self._session
 

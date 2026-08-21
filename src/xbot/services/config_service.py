@@ -17,6 +17,7 @@ from xbot.core.config import (
     runtime_config_path,
 )
 from xbot.core.logging import configure_logging
+from xbot.core.proxy import validate_proxy_config
 from xbot.runtime.context import AppContext, build_context
 from xbot.storage.bootstrap import ensure_storage_ready
 
@@ -39,6 +40,7 @@ SECTION_META: dict[str, tuple[str, str, str]] = {
     "queue": ("消息队列", "消息、回复、事件和失败队列。", "system"),
     "conversation": ("会话", "上下文窗口、摘要与并发隔离。", "system"),
     "runtime": ("运行时", "任务并发量与超时边界。", "system"),
+    "network": ("网络与代理", "为 Telegram、QQ、Agent 与外部服务配置出站代理。", "system"),
     "plugins": ("插件", "插件目录与自动加载策略。", "system"),
     "skills": ("Skills", "Skill 目录与自动加载策略。", "system"),
     "agent": ("Agent 与模型", "Hermes、模型、工具审批、MCP 与成员权限。", "system"),
@@ -85,6 +87,9 @@ FULL_LABELS: dict[str, str] = {
     "storage.admin_url": "数据库管理员连接串",
     "queue.type": "队列类型",
     "queue.redis_url": "Redis 连接串",
+    "network.proxy.enabled": "启用出站代理",
+    "network.proxy.url": "代理地址",
+    "network.proxy.no_proxy": "直连地址",
     "agent.enabled": "启用 Agent",
     "agent.llm.enabled": "启用模型",
     "agent.llm.provider": "模型协议",
@@ -168,6 +173,8 @@ DESCRIPTIONS: dict[str, str] = {
     "agent.llm.api_key": "留空表示保持原值；使用“恢复来源”可删除网页覆盖。",
     "agent.llm.model": "所有未单独指定模型的会话都使用此模型。",
     "agent.llm.enabled_models": "群聊只能从这里启用的模型中选择。",
+    "network.proxy.url": "可直接填写 host:port（默认 HTTP），也支持 http、https、socks4、socks5；账号密码不会回传。",
+    "network.proxy.no_proxy": "这些主机不经过 HTTP/HTTPS 代理，建议保留 localhost、127.0.0.1 与 ::1。",
     "adapters.qq.app_id": "在 QQ 开放平台创建机器人后获得。",
     "adapters.qq.client_secret": "只在服务端保存；页面与 API 永不回传明文。",
     "adapters.qq.gateway_url": "通常留空并通过 GET /gateway 自动发现。",
@@ -200,6 +207,9 @@ ENV_ALIASES: dict[str, str] = {
     "agent.llm.api_key": "XBOT_LLM_API_KEY",
     "agent.llm.model": "XBOT_LLM_MODEL",
     "agent.llm.enabled_models": "XBOT_LLM_ENABLED_MODELS",
+    "network.proxy.enabled": "XBOT_PROXY_ENABLED",
+    "network.proxy.url": "XBOT_PROXY_URL",
+    "network.proxy.no_proxy": "XBOT_PROXY_NO_PROXY",
 }
 
 
@@ -379,6 +389,7 @@ class ConfigService:
             raise
 
     def _validate_security(self, settings: Settings) -> None:
+        validate_proxy_config(settings.network.proxy)
         if settings.api.auth_enabled and not settings.api.token.strip():
             raise ValueError("启用控制台鉴权前必须配置 API Token")
         if settings.adapters.qq.enabled and (
@@ -423,7 +434,7 @@ class ConfigService:
         return any(path == prefix or path.startswith(prefix) for prefix in RESTART_REQUIRED_PREFIXES)
 
     def _is_secret(self, path: str) -> bool:
-        if path in {"storage.url", "storage.admin_url", "queue.redis_url"}:
+        if path in {"storage.url", "storage.admin_url", "queue.redis_url", "network.proxy.url"}:
             return True
         leaf = path.rsplit(".", 1)[-1]
         if leaf in {"token", "bot_token", "api_key", "client_secret", "admin_key", "token_key"}:

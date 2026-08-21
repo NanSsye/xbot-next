@@ -74,6 +74,8 @@ def test_snapshot_masks_every_secret_and_reports_runtime_metadata(config_env):
     assert fields["adapters.telegram.bot_token"]["value"] is None
     assert fields["adapters.telegram.bot_token"]["masked_value"] == "已配置"
     assert fields["storage.url"]["value"] is None
+    assert fields["network.proxy.url"]["value"] is None
+    assert fields["network.proxy.url"]["masked_value"] == "未配置"
     assert fields["adapters.qq.app_id"]["value"] == "qq-app"
     assert fields["server.port"]["restart_required"] is True
     serialized = json.dumps(snapshot, ensure_ascii=False)
