@@ -506,6 +506,7 @@ class AIAgent:
         checkpoint_max_file_size_mb: int = 10,
         pass_session_id: bool = False,
         requested_provider: str = None,
+        context_length: int = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent``."""
         if tool_delay is not None:
@@ -563,6 +564,7 @@ class AIAgent:
             event_callback=event_callback,
             reaction_callback=reaction_callback,
             max_tokens=max_tokens,
+            context_length=context_length,
             reasoning_config=reasoning_config,
             service_tier=service_tier,
             request_overrides=request_overrides,

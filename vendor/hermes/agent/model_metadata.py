@@ -348,10 +348,11 @@ def _save_model_metadata_disk_cache(data: Dict[str, Dict[str, Any]]) -> None:
         logger.debug("Failed to save OpenRouter model metadata disk cache: %s", e)
 
 # Descending tiers for context length probing when the model is unknown.
-# We start at 256K (covers GPT-5.x, many current large-context models) and
-# step down on context-length errors until one works.  Tier[0] is also the
-# default fallback when no detection method succeeds.
+# xbot commonly routes current 1M-context models through custom endpoints that
+# cannot report a window size. Start conservatively at 512K, then step down on
+# context-length errors. Tier[0] is also the fallback when detection fails.
 CONTEXT_PROBE_TIERS = [
+    512_000,
     256_000,
     128_000,
     64_000,
@@ -2487,14 +2488,14 @@ def get_model_context_length(
     6. OpenRouter live API metadata (Kimi-family 32k guard)
     7. Local server query (before hardcoded defaults for local endpoints)
     8. Hardcoded defaults (broad family patterns, longest-key-first)
-    9. Default fallback (256K)"""
+    9. Default fallback (512K)"""
     # 0. Explicit config override — user knows best
     if config_context_length is not None and isinstance(config_context_length, int) and config_context_length > 0:
         return config_context_length
 
     # 0a. MoA virtual provider — ``model`` is a preset name, not a real model,
     # and ``base_url`` is the local virtual endpoint, so every probe below would
-    # miss and fall through to the 256K default. The aggregator is the acting
+    # miss and fall through to the 512K default. The aggregator is the acting
     # model, so resolve the context window from the aggregator slot's real
     # provider+model instead. References are advisory-only and never bound the
     # acting context, so they're ignored here.
@@ -2754,7 +2755,7 @@ def get_model_context_length(
                 "in config.yaml to override.",
                 model, base_url, f"{DEFAULT_FALLBACK_CONTEXT:,}",
             )
-            # 3b. Before falling back to the hard 256K default, consult the
+            # 3b. Before falling back to the hard 512K default, consult the
             # hardcoded catalog as a last resort.  A proxied/custom Anthropic
             # gateway (e.g. corporate proxy) fails the Ollama/local probes
             # above, but the model name may still match an entry in
@@ -2774,7 +2775,7 @@ def get_model_context_length(
                         f"{length:,}", model, default_model,
                     )
                     return length
-            # Same silent-256K bug class as the step-9 fallback below —
+            # Same silent-fallback bug class as the step-9 fallback below —
             # warn here too so custom/local endpoints aren't left invisible.
             _warn_context_length_fallback(model, base_url)
             return DEFAULT_FALLBACK_CONTEXT
@@ -2950,7 +2951,7 @@ def get_model_context_length(
             return length
 
     # 9. Default fallback — warn (deduped per model+endpoint) so
-    #    small-context models don't silently get 256K. See
+    #    small-context models don't silently get the fallback window. See
     #    _warn_context_length_fallback for rationale.
     _warn_context_length_fallback(model, base_url)
     return DEFAULT_FALLBACK_CONTEXT
