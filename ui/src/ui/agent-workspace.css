@@ -1,13 +1,11 @@
 .content-scroll.agent-stage {
   min-height: 0;
-  padding-block: 12px;
+  padding: 0;
 }
 .agent-workspace {
   display: grid;
-  grid-template-columns: minmax(170px, 214px) minmax(0, 1fr);
+  grid-template-columns: 192px minmax(0, 1fr);
   flex: 1;
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-md);
   overflow: hidden;
   min-height: 360px;
   background: var(--bg-surface);
@@ -19,7 +17,7 @@
   gap: 10px;
   min-height: 0;
   border-inline-end: 1px solid var(--border-card);
-  background: var(--bg-surface-soft);
+  background: var(--bg-sidebar);
 }
 .agent-history ul, .agent-messages { list-style: none; margin: 0; padding: 0; }
 .agent-history ul { overflow: auto; padding-bottom: 12px; }
@@ -48,7 +46,7 @@
   min-width: 0;
   min-height: 0;
 }
-.agent-thread-head { min-height: 53px; padding: 8px 20px; border-bottom: 1px solid var(--border-card); }
+.agent-thread-head { min-height: 49px; padding: 6px 20px; border-bottom: 1px solid var(--border-card); }
 .agent-thread-head h1 { margin: 0; font-size: 16px; min-width: 0; flex: 1; }
 .agent-thread-head .agent-history-toggle { display: none; }
 .agent-model, .agent-answer-label { display: inline-flex; gap: 6px; align-items: center; }
@@ -101,6 +99,8 @@
   border: 0;
   color: var(--text-main);
 }
+.agent-compose:focus-within { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.agent-compose textarea:focus-visible { outline: none; }
 .agent-compose button {
   display: grid;
   place-items: center;
@@ -108,7 +108,7 @@
   min-width: 40px;
   border-radius: 7px;
   background: var(--primary-active);
-  color: #fff;
+  color: var(--on-accent);
   border: 0;
   cursor: pointer;
 }
@@ -121,12 +121,13 @@
   .agent-workspace--history .agent-history {
     display: flex;
     position: absolute;
-    inset: 53px auto 0 0;
+    inset: 49px auto 0 0;
     z-index: 2;
     width: min(85%, 260px);
     box-shadow: var(--shadow-pop);
   }
 }
 @media (max-width: 600px) {
+  .content-scroll.agent-stage { padding: 0; }
   .agent-messages, .agent-thread-footer, .agent-thread-head { padding-inline: 12px; }
 }

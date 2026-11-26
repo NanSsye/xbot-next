@@ -159,6 +159,10 @@
 | `specs/007-xbot-pro-release/plan.md` | 文件 | 产物验证、公开审核与应用回滚方案 |
 | `specs/007-xbot-pro-release/spec.md` | 文件 | 生产更新、仓库发布及截图验收范围 |
 | `specs/007-xbot-pro-release/tasks.md` | 文件 | 生产验收、PR 检查及审批状态 |
+| `specs/008-syndex-console-design` | 目录 | 控制台布局、设置和图标的需求与验收记录 |
+| `specs/008-syndex-console-design/plan.md` | 文件 | 原配置契约、前端改动和回滚方案 |
+| `specs/008-syndex-console-design/spec.md` | 文件 | 前端布局、配置分类和图标的验收范围 |
+| `specs/008-syndex-console-design/tasks.md` | 文件 | 前端实施、构建验证和发布任务 |
 | `specs/ACTIVE` | 文件 | 当前进行中的 feature-id（pg new/use 维护） |
 | `specs/_template` | 目录 | SDD 模板（spec/plan/tasks） |
 | `specs/_template/plan.md` | 文件 | 技术方案模板 |
@@ -215,6 +219,11 @@
 | `ui/public/assets` | 目录 | 导航与各工作区共用的插画等资源 |
 | `ui/src` | 目录 | 控制台 API、类型、样式和 React 源码 |
 | `ui/src/api.ts` | 文件 | 控制台请求、Token 处理与 Agent 流解析 |
+| `ui/src/assets` | 目录 | Vite 打包的通道品牌 SVG，随控制台离线提供 |
+| `ui/src/assets/channels` | 目录 | 接入通道卡片复用的品牌标志 |
+| `ui/src/assets/channels/qq.svg` | 文件 | QQ 通道企鹅标志 |
+| `ui/src/assets/channels/telegram.svg` | 文件 | Telegram 通道纸飞机标志 |
+| `ui/src/assets/channels/weixin.svg` | 文件 | 微信客户端与 iLink 共用的微信标志 |
 | `ui/src/main.tsx` | 文件 | 挂载 React 应用和加载共享样式 |
 | `ui/src/styles-centers.css` | 文件 | 控制台各功能中心的样式 |
 | `ui/src/styles-content.css` | 文件 | 共享内容和文本样式 |
@@ -229,7 +238,7 @@
 | `ui/src/ui/App.tsx` | 文件 | 控制台导航、公共数据与页面入口，Agent 页面直接进入工作台 |
 | `ui/src/ui/ConfigCenter.tsx` | 文件 | 系统与通道的配置中心，可打开指定分区 |
 | `ui/src/ui/HomeDashboard.tsx` | 文件 | 控制台首页、快捷入口与运行总览 |
-| `ui/src/ui/IllustrationHero.tsx` | 文件 | 非对话页面复用的插画标题区 |
+| `ui/src/ui/IllustrationHero.tsx` | 文件 | 非对话页面复用的紧凑标题与状态摘要 |
 | `ui/src/ui/MarkdownContent.tsx` | 文件 | 控制台消息 Markdown 渲染 |
 | `ui/src/ui/OperationsCenter.tsx` | 文件 | 后台任务、定时计划与运行事件管理 |
 | `ui/src/ui/WechatPersonaPanel.tsx` | 文件 | 微信会话 Agent 人设编辑面板 |
