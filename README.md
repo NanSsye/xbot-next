@@ -1,603 +1,90 @@
-﻿# xbot-next
+# xbot-next
 
-`xbot-next` 是一个面向 xbot 的新一代后端框架。它不是旧项目的直接搬迁，而是重新设计的模块化、异步优先、可扩展后端。
+**自托管的 Agent 与消息机器人工作台。** 在一个 Web 控制台里和 Hermes Agent 对话、管理微信会话，并配置自动化任务。
 
-当前重点是后端能力：
+[桌面预览](#桌面预览) · [快速开始](#快速开始) · [模型与通道](#模型与通道) · [开发指南](#开发指南) · [许可](#许可)
 
-- FastAPI 管理 API
-- PostgreSQL 持久化和 Alembic 迁移
-- 消息队列、去重、会话和上下文管理
-- 插件加载和消息分发
-- Skill 加载和执行
-- 内嵌 Hermes Agent 运行时
-- Agent 任务记录、事件流、后台任务和定时任务框架
-- Web 适配器
-- 内置 WeChat 869 适配器
+![xbot-next 桌面控制台总览：通道状态、常用入口和实时事件](docs/screenshots/desktop-overview.png)
 
-## 目录结构
+## 桌面预览
 
-```text
-configs/                 默认 TOML 配置
-docs/                    设计文档
-migrations/              Alembic 数据库迁移
-plugins/                 插件目录
-skills/                  Skill 目录
-src/xbot/                后端源码
-ui/                      Web Control UI 前端
-tests/                   单元测试和集成测试
-.env.example             环境变量示例
-.env.local.example       本地简易版环境变量示例
-```
+下图来自实际桌面 Web 界面，使用演示账号和消息。
 
-## 环境要求
+### Agent 对话
 
-- Python 3.11+
-- PostgreSQL
-- 可选：Redis
-- 可选：已登录的 869 服务，用于微信收发消息
-- 可选：OpenAI-compatible 或 Anthropic LLM 服务，用于 Hermes Agent
+从左侧切换会话，在主区查看流式回复、工具执行记录和产物。Web 对话独立于微信会话，默认不会向外部通道回发。
 
-## 许可协议
+![Agent 对话桌面界面：会话列表、流式回复和执行过程](docs/screenshots/desktop-agent.png)
 
-本项目采用源码开放的非商业许可：见 [LICENSE](LICENSE)。
+### 微信工作台
 
-- 允许学习、研究、个人非商业使用、修改和非商业分发。
-- 禁止未经授权的商业使用，包括销售、SaaS/托管服务、商业集成、付费咨询交付、嵌入商业产品或用于商业经营流程。
-- 如需商业使用，请先取得作者书面授权。
+集中查看私聊、群聊和消息历史。微信客户端通道支持同步联系人及可用头像；来信显示在左侧，机器人已发送的回复显示在右侧。
 
-注意：由于包含“不可商用”限制，本项目不是 OSI 定义下的开源许可证项目，而是 source-available non-commercial 项目。
+![微信工作台桌面界面：联系人头像、左侧来信和右侧机器人回复](docs/screenshots/desktop-wechat.png)
+
+控制台还提供通道状态、定时任务、插件和 Skill 管理；Agent 需要外部工具时，可按需接入 MCP。
 
 ## 快速开始
 
-### Docker 本地构建运行
+| 你的目标 | 推荐方式 |
+| --- | --- |
+| 在服务器上长期运行一个新实例 | [Docker 独立部署](#docker-独立部署)，PostgreSQL + Redis |
+| 在个人电脑上先试用 | [本地安装](#本地安装)，可选 SQLite + 本地队列 |
+| 修改后端或 Web 控制台 | [开发指南](#开发指南)，从锁文件安装依赖 |
 
-适合普通用户本机部署，不需要单独安装 Python、Node、PostgreSQL 或 Redis。Docker 会直接映射整个项目目录，后续升级可以替换目录文件后重启容器：
+### Docker 独立部署
 
-```bash
-cp .env.example .env
-docker compose up -d --build
-```
+1. 按 [Docker 部署指南](docs/docker-deployment.md) 构建并加载镜像。部署端不需要同步源码。
+2. 准备独立的 `.env`，设置 `XBOT_IMAGE`、新的 `XBOT_API_TOKEN` 和 `XBOT_POSTGRES_PASSWORD`，再执行 `docker compose up -d`。
+3. 打开 `http://127.0.0.1:18548`，输入 API Token。默认只监听回环地址，不要直接把控制台暴露到公网。
 
-Windows PowerShell：
+> [!IMPORTANT]
+> 新版只支持空库初始化，不能直接连接旧实例的数据库或复用旧数据目录。备份时同时保留 `.env`、`state/`、PostgreSQL 和 Redis 持久化数据；不要随容器删除数据卷。
 
-```powershell
-Copy-Item .env.example .env
-docker compose up -d --build
-```
+### 本地安装
 
-启动后访问：
-
-```text
-http://localhost:8548
-```
-
-局域网设备访问时使用运行 Docker 的电脑 IP。更多说明见 [Docker 本地构建运行](docs/docker-deployment.md)。
-
-升级时保留 `.env`、`data/`、`logs/`、`workspace/`、`docker-data/`，替换代码后执行：
+先准备 Git 和 [uv](https://docs.astral.sh/uv/)。下载仓库中的对应安装脚本后在本机运行；安装器会检出代码、创建 `xbot` 命令并启动配置向导。已有安装请用 `xbot-upgrade`，不要重新运行安装脚本，也不要用升级脚本将旧实例切到这套空库版本。
 
 ```bash
-docker compose restart xbot
+# Linux、macOS、WSL
+bash scripts/install.sh
 ```
 
-说明：Docker 默认安装 xbot 与内嵌 Hermes 的完整运行依赖，但不下载 Playwright Chromium。Docker 会映射整个项目目录，运行期数据会随项目目录保留。Hermes 版本、Dockerfile 或 Python 依赖变化后必须重新执行 `docker compose up -d --build`。
+```powershell
+# Windows PowerShell
+& .\scripts\install.ps1
+```
 
-### 一键安装
+在 `xbot setup` 中可选「简易版」（SQLite + 本地队列）。`xbot` 启动终端对话，`xbot run` 启动服务。需要 Web 控制台时先运行 `xbot ui-build`；通过本机 `http://127.0.0.1:8548` 访问。
 
-Linux/macOS/WSL：
+## 模型与通道
+
+先在 **控制台设置 → 系统与模型配置** 设置服务地址、模型名和 API Key，再到 **Agent 对话** 试发一条消息。不接微信也能使用 Web Agent。支持 OpenAI-compatible 和 Anthropic 接口；环境变量和权限边界见 [Hermes 集成指南](docs/hermes-agent-integration.md) 与 [.env.example](.env.example)。真实密钥只存于本机配置或部署环境。
+
+需要收发微信消息时，再到 **接入通道** 配置 **微信客户端通道** 或 **微信 iLink**。微信客户端通道仍使用 `XBOT_WECHAT869_*` 配置键，依赖单独运行的微信客户端服务。
+
+## 开发指南
+
+需要 [uv](https://docs.astral.sh/uv/)、Python 3.14，以及构建 Web 界面时使用的 Node.js/npm。在项目根目录执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
+uv run --no-project --python 3.14 python scripts/prepare_hermes.py
+uv sync --locked --python 3.14 --extra agent --extra dev
+uv run --no-sync xbot setup
+uv run --no-sync xbot ui-build
+uv run --no-sync xbot run
 ```
 
-Windows PowerShell：
-
-```powershell
-iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
-```
-
-如果 GitHub 连接被重置，先给安装器指定代理：
-
-```powershell
-$env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
-```
-
-Linux/macOS/WSL：
+Web 源码在 [`ui/`](ui/)，Python 后端在 [`src/xbot/`](src/xbot/)，扩展入口在 [`plugins/`](plugins/) 和 [`skills/`](skills/)。前端单独开发可运行 `npm --prefix ui ci` 和 `npm --prefix ui run dev`。
 
 ```bash
-XBOT_PROXY="http://127.0.0.1:7897" curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
+uv run --no-sync ruff check src tests scripts
+uv run --no-sync pytest -q
+npm --prefix ui run build
 ```
 
-安装器只用于首次安装。它会把项目安装到用户目录，创建 `.venv`、复制 `.env.example` 为 `.env`，生成全局 `xbot` / `xbot-upgrade` 命令，并在首次安装完成后自动进入 `xbot setup` 配置向导：
+[后端设计](docs/backend-framework-design.md) · [Web 控制台设计](docs/frontend-control-ui.md) · [Hermes 集成](docs/hermes-agent-integration.md) · [Docker 部署](docs/docker-deployment.md)
 
-```bat
-xbot setup  # 配置模型、数据库、队列和微信通道
-xbot        # 进入终端 TUI
-xbot run    # 启动后端服务和通道
-xbot-upgrade  # 升级已有安装
-```
+## 许可
 
-`xbot setup` 支持两种运行模式：
-
-- 简易版：SQLite + 本地 memory queue，适合个人电脑首次运行，也可以开启 iLink 扫码微信或 869 通道。
-- 生产版：PostgreSQL + Redis，适合服务器长期运行，也可以同时开启 iLink 和 869。
-
-非交互默认生成“简易版 + iLink”：
-
-```bat
-xbot setup --yes
-```
-
-如果安装时想跳过向导：
-
-```bash
-XBOT_SKIP_SETUP=1 curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.sh | bash
-```
-
-Windows PowerShell：
-
-```powershell
-$env:XBOT_SKIP_SETUP="1"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/install.ps1)
-```
-
-### 单独升级
-
-升级不要再使用安装命令。升级脚本只更新代码和依赖，不初始化配置，不覆盖 `.env`，不删除 `data/`、`logs/`、本地数据库、上传文件和运行期生成的 skill。
-
-已安装过的用户直接运行：
-
-```bat
-xbot-upgrade
-```
-
-或者：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.sh | bash
-```
-
-Windows PowerShell：
-
-```powershell
-iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.ps1)
-```
-
-代理环境：
-
-```powershell
-$env:XBOT_PROXY="http://127.0.0.1:7897"; iex (irm https://raw.githubusercontent.com/NanSsye/xbot-next/main/scripts/upgrade.ps1)
-```
-
-安装目录如果出现本地改动或本地提交与远端分叉，升级器会先创建 `xbot-local-backup-时间戳` 备份分支，并把未提交改动放入 git stash，再把安装目录代码对齐到远端版本；不会执行 `git clean`，所以 `.env` 和未跟踪的运行数据不会被删除。
-
-可选环境变量：
-
-```text
-XBOT_INSTALL_DIR    自定义安装目录
-XBOT_BIN_DIR        自定义 xbot 命令目录
-XBOT_REPO_URL       自定义 Git 仓库地址
-XBOT_BRANCH         自定义分支，默认 main
-XBOT_PROXY          安装/升级时使用的 HTTP 代理，例如 http://127.0.0.1:7897
-```
-
-### 手动开发安装
-
-### 1. 创建虚拟环境
-
-```bat
-cd D:\项目\项目\xbot\xbot-next
-python -m venv .venv
-.venv\Scripts\activate
-python -m pip install -U pip
-pip install -e .
-```
-
-说明：默认安装只包含通道、插件、API、数据库、队列和 Web 运行所需依赖，不安装内置 Agent/Hermes 额外依赖，也不下载 Playwright 浏览器。
-
-可选安装：
-
-```bat
-pip install -e ./vendor/hermes -e ".[agent]"  # 内置 Agent/Hermes/MCP/LLM
-pip install -e .[browser]   # Playwright Python SDK
-pip install -e .[full]      # agent + browser
-pip install -e .[dev]       # 测试/格式化工具
-python -m playwright install chromium  # 仅 browser 工具需要
-```
-
-### 2. 创建本地配置
-
-复制示例配置：
-
-```bat
-copy .env.example .env
-```
-
-然后编辑 `.env`。至少需要确认这些项：
-
-```env
-XBOT_DATABASE_URL=postgresql+asyncpg://xbot:xbot@postgres:5432/xbot
-XBOT_ADMIN_DATABASE_URL=postgresql://postgres:postgres@postgres:5432/postgres
-
-XBOT_LLM_ENABLED=true
-XBOT_LLM_PROVIDER=openai_compatible
-XBOT_LLM_BASE_URL=https://api.openai.com/v1
-XBOT_LLM_MODEL=gpt-4.1-mini
-XBOT_LLM_CONTEXT_WINDOW_TOKENS=128000
-XBOT_LLM_API_KEY=change-me
-```
-
-Anthropic 原生接口示例：
-
-```env
-XBOT_LLM_ENABLED=true
-XBOT_LLM_PROVIDER=anthropic
-XBOT_LLM_BASE_URL=https://api.anthropic.com
-XBOT_LLM_MODEL=claude-3-5-sonnet-latest
-XBOT_LLM_API_KEY=你的 Anthropic API Key
-```
-
-如果要开启微信 869 通道：
-
-```env
-XBOT_WECHAT869_ENABLED=true
-XBOT_WECHAT869_HOST=192.168.6.19
-XBOT_WECHAT869_PORT=5253
-XBOT_WECHAT869_WS_URL=ws://192.168.6.19:5253/ws/GetSyncMsg
-XBOT_WECHAT869_TOKEN_KEY=你的869 key
-XBOT_WECHAT869_BOT_WXID=机器人 wxid
-XBOT_WECHAT869_BOT_NICKNAME=机器人昵称
-```
-
-`.env` 不会提交到 Git。真实密钥只放本机。
-
-### 3. 初始化数据库
-
-首次运行可以执行：
-
-```bat
-python -m xbot.cli.main db-bootstrap
-```
-
-只执行迁移：
-
-```bat
-python -m xbot.cli.main db-upgrade
-```
-
-查看迁移状态：
-
-```bat
-python -m xbot.cli.main db-current
-```
-
-说明：
-
-- `XBOT_DATABASE_URL` 是应用运行账号。
-- `XBOT_ADMIN_DATABASE_URL` 用于创建数据库、授权和执行迁移。
-- 如果已有表不是应用账号 owner，迁移会优先使用 admin 连接。
-
-### 4. 启动服务
-
-```bat
-python -m xbot.cli.main run
-```
-
-默认监听：
-
-```text
-0.0.0.0:8548
-```
-
-检查状态：
-
-```bat
-curl http://127.0.0.1:8548/api/v1/system/status
-curl http://127.0.0.1:8548/api/v1/adapters
-```
-
-### 5. 运行测试
-
-```bat
-python -m compileall src tests plugins skills migrations
-python -m pytest -q
-```
-
-## Agent 使用说明
-
-`xbot-next` 支持内嵌 Hermes Agent，但默认依赖集面向“通道 + 插件”轻量部署。若只使用 WeChat 869、ilink 和普通插件，不需要安装内置 Agent 依赖。
-
-需要启用内置 Agent 时，先安装：
-
-```bash
-pip install -e ./vendor/hermes -e ".[agent]"
-```
-
-Docker 镜像默认安装 Hermes 与 Agent extra。xbot 负责通道、插件、API、消息队列、任务记录和前端，Agent 对话循环、工具调用、上下文压缩、长期记忆、skill 自进化和轨迹由 Hermes 执行。
-
-Hermes state.db 只能使用不受 WAL-reset 缺陷影响的 SQLite：`>=3.51.3`、`3.50.7` backport 或 `3.44.6` backport。Dockerfile 会构建固定的 SQLite 3.53.4；本地安装脚本会在启用 Agent 前检查当前 Python 链接的 SQLite，不安全时会终止并提示更换运行时。
-
-主模型仍统一配置在项目根目录 `.env`：
-
-```env
-XBOT_LLM_ENABLED=true
-XBOT_LLM_PROVIDER=openai_compatible
-XBOT_LLM_BASE_URL=https://api.openai.com/v1
-XBOT_LLM_MODEL=gpt-4.1-mini
-XBOT_LLM_CONTEXT_WINDOW_TOKENS=128000
-XBOT_LLM_API_KEY=change-me
-```
-
-Anthropic 原生接口示例：
-
-```env
-XBOT_LLM_ENABLED=true
-XBOT_LLM_PROVIDER=anthropic
-XBOT_LLM_BASE_URL=https://api.anthropic.com
-XBOT_LLM_MODEL=claude-3-5-sonnet-latest
-XBOT_LLM_API_KEY=你的 Anthropic API Key
-```
-
-MiniMax 的 Anthropic 兼容接口示例：
-
-```env
-XBOT_LLM_ENABLED=true
-XBOT_LLM_PROVIDER=anthropic
-XBOT_LLM_BASE_URL=https://api.minimaxi.com/anthropic
-XBOT_LLM_MODEL=MiniMax-M3
-XBOT_LLM_API_KEY=你的 MiniMax API Key
-```
-
-Hermes 自身扩展凭证不要写到根目录 `.env`。首次运行会自动创建：
-
-```text
-data/hermes/config.yaml
-data/hermes/.env.example
-```
-
-如果需要 Hermes 自带搜索、外部 memory provider、OpenRouter/Nous 等扩展能力，把对应 key 放到 `data/hermes/.env`。
-
-消息进入 Agent 的链路：
-
-```text
-通道消息 -> 普通插件 -> fallback 插件 agent_chat -> Hermes
-```
-
-- 普通插件优先运行。
-- `exclusive = true` 的插件只要路由匹配，就会阻断后续 fallback。
-- `agent_chat` 是兜底插件，不是总开关。
-- 私聊文本默认进入 `agent_chat`。
-- 群聊文本只有提到机器人时才进入 `agent_chat`。
-- 前置插件命中后，会由插件自己处理，不再进入 Hermes。
-
-旧版自研 Agent 执行链已经移除。以下配置不再控制 Agent 执行：
-
-```text
-XBOT_AGENT_TOOLSETS_*
-XBOT_AGENT_CACHE_*
-XBOT_AGENT_MEMORY_COMPACTION_*
-XBOT_AGENT_WORKSPACE_*
-XBOT_AGENT_MCP_ENABLED
-XBOT_LLM_MULTIMODAL_*
-```
-
-更多细节见 [Hermes Agent 内嵌说明](docs/hermes-agent-integration.md)。
-
-## Web Control UI
-
-前端控制台规划见 [docs/frontend-control-ui.md](docs/frontend-control-ui.md)。
-
-第一版 Control UI 使用 Vite + React + TypeScript，视觉风格参考 OpenClaw Control UI：
-
-- 深色控制台布局。
-- 左侧导航、顶部状态栏、主内容区。
-- “通道”作为一级概念，869、iLink、未来飞书/钉钉/Web 都是通道 adapter。
-- 会话页支持查看通道会话历史，并在页面内和 Agent 对话。
-- 页面内对话默认只显示在控制台，不回发到原通道。
-- 工具调用、后台任务和 Agent 事件通过活动流展示。
-
-开发运行：
-
-```powershell
-cd ui
-npm install
-npm run dev
-```
-
-生产构建并随后端托管：
-
-```powershell
-xbot ui-build
-xbot run
-```
-
-生产环境必须给 Control UI/API 开启访问令牌：
-
-```env
-XBOT_API_AUTH_ENABLED=true
-XBOT_API_TOKEN=请替换为足够长的随机值
-```
-
-插件工具声明仍保留给框架层使用。插件可以通过两种方式暴露工具元数据：
-
-- 在插件类里实现 `agent_tools()`，返回 `ToolDefinition`。
-- 在 `plugin.toml` 中声明 `[[agent_tools]]`，并绑定插件方法名。
-
-Agent 任务和后台任务 API：
-
-- `POST /api/v1/agent/background-tasks`
-- `GET /api/v1/agent/background-tasks/overview`
-- `GET /api/v1/agent/background-tasks`
-- `GET /api/v1/agent/background-tasks/{task_id}`
-- `POST /api/v1/agent/background-tasks/{task_id}/replay`
-- `POST /api/v1/agent/background-tasks/{task_id}/cancel`
-
-定时任务 CLI：
-
-```powershell
-xbot schedule list
-xbot schedule add "every 2h" "检查项目状态并总结"
-xbot schedule pause JOB_ID
-xbot schedule resume JOB_ID
-xbot schedule run JOB_ID
-xbot schedule delete JOB_ID
-```
-
-## Hermes 数据和上下文
-
-Hermes 会按 xbot source 生成稳定 session id，同一个微信会话会自动复用 Hermes 历史。xbot 的 conversation store 仍用于消息框架和前端查询，但不再把完整历史和 summary 拼入 Agent 输入。
-
-Hermes 运行数据默认保存在：
-
-```text
-data/hermes/
-```
-
-包括 session、memory、skills、curator 状态和轨迹。Docker、本地安装和手动部署都应该持久化这个目录。
-
-## Skill 使用
-
-Skill 放在 `skills/` 目录下，每个 skill 通常包含：
-
-```text
-skill.toml
-SKILL.md
-脚本文件
-```
-
-当前内置微信发送 skill：
-
-```text
-skills/微信发送skill
-```
-
-真实 869 配置文件：
-
-```text
-skills/微信发送skill/wechat-869.json
-```
-
-该文件包含真实地址和 key，已被 `.gitignore` 忽略，不会提交。
-
-## MCP 使用
-
-`xbot-next` 内置原生 MCP client。启动时会连接配置的 MCP servers，自动发现工具，并注册成 Agent 可调用的一等工具。
-
-MCP 工具命名规则：
-
-```text
-mcp_{server_name}_{tool_name}
-```
-
-例如：
-
-```text
-mcp_time_get_current_time
-mcp_filesystem_read_file
-mcp_github_list_issues
-```
-
-### 配置 stdio MCP server
-
-在 `configs/xbot.toml` 中添加：
-
-```toml
-[agent.mcp]
-enabled = true
-
-[agent.mcp.servers.time]
-command = "uvx"
-args = ["mcp-server-time"]
-timeout = 120
-connect_timeout = 60
-```
-
-### 配置 HTTP MCP server
-
-```toml
-[agent.mcp.servers.company_api]
-url = "https://mcp.example.com/mcp"
-timeout = 180
-connect_timeout = 60
-
-[agent.mcp.servers.company_api.headers]
-Authorization = "Bearer change-me"
-```
-
-### 安全说明
-
-stdio MCP server 不会继承完整系统环境变量，只会继承基础安全环境变量。需要传给 MCP server 的 token 或 key 必须显式写到 server 的 `env` 配置里：
-
-```toml
-[agent.mcp.servers.github]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-github"]
-
-[agent.mcp.servers.github.env]
-GITHUB_PERSONAL_ACCESS_TOKEN = "change-me"
-```
-
-## 常用命令
-
-```bat
-python -m xbot.cli.main status
-python -m xbot.cli.main db-bootstrap
-python -m xbot.cli.main db-upgrade
-python -m xbot.cli.main db-current
-python -m xbot.cli.main run
-python -m xbot.cli.main chat
-python -m pytest -q
-```
-
-## 终端 Agent 对话
-
-不经过微信通道时，可以直接在终端里和 Agent 对话：
-
-```bat
-xbot
-python -m xbot.cli.main chat
-```
-
-可选参数：
-
-```bat
-xbot chat --tui
-python -m xbot.cli.main chat --session dev-1 --cwd D:\项目\项目\xbot\xbot-next
-python -m xbot.cli.main chat --verbose
-python -m xbot.cli.main chat --fancy-input
-python -m xbot.cli.main chat --tui
-python -m xbot.cli.main chat-bridge
-```
-
-终端模式默认使用 Windows 原生输入，中文输入法兼容性最好；需要命令补全、本地输入历史、多行输入和底部状态栏时，可以加 `--fancy-input` 启用 `prompt_toolkit`。`--fancy-input` 使用 `patch_stdout` 保护输入区，避免后台输出覆盖正在输入的内容。
-启动时会先显示启动 spinner，随后展示接近 Hermes CLI 的首页：左侧品牌 ASCII、ready 状态、模型和会话信息，右侧按 toolset/skill 展示可用能力，底部显示欢迎语和输入提示。
-Agent 执行过程中默认使用 Hermes 风格的轻量 CLI 对话：用户输入显示为 prompt 行，自然语言回复会在 `xbot` 标题块里流式显示，工具调用 JSON 会被隐藏；本轮结束后显示模型、上下文占用、百分比进度条、本轮耗时和 LLM 耗时。上下文已用量优先读取 OpenAI-compatible usage，窗口总量优先读取 `XBOT_LLM_CONTEXT_WINDOW_TOKENS` / `agent.llm.context_window_tokens`，未配置时按常见模型兜底估算。`--verbose` 会额外显示工具输入摘要和 activity 明细，`--debug` 会额外显示工具输出摘要。终端保持打开时，后台任务完成、失败或取消也会主动打印提示。
-执行中按 `Ctrl+C` 会尝试取消当前终端任务，并保留终端会话。
-当前终端会话会保留最近的 Agent 事件和后台任务事件，方便事后用命令回看，不需要翻滚动日志。
-终端对话模式会把框架运行日志写入 `logs/xbot-terminal.log`，避免 INFO 日志刷屏污染对话区；`--debug` 会重新把调试日志输出到控制台。
-`--tui` 会进入 Textual 全屏终端界面，左侧显示对话，右侧显示工具事件和后台任务事件，底部输入框继续复用同一套 slash command。
-`chat-bridge` 是 JSONL stdin/stdout 协议入口，用于后续独立 TUI/Web/PTY 前端进程接入同一套 AgentRuntime。
-安装为可编辑包后，`xbot` 不带子命令会进入普通终端对话模式，中文输入兼容性更好；`xbot chat --fancy-input` 用于启用补全/历史；`xbot chat --tui` 用于进入全屏 TUI；`xbot run` 仍用于启动后端服务。
-
-内置命令：
-
-```text
-/help       查看命令
-/exit       退出
-/status     查看 runtime、LLM、MCP 状态
-/tools      查看当前终端可见工具
-/tasks      查看后台任务
-/task ID    查看后台任务详情
-/replay ID  重放失败后台任务
-/events N   查看最近 N 条 Agent 工具/LLM/task 事件
-/logs N     同时查看最近 N 条 Agent 事件和后台任务事件
-/new        开启新的终端会话
-```
-
-## 相关文档
-
-- [后端框架设计文档](docs/backend-framework-design.md)
-- [Hermes Agent 内嵌说明](docs/hermes-agent-integration.md)
-- [Web Control UI 设计文档](docs/frontend-control-ui.md)
-- [生产部署清单](docs/production-deployment.md)
-
-
-
+本项目采用 [源码开放的非商业许可](LICENSE)，允许学习、研究、个人非商业使用、修改和非商业分发。未经书面授权不得商用。这不是 OSI 定义下的开源许可证。

@@ -1,0 +1,19 @@
+name = "xhs_content"
+version = "0.1.0"
+entry = "main:XhsContentPlugin"
+author = "xbot"
+description = "微信、QQ、Telegram 自动解析并发送小红书图文或视频"
+enabled = true
+
+[routing]
+enabled = true
+priority = 50
+fallback = false
+exclusive = false
+message_types = ["text"]
+platforms = ["wechat", "qq", "telegram"]
+
+[permissions]
+network = true
+filesystem = true
+admin = false

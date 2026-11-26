@@ -18,6 +18,10 @@ class Conversation(BaseModel):
     raw_id: str
     title: str | None = None
     avatar_url: str | None = None
+    agent_persona_enabled: bool = False
+    agent_persona_prompt: str | None = None
+    agent_persona_updated_at: datetime | None = None
+    agent_model: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -41,4 +45,7 @@ class ConversationSummary(BaseModel):
 def build_conversation_id(
     platform: str, adapter: str, scope: ConversationScope, raw_id: str
 ) -> str:
-    return f"{platform}:{adapter}:{scope}:{raw_id}"
+    value = str(raw_id or "").strip()
+    if ":" in value:
+        return value
+    return f"{platform}:{adapter}:{scope}:{value}"

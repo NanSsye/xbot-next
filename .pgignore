@@ -1,0 +1,7 @@
+# Local tooling output, not part of the project directory map.
+.ruff_cache
+src/xbot_next.egg-info
+ui/tsconfig.tsbuildinfo
+.hermes
+# Archived third-party snapshot; document it as a single directory.
+vendor/hermes

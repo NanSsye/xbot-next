@@ -1,5 +1,7 @@
 .git
 .venv
+.hermes
+vendor
 __pycache__
 .pytest_cache
 .ruff_cache
@@ -8,6 +10,7 @@ ui/node_modules
 ui/dist
 data
 docker-data
+state
 logs
 media
 workspace

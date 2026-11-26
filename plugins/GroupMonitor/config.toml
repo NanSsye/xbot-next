@@ -12,7 +12,7 @@ check_interval = 3
 debug = true
 
 # 需要监控的群聊ID列表
-monitor_groups = ["48587220177@chatroom"]
+monitor_groups = []
 
 # 提醒消息模板
 message_template = "群成员变动提醒：{member_name}（{member_id}） 已退出群聊"

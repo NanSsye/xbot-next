@@ -3,7 +3,7 @@ from xbot.app.main import create_app
 
 def test_create_app():
     app = create_app()
-    paths = {route.path for route in app.routes}
+    paths = app.openapi()["paths"]
     assert "/api/v1/system/status" in paths
     assert "/api/v1/bot/status" in paths
     assert "/api/v1/adapters" in paths

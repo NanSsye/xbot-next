@@ -276,13 +276,13 @@ logger.exception("[MyPlugin] 未预期异常")
 数据库标准会话 ID 通常是：
 
 ```text
-wechat:wechat869:group:47440917520@chatroom
+wechat:wechat869:group:demo-group@chatroom
 ```
 
 如果拿到的是：
 
 ```text
-47440917520@chatroom
+demo-group@chatroom
 ```
 
 需要先从 `conversations.raw_id` 解析到标准 `id`。

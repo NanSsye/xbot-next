@@ -6,6 +6,7 @@ import mimetypes
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -36,6 +37,12 @@ class WechatProfileUpdate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class WechatConversationPersonaUpdate(BaseModel):
+    enabled: bool = False
+    prompt: str = Field(default="", max_length=8000)
+    model: str | None = Field(default=None, max_length=256)
+
+
 def _decode_offset_cursor(cursor: str) -> int:
     if not cursor:
         return 0
@@ -57,6 +64,9 @@ def _beijing_now() -> datetime:
 
 
 def _wechat869_client(ctx: AppContext) -> Wechat869Client:
+    adapter = ctx.adapters.get("wechat869")
+    if adapter is not None and adapter.client is not None:
+        return adapter.client
     cfg = ctx.settings.adapters.wechat869
     return Wechat869Client(
         host=cfg.host,
@@ -71,6 +81,34 @@ def _raw_conversation_id(conversation_id: str) -> str:
     if conversation_id.startswith("wechat:") and ":" in conversation_id:
         return conversation_id.split(":")[-1]
     return conversation_id
+
+
+def _conversation_persona_dict(conversation: ConversationRecord, ctx: AppContext) -> dict:
+    enabled_models = list(ctx.settings.agent.llm.enabled_models)
+    configured_model = conversation.agent_model
+    model = configured_model if configured_model in enabled_models else None
+    return {
+        "conversation_id": conversation.id,
+        "scope": conversation.scope,
+        "enabled": bool(conversation.agent_persona_enabled),
+        "prompt": conversation.agent_persona_prompt or "",
+        "model": model,
+        "default_model": ctx.settings.agent.llm.model,
+        "enabled_models": enabled_models,
+        "updated_at": (
+            conversation.agent_persona_updated_at.isoformat()
+            if conversation.agent_persona_updated_at
+            else None
+        ),
+    }
+
+
+def _require_wechat_conversation(conversation: ConversationRecord | None) -> ConversationRecord:
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    if conversation.platform != "wechat" or conversation.scope not in {"group", "private"}:
+        raise HTTPException(status_code=400, detail="persona is only available for WeChat conversations")
+    return conversation
 
 
 def _pick_text(data, keys) -> str:
@@ -252,10 +290,17 @@ async def list_wechat_messages(conversation_id: str, limit: int = 200, ctx: AppC
         contacts = {}
         if sender_ids:
             for c in (await session.execute(
-                select(ContactRecord).where(ContactRecord.platform == "wechat", ContactRecord.user_id.in_(sender_ids))
+                select(ContactRecord).where(
+                    ContactRecord.platform == "wechat",
+                    ContactRecord.adapter.in_({x.adapter for x in records}),
+                    ContactRecord.user_id.in_(sender_ids),
+                )
             )).scalars().all():
-                contacts[c.user_id] = c
-        return {"success": True, "data": [_message_dict(x, attach_map.get(x.message_id, []), contacts.get(x.sender_id)) for x in records]}
+                contacts[c.adapter, c.user_id] = c
+        return {"success": True, "data": [
+            _message_dict(x, attach_map.get(x.message_id, []), contacts.get((x.adapter, x.sender_id)))
+            for x in records
+        ]}
 
 
 @router.get("/conversations/{conversation_id}/members")
@@ -596,12 +641,16 @@ async def send_wechat_message(
         conv = await session.get(ConversationRecord, conversation_id)
         if conv is None:
             raise HTTPException(status_code=404, detail="conversation not found")
-    now = _beijing_now()
+        if (conv.platform, conv.adapter) != ("wechat", "wechat869"):
+            raise HTTPException(status_code=400, detail="manual send requires a 869 conversation")
+    now = utc_now()
     bot_id = ctx.settings.adapters.wechat869.bot_wxid or "xbot"
     bot_name = ctx.settings.adapters.wechat869.bot_nickname or "xbot"
     attachment = None
     msg_type = "text"
     content = text.strip()
+    if not content and file is None:
+        raise HTTPException(status_code=400, detail="empty message")
     reply_content = content
     if file is not None:
         data = await file.read()
@@ -628,7 +677,6 @@ async def send_wechat_message(
             "quoted": False,
             "metadata": {"source": "control_ui"},
         }
-    await ctx.engine.send_reply(Reply(platform="wechat", adapter="wechat869", conversation_id=conversation_id, type=msg_type, content=reply_content))
     message = Message(
         platform="wechat",
         adapter="wechat869",
@@ -637,15 +685,13 @@ async def send_wechat_message(
         sender_name=bot_name,
         type=msg_type,
         content=content,
-        raw={"direction": "outgoing", "scope": "group" if ":group:" in conversation_id else "private", "attachments": [attachment] if attachment else []},
+        raw={"direction": "outgoing", "scope": conv.scope, "attachments": [attachment] if attachment else []},
         timestamp=now,
     )
-    async with ctx.storage.session_factory() as session, session.begin():
-        repo = ctx.storage.conversations(session)
-        await repo.append_message(conversation_id, message)
-        conv = await session.get(ConversationRecord, conversation_id)
-        if conv:
-            conv.updated_at = now
+    await ctx.engine.send_reply(
+        Reply(platform="wechat", adapter="wechat869", conversation_id=conversation_id, type=msg_type, content=reply_content),
+        history_message=message,
+    )
     async with ctx.storage.session_factory() as session:
         record = (await session.execute(
             select(ConversationMessageRecord)
@@ -656,18 +702,117 @@ async def send_wechat_message(
             select(MessageAttachmentRecord).where(MessageAttachmentRecord.message_id == message.id).order_by(MessageAttachmentRecord.id.asc())
         )).scalars().all()
         contact = (await session.execute(
-            select(ContactRecord).where(ContactRecord.platform == "wechat", ContactRecord.user_id == message.sender_id).limit(1)
+            select(ContactRecord).where(
+                ContactRecord.platform == message.platform, ContactRecord.adapter == message.adapter,
+                ContactRecord.user_id == message.sender_id,
+            )
         )).scalar_one_or_none()
         data = _message_dict(record, attachments, contact) if record else message.model_dump(mode="json")
-    await ctx.events.publish("message.created", {"message": data})
     return {"success": True, "data": data}
+
+
+@router.get("/conversations/{conversation_id}/persona")
+async def get_wechat_conversation_persona(
+    conversation_id: str,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    async with ctx.storage.session_factory() as session:
+        conversation = _require_wechat_conversation(
+            await session.get(ConversationRecord, conversation_id)
+        )
+        return {"success": True, "data": _conversation_persona_dict(conversation, ctx)}
+
+
+@router.put("/conversations/{conversation_id}/persona")
+async def update_wechat_conversation_persona(
+    conversation_id: str,
+    payload: WechatConversationPersonaUpdate,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    prompt = payload.prompt.strip()
+    model = str(payload.model or "").strip() or None
+    if payload.enabled and not prompt:
+        raise HTTPException(status_code=400, detail="启用会话专属人设时，人设内容不能为空")
+    if model is not None and model not in ctx.settings.agent.llm.enabled_models:
+        raise HTTPException(status_code=400, detail="所选模型不在管理员启用的模型池中")
+    async with ctx.storage.session_factory() as session, session.begin():
+        conversation = _require_wechat_conversation(
+            await session.get(ConversationRecord, conversation_id)
+        )
+        conversation.agent_persona_enabled = payload.enabled
+        conversation.agent_persona_prompt = prompt or None
+        conversation.agent_persona_updated_at = utc_now()
+        conversation.agent_model = model
+        data = _conversation_persona_dict(conversation, ctx)
+        source = f"channel:wechat:{conversation.adapter}:{conversation.raw_id}"
+    # Hermes caches the complete system prompt per conversation. Clear only
+    # the selected conversation so the next turn uses the new identity.
+    ctx.agent.clear_session_history(source)
+    return {"success": True, "data": data}
+
+
+@router.post("/conversations/{conversation_id}/persona/reset-session")
+async def reset_wechat_conversation_persona_session(
+    conversation_id: str,
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    async with ctx.storage.session_factory() as session:
+        conversation = _require_wechat_conversation(
+            await session.get(ConversationRecord, conversation_id)
+        )
+        source = f"channel:wechat:{conversation.adapter}:{conversation.raw_id}"
+    result = ctx.agent.clear_session_history(source)
+    return {"success": True, "data": result}
+
+
+async def _sync_869_private_contacts(ctx: AppContext, client: Wechat869Client) -> tuple[int, int]:
+    async with ctx.storage.session_factory() as session:
+        ids = list((await session.scalars(select(ConversationRecord.raw_id).where(
+            ConversationRecord.platform == "wechat", ConversationRecord.adapter == "wechat869",
+            ConversationRecord.scope == "private", ConversationRecord.raw_id != "",
+        ).distinct())).all())
+    updated = 0
+    received = set()
+    for offset in range(0, len(ids), 50):
+        batch = ids[offset:offset + 50]
+        try:
+            details = await client.get_contact_details(batch)
+        except Exception as exc:
+            logger.warning("869 private contact sync failed: error_type={}", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="869 联系人资料同步失败") from exc
+        async with ctx.storage.session_factory() as session, session.begin():
+            contacts = {c.user_id: c for c in (await session.scalars(select(ContactRecord).where(
+                ContactRecord.platform == "wechat", ContactRecord.adapter == "wechat869",
+                ContactRecord.user_id.in_(batch),
+            ))).all()}
+            for detail in details:
+                user_id = _pick_text(detail, ("wxid",))
+                if user_id not in batch:
+                    continue
+                avatar = _pick_text(detail, ("avatar",))
+                try:
+                    url = urlsplit(avatar)
+                    if url.scheme not in {"https", "http"} or not url.hostname or url.username is not None:
+                        continue
+                except ValueError:
+                    continue
+                received.add(user_id)
+                contact = contacts.get(user_id)
+                if contact is None:
+                    contact = ContactRecord(platform="wechat", adapter="wechat869", user_id=user_id)
+                    contacts[user_id] = contact
+                    session.add(contact)
+                if contact.avatar_url != avatar:
+                    contact.avatar_url = avatar
+                    updated += 1
+    return updated, len(received)
 
 
 @router.post("/sync")
 async def sync_wechat_metadata(ctx: AppContext = Depends(get_context)) -> dict:
     client = _wechat869_client(ctx)
     updated_conversations = 0
-    updated_contacts = 0
+    updated_contacts, private_avatars_received = await _sync_869_private_contacts(ctx, client)
     async with ctx.storage.session_factory() as session, session.begin():
         convs = (await session.execute(select(ConversationRecord).where(ConversationRecord.platform == "wechat"))).scalars().all()
         for conv in convs:
@@ -705,4 +850,8 @@ async def sync_wechat_metadata(ctx: AppContext = Depends(get_context)) -> dict:
                             updated_contacts += 1
                     except Exception as exc:
                         logger.debug(f"Sync conversation {conv.id} members failed: {exc}")
-    return {"success": True, "data": {"updated_conversations": updated_conversations, "updated_contacts": updated_contacts}}
+    return {"success": True, "data": {
+        "updated_conversations": updated_conversations,
+        "updated_contacts": updated_contacts,
+        "private_avatars_received": private_avatars_received,
+    }}

@@ -1,3 +1,6 @@
+import asyncio
+import sys
+from functools import partial
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -107,3 +110,54 @@ def test_mcp_status_includes_failed_or_not_connected_servers():
 
     assert status["servers"]["time"]["status"] == "not_connected"
     assert status["servers"]["time"]["last_error"] == "boom"
+
+
+@pytest.mark.asyncio
+async def test_mcp_sdk_http_and_stdio_sessions_reload_across_tasks(monkeypatch):
+    import httpx2
+    from mcp.server.mcpserver import MCPServer
+
+    server = MCPServer("test")
+
+    @server.tool()
+    def echo(value: str) -> str:
+        return value
+
+    app = server.streamable_http_app(json_response=True, stateless_http=True)
+    received_headers = []
+
+    async def record_header(scope, receive, send):
+        received_headers.append(dict(scope["headers"]).get(b"x-mcp-test"))
+        await app(scope, receive, send)
+
+    transport = httpx2.ASGITransport(app=record_header)
+    monkeypatch.setattr(httpx2, "AsyncClient", partial(httpx2.AsyncClient, transport=transport))
+    config = AgentMCPConfig(enabled=True, servers={
+        "http": AgentMCPServerConfig(url="http://127.0.0.1:8000/mcp", headers={"X-MCP-Test": "present"}),
+        "stdio": AgentMCPServerConfig(command=sys.executable, args=["-c", """
+import asyncio
+from mcp.server.mcpserver import MCPServer
+
+server = MCPServer('test')
+
+@server.tool()
+def echo(value: str) -> str:
+    return value
+
+asyncio.run(server.run_stdio_async())
+"""]),
+    })
+    registry = ToolRegistry()
+    manager = MCPClientManager(config, registry)
+    async with app.router.lifespan_context(app):
+        try:
+            await asyncio.create_task(manager.start())
+            await asyncio.create_task(manager.reload())
+            for name in ("http", "stdio"):
+                tool = registry.get(f"mcp_{name}_echo")
+                assert tool is not None, manager.status()
+                result = await tool.handler({"value": name})
+                assert result["content"][0]["text"] == name
+        finally:
+            await manager.stop()
+    assert received_headers and all(header == b"present" for header in received_headers)

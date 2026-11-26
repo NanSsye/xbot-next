@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+import asyncio
+import json
+from typing import Annotated
+from uuid import uuid4
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, StringConstraints
+
+from xbot.agent.runtime import AgentRuntimeEvent
 from xbot.app.deps import get_context
 from xbot.core.exceptions import XBotError
+from xbot.core.logging import logger
 from xbot.runtime.context import AppContext
 
 router = APIRouter()
@@ -13,6 +21,16 @@ router = APIRouter()
 class AgentTaskRequest(BaseModel):
     input: str
     source: str = "api"
+
+
+WebSource = Annotated[str, StringConstraints(
+    pattern=r"^terminal:control-ui(:[a-f0-9]{32})?$", max_length=52,
+)]
+
+
+class WebTurnRequest(BaseModel):
+    input: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=32000)]
+    source: Annotated[str, StringConstraints(pattern=r"^terminal:control-ui:[a-f0-9]{32}$", max_length=52)]
 
 
 class AgentTaskResumeRequest(BaseModel):
@@ -139,6 +157,69 @@ async def create_task(payload: AgentTaskRequest, ctx: AppContext = Depends(get_c
 @router.get("/tasks")
 async def list_tasks(limit: int = 50, ctx: AppContext = Depends(get_context)) -> dict:
     return {"success": True, "data": await ctx.agent.list_tasks(limit=limit)}
+
+
+@router.get("/chat/history")
+async def web_chat_history(
+    source: WebSource | None = None,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    ctx: AppContext = Depends(get_context),
+) -> dict:
+    data = await ctx.agent.list_tasks(limit=limit, source=source, web=True, offset=offset)
+    return {"success": True, "data": data}
+
+
+@router.post("/chat/stream")
+async def stream_web_turn(payload: WebTurnRequest, ctx: AppContext = Depends(get_context)):
+    if payload.source in ctx.agent.web_turns:
+        raise HTTPException(status_code=409, detail="这个会话还有一轮正在运行，请稍等。")
+    task_id = str(uuid4())
+    queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=256)
+
+    def on_event(event: AgentRuntimeEvent) -> None:
+        if event.task_id != task_id or queue.full():
+            return
+        content = event.content if isinstance(event.content, dict) else {}
+        if event.type == "llm.delta" and isinstance(content.get("delta"), str):
+            queue.put_nowait({"type": "delta", "text": content["delta"]})
+        elif event.type in {"tool.started", "tool.completed"} and isinstance(content.get("tool"), str):
+            queue.put_nowait({"type": event.type, "tool": content["tool"]})
+
+    async def run() -> None:
+        try:
+            task = await ctx.agent.run_task(payload.input, source=payload.source, task_id=task_id)
+            frame = {"type": "done", "task": task.model_dump(mode="json")}
+        except Exception as exc:
+            logger.error("Web Agent turn failed: task_id={} error_type={}", task_id, type(exc).__name__)
+            frame = {"type": "error", "message": "Agent 执行失败，请检查模型和运行日志。"}
+        if queue.full():
+            queue.get_nowait()
+        queue.put_nowait(frame)
+
+    unsubscribe = ctx.agent.subscribe_events(on_event)
+    worker = asyncio.create_task(run())
+    ctx.agent.web_turns[payload.source] = worker
+    worker.add_done_callback(lambda _: ctx.agent.web_turns.pop(payload.source, None))
+
+    async def frames():
+        try:
+            yield json.dumps({"type": "accepted", "task_id": task_id}) + "\n"
+            while True:
+                try:
+                    frame = await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    frame = {"type": "heartbeat"}
+                yield json.dumps(frame, ensure_ascii=False) + "\n"
+                if frame["type"] in {"done", "error"}:
+                    break
+        finally:
+            unsubscribe()
+            # A disconnected browser must not interrupt Hermes state writes.
+
+    return StreamingResponse(frames(), media_type="application/x-ndjson", headers={
+        "Cache-Control": "no-store", "X-Accel-Buffering": "no",
+    })
 
 
 @router.post("/tasks/{task_id}/continue")

@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from xbot.adapters.wechat869.legacy_word import convert_legacy_word
 from xbot.core.config import Wechat869AdapterConfig
 from xbot.core.logging import logger
 from xbot.core.timeutils import utc_now
@@ -27,6 +28,10 @@ class Wechat869MediaResolver:
             image = await self._image_attachment(message, conversation_id=conversation_id, msg_id=msg_id, quoted=False)
             if image:
                 attachments.append(image)
+        elif msg_type == 43:
+            video = await self._video_attachment(message, conversation_id=conversation_id, msg_id=msg_id, quoted=False)
+            if video:
+                attachments.append(video)
         elif msg_type == 49:
             file_attachment = await self._file_attachment(message, conversation_id=conversation_id, msg_id=msg_id, quoted=False)
             if file_attachment:
@@ -41,6 +46,10 @@ class Wechat869MediaResolver:
                 image = await self._image_attachment(quote.get("raw") or quote, conversation_id=conversation_id, msg_id=quote_id, quoted=True)
                 if image:
                     quote_attachments.append(image)
+            elif quote_type == 43:
+                video = await self._video_attachment(quote.get("raw") or quote, conversation_id=conversation_id, msg_id=quote_id, quoted=True)
+                if video:
+                    quote_attachments.append(video)
             elif quote_type == 49:
                 file_attachment = await self._file_attachment(quote.get("raw") or quote, conversation_id=conversation_id, msg_id=quote_id, quoted=True)
                 if file_attachment:
@@ -61,7 +70,7 @@ class Wechat869MediaResolver:
         content = self._pick_text(quote, ("Content", "content", "title", "Title"))
         sender = self._pick_text(quote, ("FromWxid", "from_wxid", "FromUserName", "from_user_name", "sender"))
         return {
-            "message_id": self._pick_text(quote, ("NewMsgId", "MsgId", "new_msg_id", "msg_id", "message_id")),
+            "message_id": self._pick_text(quote, ("NewMsgId", "MsgId", "new_msg_id", "msg_id", "message_id", "svrid")),
             "sender_wxid": sender,
             "sender_name": self._pick_text(quote, ("Nickname", "nickname", "SenderNickName", "sender_name")),
             "msg_type": msg_type,
@@ -159,12 +168,66 @@ class Wechat869MediaResolver:
         attachment = self._base_attachment("file", data, filename, file_meta, quoted=quoted, status=status, error=error)
         if file_bytes:
             path, sha256 = self._save_bytes(file_bytes, conversation_id=conversation_id, msg_id=msg_id, filename=filename)
+            converted = await convert_legacy_word(path)
+            if converted:
+                filename, path, sha256, converted_size = converted
+                attachment["metadata"]["converted_from"] = Path(file_meta.get("filename") or filename).name
+            else:
+                converted_size = len(file_bytes)
             attachment.update(
                 {
                     "local_path": str(path),
                     "sha256": sha256,
-                    "size": len(file_bytes),
+                    "size": converted_size,
                     "mime": mimetypes.guess_type(filename)[0] or "application/octet-stream",
+                    "download_status": "downloaded",
+                }
+            )
+        return attachment
+
+    async def _video_attachment(self, data: dict[str, Any], *, conversation_id: str, msg_id: str, quoted: bool) -> dict[str, Any] | None:
+        video_meta = self._video_meta(data)
+        if not video_meta:
+            return None
+        video_bytes = self._decode_bytes_from_keys(data, ("Video", "video", "VideoData", "videoData", "FileData", "fileData"))
+        status = "metadata_only"
+        error = ""
+        declared_size = self._to_int(video_meta.get("size"))
+        max_bytes = self._to_int(self.config.max_file_bytes)
+        download_allowed = not (declared_size and max_bytes and declared_size > max_bytes)
+        if (
+            not video_bytes
+            and download_allowed
+            and self.config.auto_download_files
+            and video_meta.get("aeskey")
+            and video_meta.get("cdn_url")
+        ):
+            try:
+                video_bytes = await self.client.download_video(video_meta["aeskey"], video_meta["cdn_url"]) if self.client else b""
+            except Exception as exc:
+                error = str(exc)
+                logger.warning("Wechat869 video download failed: msg_id={} error={}", msg_id, exc)
+        if video_bytes:
+            if len(video_bytes) > max_bytes:
+                status = "too_large"
+                video_bytes = b""
+            else:
+                status = "downloaded"
+        elif declared_size and max_bytes and declared_size > max_bytes:
+            status = "too_large"
+        elif self.config.auto_download_files and video_meta.get("aeskey"):
+            status = "download_empty"
+        base_name = str(video_meta.get("origin_md5") or video_meta.get("md5") or msg_id or "wechat_video")
+        filename = self._safe_filename(base_name, "mp4")
+        attachment = self._base_attachment("video", data, filename, video_meta, quoted=quoted, status=status, error=error)
+        attachment["mime"] = "video/mp4"
+        if video_bytes:
+            path, sha256 = self._save_bytes(video_bytes, conversation_id=conversation_id, msg_id=msg_id, filename=filename)
+            attachment.update(
+                {
+                    "local_path": str(path),
+                    "sha256": sha256,
+                    "size": len(video_bytes),
                     "download_status": "downloaded",
                 }
             )
@@ -246,6 +309,26 @@ class Wechat869MediaResolver:
             "attachid": attach_id,
             "aeskey": aeskey,
             "file_url": file_url,
+        }
+
+    def _video_meta(self, data: dict[str, Any]) -> dict[str, Any]:
+        text = self._xml_fragment(self._pick_text(data, ("Content", "content", "Xml", "xml")))
+        if "<" not in text or "videomsg" not in text:
+            return {}
+        try:
+            root = ET.fromstring(text)
+        except Exception:
+            return {}
+        video = root.find(".//videomsg")
+        if video is None:
+            return {}
+        return {
+            "aeskey": video.get("aeskey") or "",
+            "cdn_url": video.get("cdnvideourl") or video.get("cdnrawvideourl") or "",
+            "size": self._to_int(video.get("length") or video.get("rawlength") or 0),
+            "play_length": self._to_int(video.get("playlength") or 0),
+            "md5": video.get("md5") or video.get("newmd5") or "",
+            "origin_md5": video.get("originsourcemd5") or "",
         }
 
     def _image_meta_from_xml(self, text: str) -> dict[str, Any]:

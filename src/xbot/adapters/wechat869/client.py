@@ -97,7 +97,23 @@ class Wechat869Client:
             ]
         }
         data = await self.call_path("/message/SendTextMessage", body=payload)
-        return self._extract_send_tuple(data)
+        receipt = self._extract_send_tuple(data)
+        candidate = self._extract_send_candidate(data)
+        if isinstance(candidate, dict):
+            result = self._pick(candidate, ("Ret", "ret", "ret_code", "retCode"), 0)
+            if str(result) != "0":
+                raise RuntimeError("869 rejected the text message")
+        if not (receipt[0] or receipt[2]):
+            raise RuntimeError("869 did not return a text message receipt")
+        return receipt
+
+    async def get_contact_details(self, user_ids: list[str]) -> list[dict[str, Any]]:
+        data = await self.call_path("/friend/GetContactDetailsList", body={"UserNames": user_ids})
+        if isinstance(data, dict):
+            data = self._pick(data, ("ContactList", "contactList", "contact_list", "List", "list"), [])
+        if not isinstance(data, list):
+            return []
+        return [self._normalize_chatroom_member_item(item) for item in data if isinstance(item, dict)]
 
 
     async def send_image_message(self, wxid: str, image_path: str) -> Any:
@@ -480,6 +496,16 @@ class Wechat869Client:
     async def download_file(self, aes_key: str, file_url: str) -> bytes:
         payload = await self.send_cdn_download(aes_key, file_url, 5)
         return base64.b64decode(payload) if payload else b""
+
+    async def download_video(self, aes_key: str, cdn_url: str) -> bytes:
+        for file_type in (4, 5):
+            try:
+                payload = await self.send_cdn_download(aes_key, cdn_url, file_type)
+                if payload:
+                    return base64.b64decode(payload)
+            except Exception as exc:
+                logger.debug(f"CDN video download (type={file_type}) failed: {exc}")
+        return b""
 
     async def download_attach(self, attach_id: str) -> bytes:
         attach_id = str(attach_id or "").strip()

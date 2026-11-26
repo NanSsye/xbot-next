@@ -1,0 +1,6 @@
+[telegram_sender]
+ssh_target = "root@192.168.1.100"
+remote_project_dir = "/path/to/xbot-next"
+container_name = "xbot-next-app"
+max_file_mb = 49
+timeout_seconds = 120

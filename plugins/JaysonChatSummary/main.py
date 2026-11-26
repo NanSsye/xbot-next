@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import os
 import random
 import re
 from collections import Counter, defaultdict
@@ -91,7 +92,12 @@ class JaysonChatSummary(PluginBase):
         self.random_template_enable = bool(pcfg.get("random_template_enable", True))
         self.template_paths = self._load_template_paths(pcfg)
         self.api_base_url = self._pick(pcfg, "minimax_base_url", "openai_base_url", "base_url") or getattr(getattr(ctx.settings, "llm", None), "base_url", "") or ""
-        self.api_key = self._pick(pcfg, "minimax_api_key", "openai_api_key", "api_key") or getattr(getattr(ctx.settings, "llm", None), "api_key", "") or ""
+        self.api_key = (
+            os.environ.get("XBOT_MINIMAX_API_KEY", "").strip()
+            or self._pick(pcfg, "minimax_api_key", "openai_api_key", "api_key")
+            or getattr(getattr(ctx.settings, "llm", None), "api_key", "")
+            or ""
+        )
         self.model = self._pick(pcfg, "minimax_model", "openai_model", "model") or getattr(getattr(ctx.settings, "llm", None), "model", "") or ""
         self.request_timeout = int(pcfg.get("request_timeout", self.request_timeout))
         self.llm_max_retries = int(pcfg.get("llm_max_retries", self.llm_max_retries))

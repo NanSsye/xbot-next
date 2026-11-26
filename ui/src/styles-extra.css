@@ -1,0 +1,317 @@
+/* ==========================================================================
+   View: 知识库 (KnowledgeCenter) Styling
+   ========================================================================== */
+
+.knowledge-shell {
+  display: grid;
+  grid-template-columns: 260px 280px 1fr;
+  gap: 16px;
+  height: calc(100vh - 240px);
+  min-height: 520px;
+}
+
+.knowledge-groups,
+.knowledge-index,
+.knowledge-reader {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.knowledge-pane-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.knowledge-pane-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.knowledge-pane-note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 8px 16px;
+  margin: 0;
+  background: var(--bg-surface-soft);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.knowledge-group-list,
+.knowledge-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.knowledge-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  text-align: left;
+  transition: background-color var(--motion-ui) var(--motion-ease-out),
+              border-color var(--motion-ui) var(--motion-ease-out),
+              transform var(--motion-fast) var(--motion-ease-out);
+  border: 1px solid transparent;
+}
+.knowledge-group:hover {
+  background: var(--bg-hover);
+}
+.knowledge-group.is-active {
+  background: var(--primary-soft);
+  border-color: var(--primary-border);
+}
+
+.knowledge-group__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.knowledge-group__copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.knowledge-group__copy strong {
+  font-size: 13px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.knowledge-group__copy small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.knowledge-tree-group {
+  margin-bottom: 6px;
+}
+.knowledge-tree-group__toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.knowledge-tree-group__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+.knowledge-tree-group__items {
+  padding-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.knowledge-page {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-body);
+  text-align: left;
+  transition: background-color var(--motion-ui) var(--motion-ease-out),
+              color var(--motion-ui) var(--motion-ease-out),
+              transform var(--motion-fast) var(--motion-ease-out);
+}
+.knowledge-page:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+.knowledge-page.is-active {
+  background: var(--accent-purple-soft);
+  color: var(--accent-purple);
+  font-weight: 600;
+}
+
+.knowledge-reader {
+  display: flex;
+  flex-direction: column;
+}
+.knowledge-toolbar {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.knowledge-title-block h2 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+.knowledge-metrics {
+  display: flex;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--bg-surface-soft);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.knowledge-document {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.knowledge-callout {
+  border: 1px solid var(--accent-amber-border);
+  background: var(--accent-amber-soft);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+/* ==========================================================================
+   View: 配置中心 (ConfigCenter) Styling
+   ========================================================================== */
+
+.config-center {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.config-center__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-card);
+  padding: 16px 20px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.config-center__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.config-center__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--primary-soft);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.config-workflow {
+  display: grid;
+  grid-template-columns: 220px 1fr 280px;
+  gap: 16px;
+  align-items: start;
+}
+.config-section-rail {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.config-section-rail__label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  padding: 6px 8px;
+  text-transform: uppercase;
+}
+.config-section-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-body);
+  transition: background-color var(--motion-ui) var(--motion-ease-out),
+              color var(--motion-ui) var(--motion-ease-out),
+              transform var(--motion-fast) var(--motion-ease-out);
+  text-align: left;
+}
+.config-section-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+.config-section-button.is-active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+.config-form-column {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.config-inspector {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: var(--shadow-card);
+}
+.config-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.config-field__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+.config-field__desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}

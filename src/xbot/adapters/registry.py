@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from xbot.adapters.base import BaseAdapter
 from xbot.adapters.qq import QQAdapter
+from xbot.adapters.telegram import TelegramAdapter
 from xbot.adapters.web.adapter import WebAdapter
 from xbot.adapters.wechat869 import Wechat869Adapter
 from xbot.adapters.wechat_ilink import WechatIlinkAdapter
@@ -42,6 +43,14 @@ class AdapterRegistry:
                     repository_provider=repository_provider,
                 )
             )
+        if self._effective_enabled("telegram"):
+            self.register(
+                TelegramAdapter(
+                    config.telegram,
+                    queue=queue,
+                    repository_provider=repository_provider,
+                )
+            )
 
     def _configured_adapters(self) -> dict[str, tuple[str, bool]]:
         return {
@@ -49,6 +58,7 @@ class AdapterRegistry:
             "wechat869": ("wechat", self.config.wechat869.enabled),
             "wechat_ilink": ("wechat", self.config.wechat_ilink.enabled),
             "qq": ("qq", self.config.qq.enabled),
+            "telegram": ("telegram", self.config.telegram.enabled),
         }
 
     def register(self, adapter: BaseAdapter) -> None:
@@ -90,6 +100,8 @@ class AdapterRegistry:
         return items
 
     async def enable(self, name: str) -> BaseAdapter | None:
+        if self._is_forced_disabled(name):
+            return None
         adapter = self._adapters.get(name)
         if adapter is None:
             adapter = self._create_adapter(name)
@@ -102,6 +114,8 @@ class AdapterRegistry:
         return adapter
 
     async def disable(self, name: str) -> bool:
+        if self._is_forced_disabled(name):
+            return True
         adapter = self._adapters.pop(name, None)
         if adapter is None:
             exists = name in self._configured_adapters()
@@ -135,6 +149,12 @@ class AdapterRegistry:
                 queue=self.queue,
                 repository_provider=self.repository_provider,
             )
+        if name == "telegram":
+            return TelegramAdapter(
+                self.config.telegram,
+                queue=self.queue,
+                repository_provider=self.repository_provider,
+            )
         return None
 
     async def start_enabled(self) -> None:
@@ -163,11 +183,16 @@ class AdapterRegistry:
 
     async def send(self, reply: Reply) -> object | None:
         adapter = self._adapters.get(reply.adapter)
-        if adapter:
-            return await adapter.send(reply)
-        return None
+        if adapter is None:
+            raise RuntimeError(f"Reply adapter is unavailable: {reply.adapter}")
+        return await adapter.send(reply)
+
+    def _is_forced_disabled(self, name: str) -> bool:
+        return name == "telegram" and self.config.telegram.force_disabled
 
     def _effective_enabled(self, name: str) -> bool:
+        if self._is_forced_disabled(name):
+            return False
         if name in self._enabled_overrides:
             return self._enabled_overrides[name]
         return self._configured_adapters().get(name, ("", False))[1]

@@ -16,9 +16,9 @@
 
 编辑 `plugins/JaysonChatSummary/config.toml`：
 
-- `minimax_base_url/minimax_api_key/minimax_model` 或 `openai_*`
+- `minimax_base_url` / `minimax_model` 或 `openai_*`；MiniMax 密钥通过环境变量 `XBOT_MINIMAX_API_KEY` 注入。
 - `html2image_url`：如 `http://127.0.0.1:8211/api/html2image`
-- `target_groups`：定时发送群，如 `48587220177@chatroom`
+- `target_groups`：定时发送群。先设置名单，再开启 `schedule_enable`。
 
 ## 触发
 
