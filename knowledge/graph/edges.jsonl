@@ -12,9 +12,11 @@
 {"from": "config.ui-dependency-lock", "to": "spec.003-audit-remediation", "type": "implements", "source": "003-audit-remediation", "note": "", "updated_at": "2026-11-26T16:30:31+09:00"}
 {"from": "data_model.agent-web-history", "to": "data_model.clean-schema", "type": "depends_on", "source": "001-agent-workspace", "note": "", "updated_at": "2026-11-26T15:44:53+09:00"}
 {"from": "doc.github-readme", "to": "spec.007-xbot-pro-release", "type": "implements", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
+{"from": "doc.github-readme", "to": "component.agent-model-settings", "type": "related_to", "source": "008-syndex-console-design", "note": "说明模型配置入口与进阶分组", "updated_at": "2026-11-26T19:06:27+09:00"}
 {"from": "doc.github-readme", "to": "config.clean-compose", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
 {"from": "doc.github-readme", "to": "config.public-channel-defaults", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
 {"from": "doc.github-readme", "to": "page.agent-workspace", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
+{"from": "doc.github-readme", "to": "page.channel-management", "type": "related_to", "source": "008-syndex-console-design", "note": "展示浅底品牌图标与通道状态", "updated_at": "2026-11-26T19:06:27+09:00"}
 {"from": "doc.github-readme", "to": "page.wechat-workbench", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
 {"from": "integration.hermes-xbot", "to": "config.hermes-release", "type": "depends_on", "source": "002-hermes-upgrade", "note": "", "updated_at": "2026-11-26T16:13:57+09:00"}
 {"from": "integration.hermes-xbot", "to": "config.python-dependency-lock", "type": "depends_on", "source": "003-audit-remediation", "note": "", "updated_at": "2026-11-26T16:30:31+09:00"}

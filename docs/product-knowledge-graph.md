@@ -1,7 +1,7 @@
 # 产品知识图谱（可读视图）
 
-> 自动生成，图谱版本 `ebbccde+008-syndex-console-design@20261126185418`。**请勿手改**；修改请用 `pg update`。
-> 数据源：`knowledge/graph/nodes.jsonl`（27 节点）、`edges.jsonl`（33 边）。
+> 自动生成，图谱版本 `46654d6+008-syndex-console-design@20261126190627`。**请勿手改**；修改请用 `pg update`。
+> 数据源：`knowledge/graph/nodes.jsonl`（27 节点）、`edges.jsonl`（35 边）。
 
 ## 共享 / 业务（shared）
 
@@ -27,7 +27,7 @@
 
 | ID | 名称 | 状态 | 路径 | 说明 |
 |----|------|------|------|------|
-| `doc.github-readme` | GitHub 首页与快速开始 | active | README.md | 桌面总览、Agent 对话与微信工作台预览，区分 Docker 新实例、本地安装和开发。 |
+| `doc.github-readme` | GitHub 首页与快速开始 | active | README.md | 以演示数据展示新版桌面总览、Agent 对话、微信工作台、接入通道和模型配置，区分 Docker 新实例、本地安装和开发。 |
 
 ## 前端（frontend）
 
@@ -109,9 +109,11 @@
 | 控制台依赖锁定 (`config.ui-dependency-lock`) | implements | 复核并修复 Hermes 升级后告警 (`spec.003-audit-remediation`) |
 | Agent 网页对话历史 (`data_model.agent-web-history`) | depends_on | 独立实例空库基线 (`data_model.clean-schema`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | implements | 发布新版框架与 README (`spec.007-xbot-pro-release`) |
+| GitHub 首页与快速开始 (`doc.github-readme`) | related_to | Agent 模型设置 (`component.agent-model-settings`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 独立实例 Compose (`config.clean-compose`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 公开通道默认配置 (`config.public-channel-defaults`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | Agent 对话工作台 (`page.agent-workspace`) |
+| GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 接入通道和通道配置 (`page.channel-management`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 微信工作台 (`page.wechat-workbench`) |
 | Xbot 内嵌 Hermes (`integration.hermes-xbot`) | depends_on | Hermes 固定发行版 (`config.hermes-release`) |
 | Xbot 内嵌 Hermes (`integration.hermes-xbot`) | depends_on | Python 依赖锁定 (`config.python-dependency-lock`) |

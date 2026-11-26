@@ -34,7 +34,9 @@
 | `docs/production-deployment.md` | 文件 | 独立生产部署流程与运维要求 |
 | `docs/screenshots` | 目录 | README 使用的桌面 Web 演示截图 |
 | `docs/screenshots/desktop-agent.png` | 文件 | Agent 会话、工具执行和产物示例 |
+| `docs/screenshots/desktop-channels.png` | 文件 | 接入通道卡片、浅底品牌图标和运行状态示例 |
 | `docs/screenshots/desktop-overview.png` | 文件 | 控制台运行总览和通道状态示例 |
+| `docs/screenshots/desktop-settings.png` | 文件 | 控制台设置分组和模型配置入口示例 |
 | `docs/screenshots/desktop-wechat.png` | 文件 | 微信工作台、头像和出站回复示例 |
 | `files` | 目录 | 本地运行生成的静态文件目录，不纳入源码 |
 | `knowledge` | 目录 | 知识库根目录 |
