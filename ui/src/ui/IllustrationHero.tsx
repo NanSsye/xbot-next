@@ -1,12 +1,12 @@
 import React, { type ReactNode } from "react";
 
-export type HeroStat = {
+type HeroStat = {
   label: string;
   value: string | number;
   tone?: "primary" | "secondary" | "amber" | "purple" | "neutral";
 };
 
-export type HeroAction = {
+type HeroAction = {
   label: string;
   icon?: React.ReactNode;
   onClick: () => void;
@@ -16,36 +16,27 @@ export type HeroAction = {
 
 type IllustrationHeroProps = {
   title: string;
-  badge?: string;
   tagline: string;
-  illustrationSrc: string;
-  illustrationAlt: string;
   stats?: HeroStat[];
   actions?: HeroAction[];
   children?: ReactNode;
-  themeTone?: "terracotta" | "sage" | "amber" | "lavender" | "sky";
 };
 
-export function IllustrationHero({
+export function PageHeading({
   title,
-  badge,
   tagline,
-  illustrationSrc,
-  illustrationAlt,
   stats = [],
   actions = [],
   children,
-  themeTone = "terracotta",
 }: IllustrationHeroProps) {
   return (
-    <section className={`hero-banner hero-banner--${themeTone}`}>
+    <header className="workspace-heading">
       <div className="hero-banner__content">
-        <div className="hero-banner__header">
-          {badge && <span className="hero-banner__badge">{badge}</span>}
-          <h1 className="hero-banner__title">{title}</h1>
-        </div>
+        <h1 className="hero-banner__title">{title}</h1>
         <p className="hero-banner__tagline">{tagline}</p>
-
+        {children}
+      </div>
+      <div className="workspace-heading__actions">
         {stats.length > 0 && (
           <div className="hero-banner__stats">
             {stats.map((stat, i) => (
@@ -74,18 +65,7 @@ export function IllustrationHero({
           </div>
         )}
 
-        {children}
       </div>
-
-      <div className="hero-banner__art">
-        <div className="hero-banner__art-glow" />
-        <img
-          src={illustrationSrc}
-          alt={illustrationAlt}
-          className="hero-banner__art-img"
-          loading="eager"
-        />
-      </div>
-    </section>
+    </header>
   );
 }

@@ -14,7 +14,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { AdapterInfo, AdapterStatus, AgentToolInfo, PluginInfo, SkillInfo, UiEvent } from "../types";
-import { IllustrationHero } from "./IllustrationHero";
+import { PageHeading } from "./IllustrationHero";
 import { WECHAT_CLIENT_LABEL, wechatChannelDisplayText } from "./wechatChannelLabel";
 import type { View } from "./App";
 
@@ -56,14 +56,7 @@ export function HomeDashboard(props: HomeDashboardProps) {
 
   return (
     <div className="content-scroll">
-      <IllustrationHero
-        title="系统运行总览与控制中心"
-        badge="实时工作台"
-        tagline="集中掌握通道、智能体、扩展能力与微信社群状态。异常会明确标出，不再用空数据伪装正常。"
-        illustrationSrc="/assets/illustrations/hero-home.png"
-        illustrationAlt="xbot 控制台概览插画"
-        themeTone="terracotta"
-      >
+      <PageHeading title="运行概览" tagline="通道、会话与服务状态">
         <div className="home-hero-status" aria-live="polite">
           <span className={`status-pill status-pill--${props.websocketState === "connected" ? "ok" : props.websocketState === "connecting" ? "neutral" : "warn"}`}>
             <span className={`status-dot ${props.websocketState === "connected" ? "status-dot--ok" : "status-dot--warn"}`} />
@@ -75,7 +68,7 @@ export function HomeDashboard(props: HomeDashboardProps) {
             <span className="status-pill status-pill--ok">数据读取正常</span>
           )}
         </div>
-      </IllustrationHero>
+      </PageHeading>
 
       <div className="home-dashboard">
         {degradedCount > 0 && (

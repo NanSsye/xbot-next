@@ -1,6 +1,6 @@
 # xbot-next
 
-**自托管的 Agent 与消息机器人工作台。** 在一个 Web 控制台里和 Hermes Agent 对话、管理微信会话，并配置自动化任务。
+**自托管的 Agent 与消息机器人工作台。** 在一个紧凑的 Web 控制台里与 Hermes Agent 对话、管理微信会话、接入消息通道并配置自动化任务。
 
 [桌面预览](#桌面预览) · [快速开始](#快速开始) · [模型与通道](#模型与通道) · [开发指南](#开发指南) · [许可](#许可)
 
@@ -22,7 +22,19 @@
 
 ![微信工作台桌面界面：联系人头像、左侧来信和右侧机器人回复](docs/screenshots/desktop-wechat.png)
 
-控制台还提供通道状态、定时任务、插件和 Skill 管理；Agent 需要外部工具时，可按需接入 MCP。
+### 接入通道
+
+微信客户端、微信 iLink、QQ、Telegram 和 Web 各有独立卡片。卡片展示通道状态，微信、QQ 和 Telegram 使用浅底平台图标，浏览器标签显示 Xbot 吉祥物。
+
+![接入通道桌面界面：微信、QQ、Telegram 和 Web 的图标与状态](docs/screenshots/desktop-channels.png)
+
+### 控制台设置
+
+打开设置默认进入模型配置。系统设置按用途分组，通道参数按平台分组；常用项直接显示，进阶参数按需展开，也可以搜索定位。
+
+![控制台设置桌面界面：分组导航、模型配置与进阶选项](docs/screenshots/desktop-settings.png)
+
+控制台还提供定时任务、插件和 Skill 管理；Agent 需要外部工具时，可按需接入 MCP。
 
 ## 快速开始
 
@@ -59,7 +71,7 @@ bash scripts/install.sh
 
 ## 模型与通道
 
-先在 **控制台设置 → 系统与模型配置** 设置服务地址、模型名和 API Key，再到 **Agent 对话** 试发一条消息。不接微信也能使用 Web Agent。支持 OpenAI-compatible 和 Anthropic 接口；环境变量和权限边界见 [Hermes 集成指南](docs/hermes-agent-integration.md) 与 [.env.example](.env.example)。真实密钥只存于本机配置或部署环境。
+先在 **控制台设置 → 系统与模型 → 模型配置** 设置服务地址、模型名和 API Key，再到 **Agent 对话** 试发一条消息。不接微信也能使用 Web Agent。支持 OpenAI-compatible 和 Anthropic 接口；环境变量和权限边界见 [Hermes 集成指南](docs/hermes-agent-integration.md) 与 [.env.example](.env.example)。真实密钥只存于本机配置或部署环境。
 
 需要收发微信消息时，再到 **接入通道** 配置 **微信客户端通道** 或 **微信 iLink**。微信客户端通道仍使用 `XBOT_WECHAT869_*` 配置键，依赖单独运行的微信客户端服务。
 

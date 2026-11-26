@@ -23,6 +23,7 @@ import {
   Moon,
   Network,
   Package,
+  PanelsTopLeft,
   Paperclip,
   Play,
   QrCode,
@@ -48,6 +49,9 @@ import {
 } from "lucide-react";
 import { Component, Fragment, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, clearApiToken, getApiToken, setApiToken, wsUrl } from "../api";
+import qqIcon from "../assets/channels/qq.svg";
+import telegramIcon from "../assets/channels/telegram.svg";
+import wechatIcon from "../assets/channels/weixin.svg";
 import { WECHAT_CLIENT_LABEL, wechatChannelDisplayText } from "./wechatChannelLabel";
 import type {
   AdapterInfo,
@@ -71,7 +75,7 @@ import type {
 import { AgentWorkspace } from "./AgentWorkspace";
 import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
 import { HomeDashboard, type WebSocketState } from "./HomeDashboard";
-import { IllustrationHero } from "./IllustrationHero";
+import { PageHeading } from "./IllustrationHero";
 import { KnowledgeCenter } from "./KnowledgeCenter";
 import { MarkdownContent } from "./MarkdownContent";
 import { OperationsCenter } from "./OperationsCenter";
@@ -580,16 +584,15 @@ export function App() {
             <div className="sidebar__brand-mascot-wrap">
               <img
                 src="/assets/illustrations/mascot.png"
-                alt="xbot Mascot"
+                alt=""
                 className="sidebar__brand-mascot"
               />
             </div>
             <div className="sidebar__brand-info">
               <div className="sidebar__brand-name">
                 <span>xbot</span>
-                <span className="sidebar__brand-tag">v2.5</span>
               </div>
-              <div className="sidebar__brand-sub">有温度的智能体工作台</div>
+              <div className="sidebar__brand-sub">智能工作台</div>
             </div>
           </div>
 
@@ -604,6 +607,7 @@ export function App() {
                   <button
                     type="button"
                     className={`nav__item ${isActive ? "nav__item--active" : ""}`}
+                    aria-current={isActive ? "page" : undefined}
                     onClick={() => {
                       if (item.id === "settings") setSettingsSection("");
                       setView(item.id);
@@ -693,13 +697,9 @@ export function App() {
 
           {view === "wechat" && (
             <div className="content-scroll">
-              <IllustrationHero
-                title="微信连接工作台"
-                badge="微信消息矩阵"
-                tagline="沉浸式管理多群聊与私信往来，支持富媒体表情渲染、用户画像穿透与会话上下文提炼。"
-                illustrationSrc="/assets/illustrations/hero-wechat.png"
-                illustrationAlt="微信工作台插画"
-                themeTone="sage"
+              <PageHeading
+                title="微信工作台"
+                tagline="私聊与群聊"
                 stats={[
                   { label: "活跃会话", value: wechatConversations.length, tone: "secondary" },
                   { label: "未读消息", value: totalUnreadCount, tone: totalUnreadCount > 0 ? "primary" : "neutral" },
@@ -743,13 +743,9 @@ export function App() {
 
           {view === "profiles" && (
             <div className="content-scroll">
-              <IllustrationHero
+              <PageHeading
                 title="社群用户画像与洞察"
-                badge="用户画像"
                 tagline="基于历史交互自动提取的成员特质、活跃度分析与个性化标签，打造有温度、有记忆的人格化互动。"
-                illustrationSrc="/assets/illustrations/hero-profiles.png"
-                illustrationAlt="用户画像中心插画"
-                themeTone="amber"
                 stats={[
                   { label: "已画像用户", value: profileTotal || profileMembers.length, tone: "amber" },
                   { label: "覆盖群组", value: wechatConversations.filter(c => c.scope === "group").length, tone: "primary" },
@@ -774,13 +770,9 @@ export function App() {
 
           {view === "groupOps" && (
             <div className="content-scroll">
-              <IllustrationHero
+              <PageHeading
                 title="社群守护与风控运营"
-                badge="社群运营"
                 tagline="群聊活跃度热力分布、违规发言风控与群成员健康度管理，让每一个社群充满秩序与活力。"
-                illustrationSrc="/assets/illustrations/hero-group.png"
-                illustrationAlt="社群管理中心插画"
-                themeTone="sage"
                 stats={[
                   { label: "当前群成员", value: groupOpsMembers.length, tone: "secondary" },
                   { label: "监控群消息", value: groupOpsMessages.length, tone: "primary" },
@@ -802,13 +794,9 @@ export function App() {
 
           {view === "knowledge" && (
             <div className="content-scroll">
-              <IllustrationHero
+              <PageHeading
                 title="智慧知识库与记忆晶体"
-                badge="知识核心"
                 tagline="多群聊独立沉淀与自动萃取，构建包含双向链接、实体关联与长期问答的专属知识图谱。"
-                illustrationSrc="/assets/illustrations/hero-knowledge.png"
-                illustrationAlt="群知识库插画"
-                themeTone="lavender"
               />
               <KnowledgeCenter />
             </div>
@@ -816,13 +804,9 @@ export function App() {
 
           {view === "operations" && (
             <div className="content-scroll">
-              <IllustrationHero
-                title="任务与自动化中心"
-                badge="运行编排"
-                tagline="统一查看后台任务、定时计划和实时活动，失败状态与重试入口清晰可见。"
-                illustrationSrc="/assets/illustrations/hero-agent.png"
-                illustrationAlt="任务与自动化中心插画"
-                themeTone="sage"
+              <PageHeading
+                title="任务与自动化"
+                tagline="后台任务、定时计划与实时活动"
               />
               <OperationsCenter events={events} liveEvents={liveEvents} />
             </div>
@@ -830,13 +814,9 @@ export function App() {
 
           {view === "channels" && (
             <div className="content-scroll">
-              <IllustrationHero
-                title="接入通道与网关协议"
-                badge="多通道网关"
-                tagline={`微信 iLink、${WECHAT_CLIENT_LABEL}、QQ 等全平台通道统一管理，提供扫码鉴权与状态监控。`}
-                illustrationSrc="/assets/illustrations/hero-channels.png"
-                illustrationAlt="接入通道中心插画"
-                themeTone="terracotta"
+              <PageHeading
+                title="接入通道"
+                tagline="通道状态、登录与连接配置"
                 stats={[
                   { label: "已配置通道", value: adapters.length, tone: "primary" },
                   { label: "运行中通道", value: adapters.filter(a => a.started).length, tone: "secondary" },
@@ -862,13 +842,9 @@ export function App() {
 
           {view === "extensions" && (
             <div className="content-scroll">
-              <IllustrationHero
-                title="扩展生态与技能工坊"
-                badge="能力扩展"
-                tagline="模块化插件与丰富 Skill 库无缝集成，自由装配定制能力，让智能体无所不能。"
-                illustrationSrc="/assets/illustrations/hero-extensions.png"
-                illustrationAlt="扩展与技能中心插画"
-                themeTone="lavender"
+              <PageHeading
+                title="扩展与技能"
+                tagline="插件与 Skill 管理"
                 stats={[
                   { label: "已安装插件", value: plugins.length, tone: "purple" },
                   { label: "技能包数量", value: skills.length, tone: "primary" },
@@ -888,14 +864,7 @@ export function App() {
 
           {view === "settings" && (
             <div className="content-scroll">
-              <IllustrationHero
-                title="控制台设置与运行配置"
-                badge="控制台设置"
-                tagline="全局参数微调、模型密钥管理与通道热重载，安全可控，随心所欲。"
-                illustrationSrc="/assets/illustrations/hero-settings.png"
-                illustrationAlt="控制台设置插画"
-                themeTone="terracotta"
-              />
+              <PageHeading title="控制台设置" tagline="模型、通道与控制台偏好" />
               <SettingsView
                 key={settingsSection}
                 initialSection={settingsSection}
@@ -1672,6 +1641,13 @@ function GroupOpsView({
    View: 接入通道 (Channels)
    ========================================================================== */
 
+const CHANNEL_ICONS = new Map([
+  ["wechat869", wechatIcon],
+  ["wechat_ilink", wechatIcon],
+  ["qq", qqIcon],
+  ["telegram", telegramIcon],
+]);
+
 function Channels({
   adapters,
   adapterStatuses,
@@ -1714,11 +1690,18 @@ function Channels({
       <div className="channels-grid">
         {adapters.map((ad) => {
           const isRunning = ad.started;
+          const icon = CHANNEL_ICONS.get(ad.name);
           return (
             <div key={ad.name} className="channel-card">
               <div className="channel-card__head">
-                <div className="channel-icon-wrap">
-                  <Network size={22} />
+                <div className="channel-icon-wrap" data-brand={icon ? ad.name : undefined} aria-hidden="true">
+                  {icon ? (
+                    <img src={icon} alt="" width={24} height={24} />
+                  ) : ad.name === "web" ? (
+                    <PanelsTopLeft size={22} />
+                  ) : (
+                    <Network size={22} />
+                  )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span className={`status-pill ${isRunning ? "status-pill--ok" : "status-pill--neutral"}`}>
@@ -1972,56 +1955,58 @@ function SettingsView({
   const [tab, setTab] = useState<"system" | "channels" | "appearance">("system");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <div className="settings-tabs" style={{ display: "flex", gap: 8 }}>
+    <div className="settings-layout">
+      <nav className="settings-tabs" aria-label="设置类别">
         <button
           type="button"
-          className={tab === "system" ? "primary-button" : "ghost-button"}
+          aria-current={tab === "system" ? "true" : undefined}
           onClick={() => setTab("system")}
         >
-          🛠️ 系统与模型配置
+          系统与模型
         </button>
         <button
           type="button"
-          className={tab === "channels" ? "primary-button" : "ghost-button"}
+          aria-current={tab === "channels" ? "true" : undefined}
           onClick={() => setTab("channels")}
         >
-          📡 通道参数设置
+          通道参数
         </button>
         <button
           type="button"
-          className={tab === "appearance" ? "primary-button" : "ghost-button"}
+          aria-current={tab === "appearance" ? "true" : undefined}
           onClick={() => setTab("appearance")}
         >
-          🎨 界面外观与状态
+          外观与状态
         </button>
-      </div>
+      </nav>
 
       {tab === "system" && <ConfigCenter scope="system" initialSection={initialSection} onApplied={onConfigApplied} />}
       {tab === "channels" && <ConfigCenter scope="channels" onApplied={onConfigApplied} />}
       {tab === "appearance" && (
         <div className="settings-appearance-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
           <div className="card">
-            <h3 className="card__title">🎨 外观主题选择</h3>
-            <p className="card__desc">根据您的工作偏好自由切换日间与夜间色彩模式</p>
-            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <h2 className="card__title">主题</h2>
+            <div className="settings-theme-options">
               <button
                 type="button"
                 className={themeMode === "light" ? "primary-button" : "ghost-button"}
+                aria-pressed={themeMode === "light"}
                 onClick={() => setThemeMode("light")}
               >
-                <Sun size={15} /> 纯净白底 (亮色)
+                <Sun size={15} /> 浅色
               </button>
               <button
                 type="button"
                 className={themeMode === "dark" ? "primary-button" : "ghost-button"}
+                aria-pressed={themeMode === "dark"}
                 onClick={() => setThemeMode("dark")}
               >
-                <Moon size={15} /> 极客暗黑 (深色)
+                <Moon size={15} /> 深色
               </button>
               <button
                 type="button"
                 className={themeMode === "system" ? "primary-button" : "ghost-button"}
+                aria-pressed={themeMode === "system"}
                 onClick={() => setThemeMode("system")}
               >
                 <Monitor size={15} /> 跟随系统
@@ -2030,7 +2015,7 @@ function SettingsView({
           </div>
 
           <div className="card">
-            <h3 className="card__title">⚡ 运行环境诊断</h3>
+            <h2 className="card__title">运行状态</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span style={{ color: "var(--text-muted)" }}>服务名称:</span>
@@ -2038,11 +2023,13 @@ function SettingsView({
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span style={{ color: "var(--text-muted)" }}>引擎状态:</span>
-                <span className="status-pill status-pill--ok">{status?.engine?.state || "running"}</span>
+                <span className={`status-pill status-pill--${status?.engine?.state === "running" ? "ok" : "neutral"}`}>
+                  {status?.engine?.state || "未知"}
+                </span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span style={{ color: "var(--text-muted)" }}>存储层:</span>
-                <span>{status?.storage || "SQLite + PG"}</span>
+                <span>{status?.storage || "未知"}</span>
               </div>
             </div>
           </div>

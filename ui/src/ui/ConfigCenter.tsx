@@ -6,18 +6,15 @@ import {
   CircleAlert,
   Eye,
   EyeOff,
-  FileKey2,
   LoaderCircle,
   Network,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
-  ServerCog,
   ShieldCheck,
-  Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api";
 import { WECHAT_CLIENT_LABEL, wechatChannelDisplayText } from "./wechatChannelLabel";
@@ -46,7 +43,6 @@ type ConfigCenterProps = {
 type EvaluatedChange = {
   field: ConfigField;
   change: ConfigChange;
-  preview: string;
 };
 
 type ModelPoolState = {
@@ -60,6 +56,19 @@ type ModelPoolState = {
 };
 
 const DRAFT_STORAGE_PREFIX = "xbot.config.draft.v1";
+const SYSTEM_GROUPS = [
+  { title: "智能体", keys: ["agent", "conversation"] },
+  { title: "控制台", keys: ["xbot", "api"] },
+  { title: "服务与数据", keys: ["network", "server", "storage", "queue", "runtime"] },
+  { title: "扩展", keys: ["plugins", "skills"] },
+];
+const COMMON_FIELDS: Record<string, string[]> = {
+  agent: ["enabled", "llm.enabled", "llm.provider", "llm.base_url", "llm.api_key", "llm.model", "llm.enabled_models"],
+  "adapters.wechat869": ["enabled", "host", "port", "admin_key", "token_key", "ws_url"],
+  "adapters.wechat_ilink": ["enabled", "base_url", "token"],
+  "adapters.qq": ["enabled", "app_id", "client_secret"],
+  "adapters.telegram": ["enabled", "bot_token", "api_base_url"],
+};
 
 export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCenterProps) {
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
@@ -70,7 +79,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  const confirmation = useRef<HTMLDialogElement>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [draftSavedAt, setDraftSavedAt] = useState("");
@@ -93,7 +102,8 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
       setDiscoveredModels([]);
       setModelsLoaded(false);
       setModelsError("");
-      const first = next.sections.find((section) => section.scope === scope);
+      const available = next.sections.filter((section) => section.scope === scope);
+      const first = available.find((section) => section.key === "agent") ?? available[0];
       setSelectedSection((current) =>
         next.sections.some((section) => section.scope === scope && section.key === current)
           ? current
@@ -169,19 +179,22 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
   const visibleFields = activeSection
     ? activeSection.fields.filter((field) => fieldMatches(field, normalizedQuery) || sectionOwnTextMatches(activeSection, normalizedQuery))
     : [];
+  const commonKeys = activeSection && COMMON_FIELDS[activeSection.key];
+  const commonFields = commonKeys && !normalizedQuery
+    ? commonKeys.flatMap((key) => visibleFields.filter((field) => field.path === `${activeSection.key}.${key}`))
+    : visibleFields;
+  const advancedFields = visibleFields.filter((field) => !commonFields.includes(field));
+  const navigation = scope === "channels" ? [{ title: "通道", sections: matchingSections }] : [
+    ...SYSTEM_GROUPS.map(({ title, keys }) => ({
+      title,
+      sections: keys.flatMap((key) => matchingSections.filter((section) => section.key === key)),
+    })),
+    { title: "其他", sections: matchingSections.filter((section) => !SYSTEM_GROUPS.some(({ keys }) => keys.includes(section.key))) },
+  ];
   const liveCount = evaluation.entries.filter((entry) => !entry.field.restart_required).length;
   const restartCount = evaluation.entries.filter((entry) => entry.field.restart_required).length;
   const secretCount = evaluation.entries.filter((entry) => entry.field.secret).length;
   const pendingRestartCount = snapshot?.pending_restart.length ?? 0;
-
-  useEffect(() => {
-    if (!confirming) return;
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setConfirming(false);
-    }
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [confirming]);
 
   function updateField(path: string, value: DraftValue) {
     setDraft((current) => ({ ...current, [path]: value }));
@@ -203,7 +216,6 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
     setVisibleSecrets({});
     setError("");
     setMessage("已放弃未应用的修改。");
-    setConfirming(false);
     setDraftSavedAt("");
     window.sessionStorage.removeItem(draftStorageKey(scope));
   }
@@ -233,7 +245,6 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
       setError("还有字段格式不正确，请按字段下方提示修改后再保存。");
       return;
     }
-    setConfirming(false);
     setSaving(true);
     setError("");
     setMessage("");
@@ -307,30 +318,8 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
     );
   }
 
-  const HeaderIcon = scope === "channels" ? Network : ServerCog;
   return (
     <section className="config-center" aria-busy={saving}>
-      <header className="config-center__header">
-        <div className="config-center__identity">
-          <span className="config-center__icon"><HeaderIcon size={20} /></span>
-          <div>
-            <h2>{scope === "channels" ? "通道参数" : "系统配置中心"}</h2>
-            <p>
-              {scope === "channels"
-                ? "配置 Web、微信与 QQ 官方机器人参数。保存后会重建通道运行上下文。"
-                : "管理 xbot 支持的 ENV 与 TOML 参数。网页覆盖优先，密钥只写入服务端。"}
-            </p>
-          </div>
-        </div>
-        <div className="config-center__header-actions">
-          {pendingRestartCount ? <span className="config-chip config-chip--warn">{pendingRestartCount} 项待重启</span> : null}
-          <span className="config-chip config-chip--ok"><Zap size={12} /> 支持热生效</span>
-          <button className="icon-button" title="重新读取配置" onClick={() => void loadSnapshot()} disabled={loading || saving}>
-            <RefreshCw className={loading ? "spin" : ""} size={16} />
-          </button>
-        </div>
-      </header>
-
       <div className="config-center__toolbar">
         <label className="config-search">
           <Search size={15} />
@@ -338,13 +327,17 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索名称、配置路径或 ENV 变量"
+            type="search"
+            placeholder="搜索设置或环境变量"
           />
         </label>
-        <div className="config-center__summary">
-          <span>{scopedSections.length} 个分区</span>
-          <span>{allFields.length} 个字段</span>
-          <span className={evaluation.entries.length ? "is-dirty" : ""}>{evaluation.entries.length} 项修改</span>
+        <div className="config-center__header-actions">
+          {pendingRestartCount ? <span className="config-chip config-chip--warn">{pendingRestartCount} 项待重启</span> : null}
+          <button type="button" className="icon-button" title="重新读取配置" aria-label="重新读取配置"
+            onClick={() => void loadSnapshot()}
+            disabled={loading || saving || Boolean(evaluation.entries.length || Object.keys(evaluation.errors).length)}>
+            <RefreshCw className={loading ? "spin" : ""} size={16} />
+          </button>
         </div>
       </div>
 
@@ -352,39 +345,49 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
       {message ? <div className="config-notice config-notice--success" aria-live="polite"><CheckCircle2 size={16} />{message}</div> : null}
 
       <div className="config-workflow">
+        {matchingSections.length > 0 && <div className="config-section-picker">
+          <label htmlFor={`config-section-picker-${scope}`}>配置分区</label>
+          <select id={`config-section-picker-${scope}`} value={activeSection?.key ?? ""}
+            onChange={(event) => setSelectedSection(event.target.value)}>
+            {navigation.filter(({ sections }) => sections.length).map(({ title, sections }) => <optgroup key={title} label={title}>
+              {sections.map((section) => <option key={section.key} value={section.key}>{sectionDisplayTitle(section)}</option>)}
+            </optgroup>)}
+          </select>
+        </div>}
         <nav className="config-section-rail" aria-label="配置分区">
-          <div className="config-section-rail__label">配置分区</div>
-          {matchingSections.map((section) => {
-            const dirty = evaluation.entries.filter((entry) => entry.field.path.startsWith(`${section.key}.`) || section.fields.some((field) => field.path === entry.field.path)).length;
+          {navigation.filter(({ sections }) => sections.length).map(({ title, sections }) => <div key={title} className="config-nav-group">
+            <div className="config-section-rail__label">{title}</div>
+            {sections.map((section) => {
+            const dirty = section.fields.filter((field) => evaluation.errors[field.path]
+              || evaluation.entries.some((entry) => entry.field === field)).length;
             return (
               <button
                 key={section.key}
                 className={`config-section-button ${section.key === activeSection?.key ? "is-active" : ""}`}
+                aria-current={section.key === activeSection?.key ? "true" : undefined}
                 onClick={() => setSelectedSection(section.key)}
               >
-                <span>
-                  <strong>{sectionDisplayTitle(section)}</strong>
-                  <small>{section.fields.length} 个字段</small>
-                </span>
+                <strong>{sectionDisplayTitle(section)}</strong>
                 {dirty ? <b>{dirty}</b> : <ChevronRight className="config-section-rail__arrow" size={17} />}
               </button>
             );
-          })}
-          {matchingSections.length === 0 ? <p>没有匹配的配置分区。</p> : null}
+            })}
+          </div>)}
         </nav>
 
-        <main className="config-form-column">
+        <div className="config-form-column">
           {activeSection ? (
             <>
               <div className="config-section-intro">
                 <div>
-                  <h3>{sectionDisplayTitle(activeSection)}</h3>
-                  <p>{wechatChannelDisplayText(activeSection.description)}</p>
+                  <h2>{sectionDisplayTitle(activeSection)}</h2>
+                  <p>{activeSection.key === "agent" ? "模型连接、默认模型与可用模型。" : wechatChannelDisplayText(activeSection.description)}</p>
                 </div>
-                {activeSection.key !== "adapters.wechat869" && <span className="config-chip">{activeSection.key}</span>}
               </div>
-              <div className="config-fields">
-                {visibleFields.map((field) => (
+              <div className={`config-fields${activeSection.key === "agent" && !normalizedQuery ? " config-fields--model" : ""}`}>
+                {[commonFields, advancedFields].map((fields, index) => {
+                  if (!fields.length) return null;
+                  const editors = fields.map((field) => (
                   <ConfigFieldEditor
                     key={field.path}
                     field={field}
@@ -407,7 +410,15 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
                     onToggleReset={() => toggleReset(field)}
                     onToggleVisible={() => setVisibleSecrets((current) => ({ ...current, [field.path]: !current[field.path] }))}
                   />
-                ))}
+                  ));
+                  if (!index) return editors;
+                  const changed = fields.filter((field) => evaluation.entries.some((entry) => entry.field === field)
+                    || evaluation.errors[field.path]).length;
+                  return <details key={activeSection.key} className="config-advanced" open={changed ? true : undefined}>
+                    <summary>{activeSection.key === "agent" ? "Hermes 与进阶参数" : "进阶参数"}</summary>
+                    <div className="config-fields">{editors}</div>
+                  </details>;
+                })}
                 {visibleFields.length === 0 ? (
                   <div className="config-empty">
                     <Search size={20} />
@@ -416,9 +427,20 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
                   </div>
                 ) : null}
               </div>
+            </>
+          ) : (
+            <div className="config-empty">
+              <Search size={20} />
+              <strong>没有匹配的配置</strong>
+              <span>尝试搜索其他名称或环境变量。</span>
+            </div>
+          )}
+          {(evaluation.entries.length > 0 || Object.keys(evaluation.errors).length > 0) && (
               <div className="config-commit-bar">
                 <div>
-                  <strong>{evaluation.entries.length ? `${evaluation.entries.length} 项修改等待应用` : "当前配置已同步"}</strong>
+                  <strong>{Object.keys(evaluation.errors).length
+                    ? `${Object.keys(evaluation.errors).length} 项格式待修正`
+                    : `${evaluation.entries.length} 项修改未保存`}</strong>
                   <span>
                     {draftSavedAt
                       ? `非敏感草稿已暂存于本次浏览器会话 · ${formatClock(draftSavedAt)}`
@@ -426,13 +448,13 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
                   </span>
                 </div>
                 <div className="config-commit-bar__actions">
-                  <button className="ghost-button" onClick={clearDraft} disabled={!evaluation.entries.length || saving}>
+                  <button className="ghost-button" onClick={clearDraft} disabled={saving}>
                     <RotateCcw size={14} />
                     放弃修改
                   </button>
                   <button
                     className="primary-button config-save-button"
-                    onClick={() => setConfirming(true)}
+                    onClick={() => confirmation.current?.showModal()}
                     disabled={!evaluation.entries.length || saving || Object.keys(evaluation.errors).length > 0}
                   >
                     {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
@@ -440,75 +462,23 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
                   </button>
                 </div>
               </div>
-            </>
-          ) : (
-            <div className="config-empty">
-              <Search size={20} />
-              <strong>没有匹配的配置</strong>
-              <span>尝试搜索其他名称或 ENV 变量。</span>
-            </div>
           )}
-        </main>
-
-        <aside className="config-inspector">
-          <div className="config-inspector__head">
-            <ShieldCheck size={17} />
-            <div>
-              <strong>应用检查</strong>
-              <span>保存前实时核对影响范围</span>
-            </div>
-          </div>
-          <div className="config-check-list">
-            <CheckRow ok={Object.keys(evaluation.errors).length === 0} label="字段格式" value={Object.keys(evaluation.errors).length ? `${Object.keys(evaluation.errors).length} 项需修正` : "检查通过"} />
-            <CheckRow ok label="即时生效" value={`${liveCount} 项`} />
-            <CheckRow ok={restartCount === 0} tone={restartCount ? "warn" : "ok"} label="需要重启" value={`${restartCount} 项`} />
-            <CheckRow ok label="敏感配置" value={`${secretCount} 项`} />
-          </div>
-          <div className="config-inspector__changes">
-            <div className="config-inspector__section-title">本次变更</div>
-            {evaluation.entries.length ? evaluation.entries.slice(0, 8).map((entry) => (
-              <button
-                key={entry.field.path}
-                onClick={() => {
-                  const section = scopedSections.find((item) => item.fields.some((field) => field.path === entry.field.path));
-                  if (section) setSelectedSection(section.key);
-                  window.setTimeout(() => document.getElementById(fieldDomId(entry.field.path))?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
-                }}
-              >
-                <span>{wechatChannelDisplayText(entry.field.label)}</span>
-                <small>{entry.preview}</small>
-              </button>
-            )) : <p>修改字段后，这里会列出实际生效内容。</p>}
-            {evaluation.entries.length > 8 ? <div className="config-inspector__more">另有 {evaluation.entries.length - 8} 项修改</div> : null}
-          </div>
-          <div className="config-security-note">
-            <FileKey2 size={17} />
-            <div>
-              <strong>密钥保护</strong>
-              <p>API 永不回传明文密钥。留空表示保持原值，“恢复来源”会删除网页覆盖。</p>
-            </div>
-          </div>
-          <div className="config-source-legend">
-            <span><i className="is-web" /> 网页覆盖</span>
-            <span><i /> ENV 或 TOML</span>
-            <span><Zap size={12} /> 实时生效</span>
-            <span><RefreshCw size={12} /> 需重启</span>
-          </div>
-        </aside>
+        </div>
       </div>
-      {confirming ? (
-        <div className="config-confirm-backdrop" onMouseDown={() => setConfirming(false)}>
-          <section
+          <dialog
+            ref={confirmation}
             className="config-confirm-dialog"
-            role="alertdialog"
-            aria-modal="true"
             aria-labelledby={`config-confirm-title-${scope}`}
             aria-describedby={`config-confirm-description-${scope}`}
-            onMouseDown={(event) => event.stopPropagation()}
+            onClose={(event) => {
+              const choice = event.currentTarget.returnValue;
+              event.currentTarget.returnValue = "";
+              if (choice === "apply") void saveChanges();
+            }}
           >
             <div className="config-confirm-dialog__icon"><CircleAlert size={20} /></div>
             <div className="config-confirm-dialog__copy">
-              <h3 id={`config-confirm-title-${scope}`}>确认保存并应用配置</h3>
+              <h1 id={`config-confirm-title-${scope}`}>确认保存并应用配置</h1>
               <p id={`config-confirm-description-${scope}`}>
                 实时配置会短暂重建通道与 Agent 运行上下文。需要重启的字段只会安全写入配置文件。
               </p>
@@ -519,21 +489,24 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
               <span><b>{restartCount}</b> 项需要重启</span>
               <span><b>{secretCount}</b> 项敏感配置</span>
             </div>
-            <div className="config-confirm-dialog__actions">
-              <button type="button" className="ghost-button" onClick={() => setConfirming(false)}>继续检查</button>
+            <ul className="config-confirm-changes">
+              {evaluation.entries.map(({ field, change }) => <li key={field.path}>
+                <span>{wechatChannelDisplayText(field.label)}</span>
+                <small>{change.reset ? "恢复配置来源" : field.secret ? "更新密钥" : "已修改"}</small>
+              </li>)}
+            </ul>
+            <form method="dialog" className="config-confirm-dialog__actions">
+              <button type="submit" value="cancel" className="ghost-button" autoFocus>继续检查</button>
               <button
-                type="button"
+                type="submit"
+                value="apply"
                 className="primary-button"
-                autoFocus
-                onClick={() => void saveChanges()}
               >
                 <Save size={15} />
                 确认保存并应用
               </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+            </form>
+          </dialog>
     </section>
   );
 }
@@ -570,33 +543,24 @@ function ConfigFieldEditor({
   const describedBy = [field.description ? descriptionId : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined;
 
   return (
-    <article id={id} className={`config-field ${dirty ? "is-dirty" : ""} ${reset ? "is-reset" : ""} ${error ? "has-error" : ""}`}>
+    <article id={id} className={`config-field${field.type === "boolean" ? " config-field--toggle" : ""} ${dirty ? "is-dirty" : ""} ${reset ? "is-reset" : ""} ${error ? "has-error" : ""}`}>
       <div className="config-field__head">
         <div className="config-field__title">
           <label htmlFor={`${id}-control`}>{wechatChannelDisplayText(field.label)}</label>
-          {!isWechatClient && <code>{field.path}</code>}
         </div>
         <div className="config-field__badges">
-          {field.secret ? <span className="config-chip config-chip--secret"><FileKey2 size={11} /> 敏感</span> : null}
-          <span className={`config-chip ${field.source === "web" ? "config-chip--web" : ""}`}>
-            {field.source === "web" ? "网页覆盖" : "ENV/TOML"}
-          </span>
-          <span className={`config-chip ${field.restart_required ? "config-chip--warn" : "config-chip--ok"}`}>
-            {field.restart_required ? "需重启" : "即时生效"}
-          </span>
+          {field.pending_restart || field.restart_required ? <span className="config-chip config-chip--warn">
+            {field.pending_restart ? "等待重启" : "需重启"}
+          </span> : null}
         </div>
       </div>
 
-      <div className="config-field__meta">
-        {!isWechatClient && <span>{field.env_name || "仅 TOML 配置"}</span>}
-        {field.pending_restart ? <b>当前值等待重启</b> : null}
-      </div>
       {field.description ? <p id={descriptionId} className="config-field__description">{wechatChannelDisplayText(field.description)}</p> : null}
 
       {field.adapter_toggle ? (
         <div className="config-field__readonly">
           <CircleAlert size={16} />
-          <span>通道启停请在“运行状态”页操作。该开关会立即执行并保存。</span>
+          <span>在「接入通道 → 运行状态」启停。</span>
         </div>
       ) : reset ? (
         <div className="config-field__reset-state">
@@ -629,12 +593,16 @@ function ConfigFieldEditor({
         </div>
       ) : null}
       {error ? <div id={errorId} className="config-field__error">{wechatChannelDisplayText(error)}</div> : null}
-      {field.overridden && !field.adapter_toggle && !reset ? (
-        <button type="button" className="config-reset-link" onClick={onToggleReset}>
-          <RotateCcw size={12} />
-          恢复 ENV/TOML 来源
-        </button>
-      ) : null}
+      <details className="config-field__meta">
+        <summary>配置来源</summary>
+        <div>
+          <span>{field.source === "web" ? "网页覆盖" : "ENV / TOML"}</span>
+          {!isWechatClient && <> · <code>{field.path}</code>{field.env_name && <> · <code>{field.env_name}</code></>}</>}
+        </div>
+        {field.overridden && !field.adapter_toggle && !reset ? <button type="button" className="config-reset-link" onClick={onToggleReset}>
+          <RotateCcw size={12} /> 恢复 ENV / TOML 来源
+        </button> : null}
+      </details>
     </article>
   );
 }
@@ -839,16 +807,6 @@ function ModelPoolControl({
   );
 }
 
-function CheckRow({ ok, tone = ok ? "ok" : "error", label, value }: { ok: boolean; tone?: "ok" | "warn" | "error"; label: string; value: string }) {
-  return (
-    <div className={`config-check-row config-check-row--${tone}`}>
-      <span>{ok ? <Check size={13} /> : <CircleAlert size={13} />}</span>
-      <b>{label}</b>
-      <small>{value}</small>
-    </div>
-  );
-}
-
 function ConfigLoading({ scope }: { scope: ConfigScope }) {
   return (
     <section className="config-center config-center--loading" aria-busy="true">
@@ -858,8 +816,7 @@ function ConfigLoading({ scope }: { scope: ConfigScope }) {
       </div>
       <div className="config-loading__body">
         <div>{Array.from({ length: scope === "channels" ? 4 : 7 }, (_, index) => <i key={index} />)}</div>
-        <main>{Array.from({ length: 4 }, (_, index) => <i key={index} />)}</main>
-        <aside>{Array.from({ length: 3 }, (_, index) => <i key={index} />)}</aside>
+        <div>{Array.from({ length: 4 }, (_, index) => <i key={index} />)}</div>
       </div>
     </section>
   );
@@ -893,7 +850,7 @@ function evaluateChanges(fields: ConfigField[], draft: Record<string, DraftValue
   for (const field of fields) {
     if (field.adapter_toggle) continue;
     if (resets[field.path] && field.overridden) {
-      entries.push({ field, change: { path: field.path, reset: true }, preview: "恢复 ENV/TOML" });
+      entries.push({ field, change: { path: field.path, reset: true } });
       continue;
     }
     const raw = draft[field.path] ?? fieldDraftValue(field);
@@ -901,7 +858,7 @@ function evaluateChanges(fields: ConfigField[], draft: Record<string, DraftValue
       if (typeof raw === "string" && raw.length > 0) {
         try {
           const value = field.type === "json" || field.type === "list" ? parseValue(field, raw) : raw;
-          entries.push({ field, change: { path: field.path, value }, preview: "更新密钥" });
+          entries.push({ field, change: { path: field.path, value } });
         } catch (err) {
           errors[field.path] = errorMessage(err);
         }
@@ -911,10 +868,10 @@ function evaluateChanges(fields: ConfigField[], draft: Record<string, DraftValue
     if (raw === fieldDraftValue(field)) continue;
     try {
       const value = parseValue(field, raw);
-      entries.push({ field, change: { path: field.path, value }, preview: previewValue(value) });
+      entries.push({ field, change: { path: field.path, value } });
     } catch (err) {
       errors[field.path] = errorMessage(err);
-      entries.push({ field, change: { path: field.path, value: raw }, preview: "格式待修正" });
+      entries.push({ field, change: { path: field.path, value: raw } });
     }
   }
   return { entries, errors };
@@ -952,26 +909,20 @@ function parseValue(field: ConfigField, raw: DraftValue): unknown {
   return text;
 }
 
-function previewValue(value: unknown): string {
-  if (typeof value === "boolean") return value ? "启用" : "停用";
-  if (Array.isArray(value)) return `${value.length} 项`;
-  if (value && typeof value === "object") return "更新 JSON 对象";
-  const text = String(value);
-  return text.length > 32 ? `${text.slice(0, 29)}…` : text || "清空";
-}
-
 function sectionMatches(section: ConfigSection, query: string): boolean {
   if (!query) return true;
   return sectionOwnTextMatches(section, query) || section.fields.some((field) => fieldMatches(field, query));
 }
 
 function sectionDisplayTitle(section: ConfigSection): string {
-  return section.key === "adapters.wechat869" ? WECHAT_CLIENT_LABEL : section.title;
+  if (section.key === "adapters.wechat869") return WECHAT_CLIENT_LABEL;
+  if (section.key === "agent") return "模型配置";
+  return section.title;
 }
 
 function sectionOwnTextMatches(section: ConfigSection, query: string): boolean {
   if (!query) return true;
-  return [sectionDisplayTitle(section), wechatChannelDisplayText(section.description), section.key].some((value) => value.toLowerCase().includes(query));
+  return [sectionDisplayTitle(section), section.title, section.key].some((value) => value.toLowerCase().includes(query));
 }
 
 function fieldMatches(field: ConfigField, query: string): boolean {

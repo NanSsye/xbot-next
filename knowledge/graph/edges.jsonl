@@ -2,6 +2,8 @@
 {"from": "api.agent-web-chat", "to": "integration.hermes-xbot", "type": "depends_on", "source": "001-agent-workspace", "note": "", "updated_at": "2026-11-26T15:10:28+09:00"}
 {"from": "api.wechat-workbench", "to": "integration.wechat869-workbench", "type": "depends_on", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}
 {"from": "api.wechat-workbench", "to": "service.wechat-workbench-outgoing", "type": "depends_on", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}
+{"from": "component.agent-model-settings", "to": "spec.008-syndex-console-design", "type": "implements", "source": "008-syndex-console-design", "note": "", "updated_at": "2026-11-26T18:54:18+09:00"}
+{"from": "component.console-shell", "to": "spec.008-syndex-console-design", "type": "implements", "source": "008-syndex-console-design", "note": "", "updated_at": "2026-11-26T18:54:18+09:00"}
 {"from": "component.wechat-client-label", "to": "spec.006-wechat-channel-label", "type": "implements", "source": "006-wechat-channel-label", "note": "", "updated_at": "2026-11-26T17:39:23+09:00"}
 {"from": "config.clean-compose", "to": "config.hermes-release", "type": "depends_on", "source": "002-hermes-upgrade", "note": "独立 Compose 运行由固定 Hermes 源码与 uv.lock 构建的预构建镜像。", "updated_at": "2026-11-26T16:13:57+09:00"}
 {"from": "config.clean-compose", "to": "data_model.clean-schema", "type": "depends_on", "source": "001-agent-workspace", "note": "", "updated_at": "2026-11-26T15:44:53+09:00"}
@@ -10,19 +12,24 @@
 {"from": "config.ui-dependency-lock", "to": "spec.003-audit-remediation", "type": "implements", "source": "003-audit-remediation", "note": "", "updated_at": "2026-11-26T16:30:31+09:00"}
 {"from": "data_model.agent-web-history", "to": "data_model.clean-schema", "type": "depends_on", "source": "001-agent-workspace", "note": "", "updated_at": "2026-11-26T15:44:53+09:00"}
 {"from": "doc.github-readme", "to": "spec.007-xbot-pro-release", "type": "implements", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
+{"from": "doc.github-readme", "to": "component.agent-model-settings", "type": "related_to", "source": "008-syndex-console-design", "note": "说明模型配置入口与进阶分组", "updated_at": "2026-11-26T19:06:27+09:00"}
 {"from": "doc.github-readme", "to": "config.clean-compose", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
 {"from": "doc.github-readme", "to": "config.public-channel-defaults", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
 {"from": "doc.github-readme", "to": "page.agent-workspace", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
+{"from": "doc.github-readme", "to": "page.channel-management", "type": "related_to", "source": "008-syndex-console-design", "note": "展示浅底品牌图标与通道状态", "updated_at": "2026-11-26T19:06:27+09:00"}
 {"from": "doc.github-readme", "to": "page.wechat-workbench", "type": "related_to", "source": "007-xbot-pro-release", "note": "", "updated_at": "2026-11-26T18:10:22+09:00"}
 {"from": "integration.hermes-xbot", "to": "config.hermes-release", "type": "depends_on", "source": "002-hermes-upgrade", "note": "", "updated_at": "2026-11-26T16:13:57+09:00"}
 {"from": "integration.hermes-xbot", "to": "config.python-dependency-lock", "type": "depends_on", "source": "003-audit-remediation", "note": "", "updated_at": "2026-11-26T16:30:31+09:00"}
 {"from": "integration.hermes-xbot", "to": "spec.002-hermes-upgrade", "type": "implements", "source": "002-hermes-upgrade", "note": "", "updated_at": "2026-11-26T16:13:57+09:00"}
 {"from": "integration.xbot-mcp", "to": "config.python-dependency-lock", "type": "depends_on", "source": "003-audit-remediation", "note": "", "updated_at": "2026-11-26T16:30:31+09:00"}
 {"from": "page.agent-workspace", "to": "api.agent-web-chat", "type": "calls", "source": "002-hermes-upgrade", "note": "网页流式及历史契约保持不变，接口下游切换至 Hermes v0.23.4；前端不改。", "updated_at": "2026-11-26T16:13:57+09:00"}
+{"from": "page.agent-workspace", "to": "component.console-shell", "type": "depends_on", "source": "008-syndex-console-design", "note": "", "updated_at": "2026-11-26T18:54:18+09:00"}
 {"from": "page.agent-workspace", "to": "config.ui-dependency-lock", "type": "depends_on", "source": "003-audit-remediation", "note": "", "updated_at": "2026-11-26T16:30:31+09:00"}
 {"from": "page.agent-workspace", "to": "spec.001-agent-workspace", "type": "implements", "source": "001-agent-workspace", "note": "", "updated_at": "2026-11-26T15:10:28+09:00"}
 {"from": "page.agent-workspace", "to": "component.agent-model-settings", "type": "related_to", "source": "001-agent-workspace", "note": "", "updated_at": "2026-11-26T15:10:28+09:00"}
+{"from": "page.channel-management", "to": "component.console-shell", "type": "depends_on", "source": "008-syndex-console-design", "note": "", "updated_at": "2026-11-26T18:54:18+09:00"}
 {"from": "page.channel-management", "to": "component.wechat-client-label", "type": "depends_on", "source": "006-wechat-channel-label", "note": "", "updated_at": "2026-11-26T17:39:23+09:00"}
 {"from": "page.wechat-workbench", "to": "api.wechat-workbench", "type": "depends_on", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}
+{"from": "page.wechat-workbench", "to": "component.console-shell", "type": "depends_on", "source": "008-syndex-console-design", "note": "", "updated_at": "2026-11-26T18:54:18+09:00"}
 {"from": "page.wechat-workbench", "to": "spec.005-wechat-workbench", "type": "implements", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}
 {"from": "service.wechat-workbench-outgoing", "to": "integration.wechat869-workbench", "type": "depends_on", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}

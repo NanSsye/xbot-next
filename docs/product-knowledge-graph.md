@@ -1,7 +1,7 @@
 # 产品知识图谱（可读视图）
 
-> 自动生成，图谱版本 `314808d+007-xbot-pro-release@20261126181022`。**请勿手改**；修改请用 `pg update`。
-> 数据源：`knowledge/graph/nodes.jsonl`（25 节点）、`edges.jsonl`（28 边）。
+> 自动生成，图谱版本 `46654d6+008-syndex-console-design@20261126190627`。**请勿手改**；修改请用 `pg update`。
+> 数据源：`knowledge/graph/nodes.jsonl`（27 节点）、`edges.jsonl`（35 边）。
 
 ## 共享 / 业务（shared）
 
@@ -21,12 +21,13 @@
 | `spec.005-wechat-workbench` | 微信工作台 869 头像与机器人回复回显 | active | specs/005-wechat-workbench/spec.md | 需求 005-wechat-workbench：微信工作台 869 头像与机器人回复回显 |
 | `spec.006-wechat-channel-label` | 统一微信客户端通道展示名称 | active | specs/006-wechat-channel-label/spec.md | 需求 006-wechat-channel-label：统一微信客户端通道展示名称 |
 | `spec.007-xbot-pro-release` | 发布新版框架与 README | active | specs/007-xbot-pro-release/spec.md | 审核并提交公开发布快照，不包含实例专用运维配置。 |
+| `spec.008-syndex-console-design` | 按 SYNDEX 工作台重整 Xbot 控制台 | active | specs/008-syndex-console-design/spec.md | 需求 008-syndex-console-design：按 SYNDEX 工作台重整 Xbot 控制台 |
 
 ### doc
 
 | ID | 名称 | 状态 | 路径 | 说明 |
 |----|------|------|------|------|
-| `doc.github-readme` | GitHub 首页与快速开始 | active | README.md | 桌面总览、Agent 对话与微信工作台预览，区分 Docker 新实例、本地安装和开发。 |
+| `doc.github-readme` | GitHub 首页与快速开始 | active | README.md | 以演示数据展示新版桌面总览、Agent 对话、微信工作台、接入通道和模型配置，区分 Docker 新实例、本地安装和开发。 |
 
 ## 前端（frontend）
 
@@ -34,15 +35,16 @@
 
 | ID | 名称 | 状态 | 路径 | 说明 |
 |----|------|------|------|------|
-| `page.agent-workspace` | Agent 对话工作台 | active | ui/src/ui/AgentWorkspace.tsx | 沿用服务器版侧栏和主题。去掉对话页插画横幅及统计，仅保留紧凑的会话标题和模型名称；提供独立会话、流式消息、历史与执行过程。 |
-| `page.channel-management` | 接入通道和通道配置 | active | ui/src/ui/App.tsx | 通道卡片显示用户可读的接入方式，微信客户端与微信 iLink 分开呈现；授权和设置仍沿用原请求。 |
+| `page.agent-workspace` | Agent 对话工作台 | active | ui/src/ui/AgentWorkspace.tsx | 中性工作台主题，192px 独立历史栏、紧凑标题及居中消息流；保留独立会话、流式消息、历史与执行过程。 |
+| `page.channel-management` | 接入通道和通道配置 | active | ui/src/ui/App.tsx | 紧凑共享页头；微信客户端与微信 iLink 分开呈现，授权和通道请求不变；配置中心按平台提供常用与进阶参数。 卡片使用浅底配合微信、QQ、Telegram 本地品牌图标，Web 使用浏览器图标。 |
 | `page.wechat-workbench` | 微信工作台 | active | ui/src/ui/App.tsx | 会话和消息读取头像；失败回退首字。同步提示按私聊头像返回量显示，出站消息沿用右侧气泡和实时事件。 |
 
 ### component
 
 | ID | 名称 | 状态 | 路径 | 说明 |
 |----|------|------|------|------|
-| `component.agent-model-settings` | Agent 模型设置 | active | ui/src/ui/ConfigCenter.tsx | 从 Agent 对话缺配置提示打开系统配置中的 Agent 与模型分区。 |
+| `component.agent-model-settings` | Agent 模型设置 | active | ui/src/ui/ConfigCenter.tsx | 设置默认打开模型配置；常用字段直接可见，Hermes 与配置来源按需展开。保留模型发现、草稿、配置格式和保存确认。 |
+| `component.console-shell` | 控制台工作区外壳 | active | ui/src/styles-hardening.css | 按 SYNDEX 对话页建立中性明暗主题、紧凑导航和轻边框；复用通用页头。 浏览器标签复用 Xbot 吉祥物。 |
 | `component.wechat-client-label` | 微信客户端通道显示名 | active | ui/src/ui/wechatChannelLabel.ts | 首页、通道、配置和事件展示统一为微信客户端通道，保留原 API 路径、配置键和内容数据。 |
 
 ### config
@@ -97,6 +99,8 @@
 | 网页 Agent 会话接口 (`api.agent-web-chat`) | depends_on | Xbot 内嵌 Hermes (`integration.hermes-xbot`) |
 | 微信工作台 API (`api.wechat-workbench`) | depends_on | 869 联系人资料与发送回执 (`integration.wechat869-workbench`) |
 | 微信工作台 API (`api.wechat-workbench`) | depends_on | 微信工作台出站消息入库 (`service.wechat-workbench-outgoing`) |
+| Agent 模型设置 (`component.agent-model-settings`) | implements | 按 SYNDEX 工作台重整 Xbot 控制台 (`spec.008-syndex-console-design`) |
+| 控制台工作区外壳 (`component.console-shell`) | implements | 按 SYNDEX 工作台重整 Xbot 控制台 (`spec.008-syndex-console-design`) |
 | 微信客户端通道显示名 (`component.wechat-client-label`) | implements | 统一微信客户端通道展示名称 (`spec.006-wechat-channel-label`) |
 | 独立实例 Compose (`config.clean-compose`) | depends_on | Hermes 固定发行版 (`config.hermes-release`) |
 | 独立实例 Compose (`config.clean-compose`) | depends_on | 独立实例空库基线 (`data_model.clean-schema`) |
@@ -105,19 +109,24 @@
 | 控制台依赖锁定 (`config.ui-dependency-lock`) | implements | 复核并修复 Hermes 升级后告警 (`spec.003-audit-remediation`) |
 | Agent 网页对话历史 (`data_model.agent-web-history`) | depends_on | 独立实例空库基线 (`data_model.clean-schema`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | implements | 发布新版框架与 README (`spec.007-xbot-pro-release`) |
+| GitHub 首页与快速开始 (`doc.github-readme`) | related_to | Agent 模型设置 (`component.agent-model-settings`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 独立实例 Compose (`config.clean-compose`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 公开通道默认配置 (`config.public-channel-defaults`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | Agent 对话工作台 (`page.agent-workspace`) |
+| GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 接入通道和通道配置 (`page.channel-management`) |
 | GitHub 首页与快速开始 (`doc.github-readme`) | related_to | 微信工作台 (`page.wechat-workbench`) |
 | Xbot 内嵌 Hermes (`integration.hermes-xbot`) | depends_on | Hermes 固定发行版 (`config.hermes-release`) |
 | Xbot 内嵌 Hermes (`integration.hermes-xbot`) | depends_on | Python 依赖锁定 (`config.python-dependency-lock`) |
 | Xbot 内嵌 Hermes (`integration.hermes-xbot`) | implements | 升级内嵌 Hermes 至 v0.23.4 (`spec.002-hermes-upgrade`) |
 | Xbot MCP 工具连接 (`integration.xbot-mcp`) | depends_on | Python 依赖锁定 (`config.python-dependency-lock`) |
 | Agent 对话工作台 (`page.agent-workspace`) | calls | 网页 Agent 会话接口 (`api.agent-web-chat`) |
+| Agent 对话工作台 (`page.agent-workspace`) | depends_on | 控制台工作区外壳 (`component.console-shell`) |
 | Agent 对话工作台 (`page.agent-workspace`) | depends_on | 控制台依赖锁定 (`config.ui-dependency-lock`) |
 | Agent 对话工作台 (`page.agent-workspace`) | implements | 移除微伴社区并重构 Agent 工作台 (`spec.001-agent-workspace`) |
 | Agent 对话工作台 (`page.agent-workspace`) | related_to | Agent 模型设置 (`component.agent-model-settings`) |
+| 接入通道和通道配置 (`page.channel-management`) | depends_on | 控制台工作区外壳 (`component.console-shell`) |
 | 接入通道和通道配置 (`page.channel-management`) | depends_on | 微信客户端通道显示名 (`component.wechat-client-label`) |
 | 微信工作台 (`page.wechat-workbench`) | depends_on | 微信工作台 API (`api.wechat-workbench`) |
+| 微信工作台 (`page.wechat-workbench`) | depends_on | 控制台工作区外壳 (`component.console-shell`) |
 | 微信工作台 (`page.wechat-workbench`) | implements | 微信工作台 869 头像与机器人回复回显 (`spec.005-wechat-workbench`) |
 | 微信工作台出站消息入库 (`service.wechat-workbench-outgoing`) | depends_on | 869 联系人资料与发送回执 (`integration.wechat869-workbench`) |
