@@ -6,6 +6,7 @@ from xbot.conversations.models import (
     ConversationContext,
     ConversationScope,
     ConversationSummary,
+    build_conversation_id,
 )
 from xbot.conversations.session_store import InMemoryConversationStore
 from xbot.core.config import ConversationConfig
@@ -114,10 +115,13 @@ class ConversationManager:
         return self.config.default_scope
 
     def _normalize_conversation_id(self, message: Message, conversation_id: str) -> str:
-        if ":" in conversation_id:
-            return conversation_id
         scope = self._scope_from_message(message)
-        return f"{message.platform}:{message.adapter}:{scope}:{conversation_id}"
+        return build_conversation_id(
+            message.platform,
+            message.adapter,
+            scope,
+            conversation_id,
+        )
 
     async def _auto_summarize_if_needed(self, conversation_id: str) -> None:
         if not self.config.context.auto_summarize:

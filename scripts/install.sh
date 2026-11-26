@@ -42,23 +42,6 @@ run_git() {
   git "$@"
 }
 
-install_build_tools() {
-  if python -m pip install -U setuptools wheel; then
-    return 0
-  fi
-
-  echo "Current pip index failed to install setuptools/wheel, retrying with PyPI." >&2
-  if python -m pip install -U --index-url https://pypi.org/simple setuptools wheel; then
-    return 0
-  fi
-
-  echo >&2
-  echo "Failed to install build tools. Check your proxy or pip index, then retry:" >&2
-  echo "  python -m pip install -U --index-url https://pypi.org/simple setuptools wheel" >&2
-  echo >&2
-  return 1
-}
-
 update_install_repo() {
   echo "Updating xbot-next in $INSTALL_DIR"
   run_git_network -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
@@ -83,20 +66,7 @@ update_install_repo() {
   run_git -C "$INSTALL_DIR" checkout -B "$BRANCH" "$remote_ref"
 }
 
-if command -v python3.11 >/dev/null 2>&1; then
-  PYTHON_BIN="$(command -v python3.11)"
-elif command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="$(command -v python3)"
-else
-  echo "Missing Python 3.11+. Please install Python 3.11 or newer." >&2
-  exit 1
-fi
-
-"$PYTHON_BIN" - <<'PY'
-import sys
-if sys.version_info < (3, 11):
-    raise SystemExit("Python 3.11+ is required.")
-PY
+need_cmd uv
 
 mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
 
@@ -111,19 +81,16 @@ run_git_network clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 
 cd "$INSTALL_DIR"
 
-"$PYTHON_BIN" -m venv .venv
-. .venv/bin/activate
-python -m pip install -U pip
-install_build_tools
-python -m pip install --no-build-isolation -e ./vendor/hermes -e ".[agent]"
-python -c 'from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()'
+uv run --no-project --python 3.14 python scripts/prepare_hermes.py
+uv sync --locked --python 3.14 --extra agent --extra browser
+.venv/bin/python -c 'from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()'
 
 if [ ! -f .env ] && [ -f .env.example ]; then
   cp .env.example .env
   echo "Created $INSTALL_DIR/.env from .env.example"
 fi
 
-python -m playwright install chromium || true
+.venv/bin/python -m playwright install chromium || true
 
 cat > "$BIN_DIR/xbot" <<EOF
 #!/usr/bin/env bash

@@ -1,45 +1,58 @@
 import {
   Activity,
+  ArrowRight,
   Bot,
+  BookOpenText,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Circle,
-  Clock3,
+  Copy,
+  ExternalLink,
   FileText,
+  HardDrive,
+  HeartPulse,
+  Key,
+  Layers,
+  LayoutDashboard,
   LogIn,
-  ShieldAlert,
-  Monitor,
+  MessageCircle,
   MessagesSquare,
+  Monitor,
   Moon,
   Network,
   Package,
-  Pause,
+  Paperclip,
   Play,
   QrCode,
+  Radio,
   RefreshCw,
-  RotateCcw,
   Search,
   Send,
   Settings,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Sun,
+  Tag,
   Trash2,
+  UserCheck,
+  UserRound,
   Users,
   Wrench,
+  X,
   XCircle,
+  Zap,
 } from "lucide-react";
-import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, clearApiToken, getApiToken, setApiToken, wsUrl } from "../api";
+import { WECHAT_CLIENT_LABEL, wechatChannelDisplayText } from "./wechatChannelLabel";
 import type {
   AdapterInfo,
   AdapterStatus,
   AgentEvent,
-  AgentMemoryInfo,
-  AgentTask,
-  AgentTaskDetail,
-  AgentTaskTimelineItem,
-  AgentTaskToolCall,
   AgentToolInfo,
   BackgroundTask,
   Conversation,
@@ -55,46 +68,52 @@ import type {
   WechatMessage,
   WechatUserDetail,
 } from "../types";
+import { AgentWorkspace } from "./AgentWorkspace";
 import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
+import { HomeDashboard, type WebSocketState } from "./HomeDashboard";
+import { IllustrationHero } from "./IllustrationHero";
+import { KnowledgeCenter } from "./KnowledgeCenter";
+import { MarkdownContent } from "./MarkdownContent";
+import { OperationsCenter } from "./OperationsCenter";
+import { WechatPersonaPanel } from "./WechatPersonaPanel";
 
-type View = "agentChat" | "chat" | "wechat" | "profiles" | "groupOps" | "overview" | "agent" | "tasks" | "channels" | "extensions" | "background" | "schedules" | "logs" | "settings";
-type DeliveryMode = "console" | "channel";
+export type View =
+  | "home"
+  | "agentChat"
+  | "wechat"
+  | "profiles"
+  | "groupOps"
+  | "knowledge"
+  | "operations"
+  | "channels"
+  | "extensions"
+  | "settings";
+
 type ThemeMode = "system" | "light" | "dark";
-type ConsoleMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  created_at: string;
-};
 
-const QUICK_EMOJIS = ["😀", "😂", "😊", "😍", "😭", "😅", "👍", "🙏", "🎉", "🔥", "玫瑰", "强", "握手", "OK"];
-
-const navItems: Array<{ id: View; label: string; icon: typeof MessagesSquare }> = [
-  { id: "agentChat", label: "Agent 对话", icon: Bot },
-  { id: "chat", label: "对话", icon: MessagesSquare },
-  { id: "wechat", label: "微信", icon: MessagesSquare },
-  { id: "profiles", label: "画像", icon: Users },
-  { id: "groupOps", label: "群管", icon: ShieldAlert },
-  { id: "overview", label: "总览", icon: Activity },
-  { id: "agent", label: "Agent", icon: Bot },
-  { id: "tasks", label: "任务", icon: Activity },
-  { id: "channels", label: "通道", icon: Network },
-  { id: "extensions", label: "扩展", icon: Package },
-  { id: "background", label: "后台任务", icon: Clock3 },
-  { id: "schedules", label: "定时任务", icon: CalendarClock },
-  { id: "logs", label: "活动流", icon: Bot },
-  { id: "settings", label: "设置", icon: Settings },
+const navItems: Array<{ id: View; label: string; icon: typeof LayoutDashboard; desc: string; section: string }> = [
+  { id: "home", label: "控制台首页", icon: LayoutDashboard, desc: "运行状态与全局看板", section: "工作区" },
+  { id: "agentChat", label: "Agent 对话", icon: Bot, desc: "智能协同与任务执行", section: "工作区" },
+  { id: "wechat", label: "微信工作台", icon: MessagesSquare, desc: "会话消息与好友互动", section: "工作区" },
+  { id: "profiles", label: "用户画像", icon: Users, desc: "人群标签与深度洞察", section: "用户与内容" },
+  { id: "groupOps", label: "社群管理", icon: ShieldAlert, desc: "群成员与风控守护", section: "用户与内容" },
+  { id: "knowledge", label: "知识库", icon: BookOpenText, desc: "长期记忆与结构知识", section: "用户与内容" },
+  { id: "operations", label: "任务与自动化", icon: CalendarClock, desc: "后台任务、计划与活动流", section: "系统" },
+  { id: "channels", label: "接入通道", icon: Network, desc: "协议网关与扫码鉴权", section: "系统" },
+  { id: "extensions", label: "扩展与技能", icon: Package, desc: "插件工具箱与能力库", section: "系统" },
+  { id: "settings", label: "控制台设置", icon: Settings, desc: "系统参数与运行配置", section: "系统" },
 ];
 
 const THEME_STORAGE_KEY = "xbot.control.theme";
 
 function readThemeMode(): ThemeMode {
   const value = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return value === "light" || value === "dark" || value === "system" ? value : "system";
+  return value === "light" || value === "dark" || value === "system" ? value : "light";
 }
 
 export function App() {
-  const [view, setView] = useState<View>("agentChat");
+  const [view, setView] = useState<View>("home");
+  const [settingsSection, setSettingsSection] = useState("");
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapterStatuses, setAdapterStatuses] = useState<Record<string, AdapterStatus>>({});
@@ -118,122 +137,80 @@ export function App() {
   const [profilePage, setProfilePage] = useState(1);
   const [profileTotal, setProfileTotal] = useState(0);
   const [profileCursors, setProfileCursors] = useState<Record<number, string>>({ 1: "" });
+  const [editingProfileUser, setEditingProfileUser] = useState<WechatUserDetail | null>(null);
   const [groupOpsConversationId, setGroupOpsConversationId] = useState("");
   const [groupOpsMembers, setGroupOpsMembers] = useState<WechatMember[]>([]);
   const [groupOpsDetails, setGroupOpsDetails] = useState<Record<string, WechatUserDetail>>({});
   const [groupOpsMessages, setGroupOpsMessages] = useState<WechatMessage[]>([]);
   const [groupOpsFilter, setGroupOpsFilter] = useState("");
   const [selectedConversationId, setSelectedConversationId] = useState<string>("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [consoleMessagesByContext, setConsoleMessagesByContext] = useState<Record<string, ConsoleMessage[]>>({});
   const [events, setEvents] = useState<AgentEvent[]>([]);
-  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState("");
-  const [selectedAgentSessionSource, setSelectedAgentSessionSource] = useState("terminal:control-ui");
-  const [selectedTaskDetail, setSelectedTaskDetail] = useState<AgentTaskDetail | null>(null);
   const [tools, setTools] = useState<AgentToolInfo[]>([]);
-  const [llmStatus, setLlmStatus] = useState<Record<string, unknown> | null>(null);
-  const [mcpStatus, setMcpStatus] = useState<Record<string, unknown> | null>(null);
-  const [memories, setMemories] = useState<AgentMemoryInfo[]>([]);
   const [liveEvents, setLiveEvents] = useState<UiEvent[]>([]);
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
-  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
-  const [query, setQuery] = useState("");
-  const [input, setInput] = useState("");
-  const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("console");
-  const [toolQuery, setToolQuery] = useState("");
-  const [memoryKind, setMemoryKind] = useState("semantic");
-  const [memorySummary, setMemorySummary] = useState("");
-  const [scheduleName, setScheduleName] = useState("");
-  const [scheduleExpr, setScheduleExpr] = useState("");
-  const [scheduleInput, setScheduleInput] = useState("");
-  const [scheduleTimezone, setScheduleTimezone] = useState("Asia/Shanghai");
-  const [scheduleMaxRuns, setScheduleMaxRuns] = useState("");
   const [apiToken, setApiTokenState] = useState(getApiToken());
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemeMode);
   const [wsRevision, setWsRevision] = useState(0);
-  const [busy, setBusy] = useState(false);
+  const [websocketState, setWebsocketState] = useState<WebSocketState>("connecting");
+  const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
+  const [loadingAll, setLoadingAll] = useState(true);
+  const [adapterToggleBusy, setAdapterToggleBusy] = useState("");
   const [error, setError] = useState("");
 
-  const selectedConversation = conversations.find((item) => item.id === selectedConversationId);
-  const consoleContextKey = selectedConversationId || "control-ui";
-  const directConsoleMessages = consoleMessagesByContext[agentConsoleContextKey(selectedAgentSessionSource)] ?? [];
-  const channelConsoleMessages = consoleMessagesByContext[consoleContextKey] ?? [];
-  const filteredConversations = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    if (!text) return conversations;
-    return conversations.filter((item) =>
-      [item.id, item.title, item.platform, item.adapter, item.scope, item.raw_id]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(text)),
-    );
-  }, [conversations, query]);
+  const viewRef = useRef(view);
+  const selectedConversationIdRef = useRef(selectedConversationId);
+  const stageRef = useRef<HTMLElement>(null);
+  viewRef.current = view;
+  selectedConversationIdRef.current = selectedConversationId;
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      stageRef.current?.parentElement?.scrollTo({ top: 0, left: 0 });
+      stageRef.current?.scrollTo({ top: 0, left: 0 });
+      stageRef.current?.querySelector<HTMLElement>(".content-scroll")?.scrollTo({ top: 0, left: 0 });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [view]);
+
+
+  const totalUnreadCount = useMemo(() => {
+    return Object.values(wechatUnread).reduce((acc, count) => acc + count, 0);
+  }, [wechatUnread]);
 
   const loadAll = useCallback(async () => {
     setError("");
+    setLoadingAll(true);
     try {
-      const load = async <T,>(label: string, promise: Promise<T>, fallback: T): Promise<T> => {
+      const failures: Array<[string, string]> = [];
+      const load = async <T,>(label: string, promise: Promise<T>, apply: (value: T) => void): Promise<void> => {
         try {
-          return await promise;
+          apply(await promise);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           if (message.toLowerCase().includes("unauthorized")) throw err;
           console.warn(`[xbot-ui] ${label} load failed:`, message);
-          return fallback;
+          failures.push([label, message]);
         }
       };
-      const [
-        nextStatus,
-        nextAdapters,
-        nextPlugins,
-        nextSkills,
-        nextConversations,
-        nextWechatConversations,
-        nextEvents,
-        nextTasks,
-        nextTools,
-        nextLlmStatus,
-        nextMcpStatus,
-        nextMemories,
-        nextBackground,
-        nextSchedules,
-      ] = await Promise.all([
-          load("system/status", api.status(), null),
-          load("adapters", api.adapters(), []),
-          load("plugins", api.plugins(), []),
-          load("skills", api.skills(), []),
-          load("conversations", api.conversations(), []),
-          load("wechat/conversations", api.wechatConversations(200), []),
-          load("agent/events", api.agentEvents(80), []),
-          load("agent/tasks", api.agentTasks(80), []),
-          load("agent/tools", api.tools(), []),
-          load("agent/llm/status", api.llmStatus(), null),
-          load("agent/mcp/status", api.mcpStatus(), null),
-          load("agent/memories", api.memories(50), []),
-          load("agent/background-tasks", api.backgroundTasks(50), []),
-          load("agent/scheduled-jobs", api.scheduledJobs(100), []),
-        ]);
-      setStatus(nextStatus);
-      setAdapters(nextAdapters);
-      setPlugins(nextPlugins);
-      setSkills(nextSkills);
-      setConversations(nextConversations);
-      setWechatConversations(nextWechatConversations);
-      setEvents(nextEvents);
-      setAgentTasks(nextTasks);
-      setTools(nextTools);
-      setLlmStatus(nextLlmStatus);
-      setMcpStatus(nextMcpStatus);
-      setMemories(nextMemories);
-      setBackgroundTasks(nextBackground);
-      setScheduledJobs(nextSchedules);
-      if (!selectedConversationId && nextConversations.length > 0) {
-        setSelectedConversationId(nextConversations[0].id);
-      }
+      await Promise.all([
+        load("system/status", api.status(), setStatus),
+        load("adapters", api.adapters(), setAdapters),
+        load("plugins", api.plugins(), setPlugins),
+        load("skills", api.skills(), setSkills),
+        load("conversations", api.conversations(), setConversations),
+        load("wechat/conversations", api.wechatConversations(200), (next) => {
+          setWechatConversations(next);
+          setSelectedConversationId((current) => current || next[0]?.id || "");
+        }),
+        load("agent/events", api.agentEvents(80), setEvents),
+        load("agent/tools", api.tools(), setTools),
+      ]);
+      setLoadErrors(Object.fromEntries(failures));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingAll(false);
     }
-  }, [selectedConversationId, selectedTaskId]);
+  }, []);
 
   const handleConfigApplied = useCallback(async ({ apiToken: nextApiToken }: ConfigAppliedEvent) => {
     if (nextApiToken !== undefined) {
@@ -263,13 +240,12 @@ export function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    if (view !== "channels" || adapters.length === 0) return;
+    if (adapters.length === 0) return;
     void Promise.all(adapters.map((adapter) => refreshAdapterStatus(adapter.name)));
-  }, [view, adapters]);
+  }, [adapters]);
 
   useEffect(() => {
     if (!selectedConversationId) {
-      setMessages([]);
       setWechatMessages([]);
       setWechatMembers([]);
       return;
@@ -277,27 +253,14 @@ export function App() {
     if (view === "wechat") {
       api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch((err) => setError(err instanceof Error ? err.message : String(err)));
       api.wechatMembers(selectedConversationId).then(setWechatMembers).catch((err) => setError(err instanceof Error ? err.message : String(err)));
-      return;
     }
-    api
-      .messages(selectedConversationId, 100)
-      .then(setMessages)
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, [selectedConversationId, view]);
 
   useEffect(() => {
-    if (!selectedTaskId) {
-      setSelectedTaskDetail(null);
-      return;
-    }
-    api
-      .agentTaskDetail(selectedTaskId)
-      .then(setSelectedTaskDetail)
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [selectedTaskId]);
-
-  useEffect(() => {
     const socket = new WebSocket(wsUrl());
+    let closedByEffect = false;
+    setWebsocketState("connecting");
+    socket.onopen = () => setWebsocketState("connected");
     socket.onmessage = (event) => {
       try {
         const item = JSON.parse(event.data) as UiEvent;
@@ -305,55 +268,43 @@ export function App() {
         if (item.type === "agent.event") {
           const agentEvent = item.data as AgentEvent;
           setEvents((current) => [agentEvent, ...current].slice(0, 200));
-          if (agentEvent.task_id === selectedTaskId) {
-            void api.agentTaskDetail(agentEvent.task_id).then(setSelectedTaskDetail).catch(() => undefined);
-          }
-          if (agentEvent.type === "task.completed") {
-            void api.agentTasks(80).then(setAgentTasks).catch(() => undefined);
-          }
         }
         if (item.type === "message.created") {
           const payload = item.data as { message?: WechatMessage };
           const incoming = payload.message;
-          if (incoming?.conversation_id === selectedConversationId && view === "wechat") {
-            void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
-            void api.wechatMembers(selectedConversationId).then(setWechatMembers).catch(() => undefined);
+          if (incoming?.conversation_id === selectedConversationIdRef.current && viewRef.current === "wechat") {
+            setWechatMessages((current) => sortWechatMessages([
+              ...current.filter((message) => message.id !== incoming.id),
+              incoming,
+            ]));
           } else if (incoming?.conversation_id && incoming.raw?.direction !== "outgoing") {
             setWechatUnread((current) => ({ ...current, [incoming.conversation_id]: (current[incoming.conversation_id] || 0) + 1 }));
           }
           void api.wechatConversations(200).then(applyWechatConversations).catch(() => undefined);
         }
-        if (item.type === "background_task.updated") {
-          void api.backgroundTasks(50).then(setBackgroundTasks).catch(() => undefined);
-        }
       } catch {
-        // Ignore malformed event frames.
+        // Ignore frame error
       }
     };
-    socket.onerror = () => {
-      setLiveEvents((current) => [
-        {
-          id: makeClientId(),
-          type: "ui.websocket_error",
-          topic: "ui",
-          data: {},
-          created_at: new Date().toISOString(),
-        },
-        ...current,
-      ]);
+    socket.onerror = () => setWebsocketState("error");
+    socket.onclose = () => {
+      if (!closedByEffect) setWebsocketState((current) => current === "error" ? "error" : "disconnected");
     };
-    return () => socket.close();
-  }, [wsRevision, selectedTaskId, selectedConversationId, view]);
+    return () => {
+      closedByEffect = true;
+      socket.close();
+    };
+  }, [wsRevision]);
 
   useEffect(() => {
-    if (view !== "wechat" || !selectedConversationId) return;
+    if (view !== "wechat" || !selectedConversationId || websocketState === "connected" || websocketState === "connecting") return;
     const timer = window.setInterval(() => {
       void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
       void api.wechatMembers(selectedConversationId).then(setWechatMembers).catch(() => undefined);
       void api.wechatConversations(200).then(applyWechatConversations).catch(() => undefined);
-    }, 1500);
+    }, 15000);
     return () => window.clearInterval(timer);
-  }, [view, selectedConversationId]);
+  }, [view, selectedConversationId, websocketState]);
 
   useEffect(() => {
     if (view !== "profiles") return;
@@ -449,105 +400,9 @@ export function App() {
 
   const requiresToken = error.toLowerCase().includes("unauthorized");
 
-  async function sendMessage() {
-    const text = input.trim();
-    if (!text || busy) return;
-    setBusy(true);
-    setInput("");
-    setError("");
-    const isDirectAgentChat = view === "agentChat";
-    const directSource = selectedAgentSessionSource || "terminal:control-ui";
-    const contextKey = isDirectAgentChat ? agentConsoleContextKey(directSource) : selectedConversationId || "control-ui";
-    const previousConsoleMessages = consoleMessagesByContext[contextKey] ?? [];
-    if (isDirectAgentChat) setSelectedAgentSessionSource(directSource);
-    const userMessage: ConsoleMessage = {
-      id: makeClientId(),
-      role: "user",
-      content: text,
-      created_at: new Date().toISOString(),
-    };
-    const pendingMessage: ConsoleMessage = {
-      id: makeClientId(),
-      role: "assistant",
-      content: "正在交给 Hermes Agent 执行...",
-      created_at: new Date().toISOString(),
-    };
-    setConsoleMessagesByContext((current) => ({
-      ...current,
-      [contextKey]: [...(current[contextKey] ?? []), userMessage, pendingMessage],
-    }));
-    const contextBlock = isDirectAgentChat
-      ? text
-      : selectedConversation
-      ? [
-          "Control UI console message.",
-          "Use the selected channel conversation only as context.",
-          "Do not send anything to the original channel unless explicitly instructed and tool policy allows it.",
-          `delivery_mode: ${deliveryMode}`,
-          `context_conversation_id: ${selectedConversation.id}`,
-          `context_platform: ${selectedConversation.platform}`,
-          `context_adapter: ${selectedConversation.adapter}`,
-          `context_scope: ${selectedConversation.scope}`,
-          "recent_messages:",
-          ...messages.slice(-20).map((message) => {
-            const content = (message.content ?? "").replace(/\s+/g, " ").slice(0, 500);
-            return `- ${message.sender_name || message.sender_id}: ${content}`;
-          }),
-          `content: ${text}`,
-        ].join("\n")
-      : text;
-    try {
-      const result = await api.sendAgentTask(contextBlock, isDirectAgentChat ? directSource : "terminal:control-ui");
-      setSelectedTaskId(result.task_id);
-      if (isDirectAgentChat) setSelectedAgentSessionSource(agentSessionSource(result.source || directSource));
-      const assistantMessage: ConsoleMessage = {
-        id: pendingMessage.id,
-        role: "assistant",
-        content: result.output || "Agent 没有返回文本结果，请查看右侧活动流。",
-        created_at: result.created_at,
-      };
-      setConsoleMessagesByContext((current) => ({
-        ...current,
-        [contextKey]: (current[contextKey] ?? []).map((message) =>
-          message.id === pendingMessage.id ? assistantMessage : message,
-        ),
-      }));
-      setEvents((current) => [
-        {
-          task_id: result.task_id,
-          type: "task.completed",
-          content: result.output,
-          created_at: result.created_at,
-        },
-        ...current,
-      ]);
-      api.agentTaskDetail(result.task_id).then(setSelectedTaskDetail).catch(() => undefined);
-      api.agentTasks(80).then(setAgentTasks).catch(() => undefined);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      setConsoleMessagesByContext((current) => ({
-        ...current,
-        [contextKey]: (current[contextKey] ?? []).map((item) =>
-          item.id === pendingMessage.id
-            ? { ...item, content: `执行失败：${message}`, created_at: new Date().toISOString() }
-            : item,
-        ),
-      }));
-    } finally {
-      setBusy(false);
-      void loadAll();
-    }
-  }
-
-  async function deleteConversation(id: string) {
-    if (!window.confirm("只删除本地会话记录，不影响原通道。继续？")) return;
-    await api.deleteConversation(id);
-    setSelectedConversationId("");
-    await loadAll();
-  }
-
   async function toggleAdapter(name: string, enabled: boolean) {
+    if (adapterToggleBusy) return;
+    setAdapterToggleBusy(name);
     setError("");
     try {
       const next = enabled ? await api.disableAdapter(name) : await api.enableAdapter(name);
@@ -555,6 +410,8 @@ export function App() {
       await refreshAdapterStatus(name);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAdapterToggleBusy("");
     }
   }
 
@@ -596,7 +453,7 @@ export function App() {
     try {
       const next = await api.wechatIlinkLoginStatus(ilinkQr?.qrcode);
       setAdapterStatuses((current) => ({ ...current, wechat_ilink: next }));
-      setChannelMessage(next.logged_in ? "iLink 已登录。" : "尚未确认登录，请扫码后再检查。");
+      setChannelMessage(next.logged_in ? "iLink 登录成功！" : "尚未确认登录，请在手机端确认后点击再次检查。");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -614,7 +471,7 @@ export function App() {
       if (next.qr_url || next.qr_image_url || next.qrcode || next.uuid) {
         setWechat869Qr(next);
       }
-      setChannelMessage(String(next.message ?? "869 登录流程待接入，当前仅显示配置与运行状态。"));
+      setChannelMessage(wechatChannelDisplayText(String(next.message ?? `${WECHAT_CLIENT_LABEL}登录已发起，请使用微信扫码。`)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -632,7 +489,7 @@ export function App() {
       if (next.logged_in) {
         setWechat869Qr(null);
       }
-      setChannelMessage(next.logged_in ? "869 已登录。" : "尚未确认登录，请扫码后再检查。");
+      setChannelMessage(next.logged_in ? `${WECHAT_CLIENT_LABEL}已登录。` : "尚未确认登录，请在手机端确认后再次检查。");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -668,117 +525,12 @@ export function App() {
     }
   }
 
-  async function cancelBackgroundTask(taskId: string) {
-    setError("");
-    try {
-      await api.cancelBackgroundTask(taskId);
-      setBackgroundTasks(await api.backgroundTasks(50));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function replayBackgroundTask(taskId: string) {
-    setError("");
-    try {
-      await api.replayBackgroundTask(taskId);
-      setBackgroundTasks(await api.backgroundTasks(50));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function updateScheduledJob(action: "pause" | "resume" | "run" | "delete", jobId: string) {
-    setError("");
-    try {
-      if (action === "pause") await api.pauseScheduledJob(jobId);
-      if (action === "resume") await api.resumeScheduledJob(jobId);
-      if (action === "run") await api.runScheduledJob(jobId);
-      if (action === "delete") {
-        if (!window.confirm("删除该定时任务？")) return;
-        await api.deleteScheduledJob(jobId);
-      }
-      setScheduledJobs(await api.scheduledJobs(100));
-      setBackgroundTasks(await api.backgroundTasks(50));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function createScheduledJob() {
-    const inputText = scheduleInput.trim();
-    const schedule = scheduleExpr.trim();
-    if (!inputText || !schedule) return;
-    setError("");
-    try {
-      await api.createScheduledJob({
-        input: inputText,
-        schedule,
-        name: scheduleName.trim() || undefined,
-        timezone: scheduleTimezone.trim() || "Asia/Shanghai",
-        source: "control-ui:schedule",
-        reply_policy: "none",
-        max_runs: scheduleMaxRuns.trim() ? Number(scheduleMaxRuns) : null,
-      });
-      setScheduleName("");
-      setScheduleExpr("");
-      setScheduleInput("");
-      setScheduleMaxRuns("");
-      setScheduledJobs(await api.scheduledJobs(100));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function reloadMcp() {
-    setError("");
-    try {
-      setMcpStatus(await api.reloadMcp());
-      setTools(await api.tools());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function createMemory() {
-    const summary = memorySummary.trim();
-    if (!summary) return;
-    setError("");
-    try {
-      await api.createMemory(memoryKind, summary);
-      setMemorySummary("");
-      setMemories(await api.memories(50));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function deleteMemory(memoryId: string) {
-    if (!window.confirm("删除这条记忆？")) return;
-    setError("");
-    try {
-      await api.deleteMemory(memoryId);
-      setMemories(await api.memories(50));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function compactMemories() {
-    setError("");
-    try {
-      await api.compactMemories();
-      setMemories(await api.memories(50));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
   async function saveWechatProfile(userId: string, conversationId: string | null, summary: string, tags: string[]) {
     const updated = await api.updateWechatProfile(userId, { conversation_id: conversationId, summary, tags });
     setWechatUserDetail((current) => current?.contact.user_id === userId ? updated : current);
     setProfileDetails((current) => ({ ...current, [userId]: updated }));
     setGroupOpsDetails((current) => ({ ...current, [userId]: updated }));
+    setEditingProfileUser(null);
     return updated;
   }
 
@@ -820,48 +572,75 @@ export function App() {
 
   return (
     <div className={`shell shell--${view}`}>
+      <a className="skip-link" href="#main-stage">跳到主内容</a>
+      {/* Sidebar Navigation */}
       <aside className="sidebar">
-        <div className="brand">
-          <div className="brand__mark">x</div>
-          <div>
-            <div className="brand__name">xbot</div>
-            <div className="brand__sub">Control UI</div>
+        <div>
+          <div className="sidebar__brand-card">
+            <div className="sidebar__brand-mascot-wrap">
+              <img
+                src="/assets/illustrations/mascot.png"
+                alt="xbot Mascot"
+                className="sidebar__brand-mascot"
+              />
+            </div>
+            <div className="sidebar__brand-info">
+              <div className="sidebar__brand-name">
+                <span>xbot</span>
+                <span className="sidebar__brand-tag">v2.5</span>
+              </div>
+              <div className="sidebar__brand-sub">有温度的智能体工作台</div>
+            </div>
+          </div>
+
+          <nav className="sidebar__nav" aria-label="主要导航">
+            {navItems.map((item, index) => {
+              const Icon = item.icon;
+              const isActive = view === item.id;
+              const unread = item.id === "wechat" ? totalUnreadCount : 0;
+              return (
+                <Fragment key={item.id}>
+                  {(index === 0 || navItems[index - 1].section !== item.section) && <div className="nav__section">{item.section}</div>}
+                  <button
+                    type="button"
+                    className={`nav__item ${isActive ? "nav__item--active" : ""}`}
+                    onClick={() => {
+                      if (item.id === "settings") setSettingsSection("");
+                      setView(item.id);
+                    }}
+                  >
+                    <div className="nav__item-icon-wrap"><Icon size={16} /></div>
+                    <span className="nav__item-label">{item.label}</span>
+                    {unread > 0 && <span className="nav__item-badge">{unread}</span>}
+                  </button>
+                </Fragment>
+              );
+            })}
+          </nav>
+        </div>
+
+        <div className="sidebar__footer">
+          <div className="sidebar__status-pill">
+            <span className={`status-dot ${status?.engine?.state === "running" ? "status-dot--ok" : "status-dot--warn"}`} />
+            <span>{status?.engine?.state === "running" ? "运行正常" : "等待服务"}</span>
+          </div>
+          <div className="sidebar__footer-actions">
+            <ThemeToggle value={themeMode} onChange={setThemeMode} />
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void loadAll()}
+              title="刷新全部数据"
+            >
+              <RefreshCw size={14} />
+            </button>
           </div>
         </div>
-        <nav className="nav">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                className={`nav__item ${view === item.id ? "nav__item--active" : ""}`}
-                onClick={() => setView(item.id)}
-              >
-                <Icon size={18} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
       </aside>
 
-      <header className="topbar">
-        <div className="topbar__title">
-          <span>{navItems.find((item) => item.id === view)?.label}</span>
-          <small>{selectedConversation ? selectedConversation.id : "xbot backend"}</small>
-        </div>
-        <div className="topbar__actions">
-          <StatusPill label={status?.engine?.state ?? "unknown"} tone={status?.engine?.state === "running" ? "ok" : "warn"} />
-          <StatusPill label={`${adapters.length} adapters`} tone="neutral" />
-          <ThemeToggle value={themeMode} onChange={setThemeMode} />
-          <button className="icon-button" onClick={() => void loadAll()} title="刷新">
-            <RefreshCw size={16} />
-          </button>
-        </div>
-      </header>
-
-      <main className="content">
-        {error ? <div className="error-banner">{error}</div> : null}
+      {/* Main Stage */}
+      <main className="stage" id="main-stage" tabIndex={-1} ref={stageRef}>
+        {error ? <div className="error-banner" style={{ margin: "16px 28px 0 28px" }}>{wechatChannelDisplayText(error)}</div> : null}
         {requiresToken ? (
           <AuthGate
             token={apiToken}
@@ -877,215 +656,286 @@ export function App() {
             }}
           />
         ) : null}
+
         <PageErrorBoundary resetKey={view}>
-        {view === "agentChat" && (
-          <AgentConsoleView
-            consoleMessages={directConsoleMessages}
-            input={input}
-            setInput={setInput}
-            sendMessage={sendMessage}
-            busy={busy}
-            selectedConversation={undefined}
-            clearConversationContext={() => undefined}
-            detail={selectedTaskDetail}
-            tasks={agentTasks}
-            selectedTaskId={selectedTaskId}
-            selectedAgentSessionSource={selectedAgentSessionSource}
-            setSelectedAgentSessionSource={setSelectedAgentSessionSource}
-            setSelectedTaskId={setSelectedTaskId}
-            events={events}
-            liveEvents={liveEvents}
-            refreshTasks={async () => {
-              const next = await api.agentTasks(80);
-              setAgentTasks(next);
-              if (selectedTaskId) setSelectedTaskDetail(await api.agentTaskDetail(selectedTaskId));
-            }}
-          />
-        )}
-        {view === "chat" && (
-          <ChatView
-            conversations={filteredConversations}
-            query={query}
-            setQuery={setQuery}
-            selectedConversationId={selectedConversationId}
-            setSelectedConversationId={setSelectedConversationId}
-            deleteConversation={deleteConversation}
-            messages={messages}
-            consoleMessages={channelConsoleMessages}
-            input={input}
-            setInput={setInput}
-            sendMessage={sendMessage}
-            busy={busy}
-            deliveryMode={deliveryMode}
-            setDeliveryMode={setDeliveryMode}
-            events={events}
-            liveEvents={liveEvents}
-          />
-        )}
-        {view === "wechat" && (
-          <WechatWorkbench
-            conversations={wechatConversations.filter((item) => {
-              const text = query.trim().toLowerCase();
-              return !text || [item.id, item.title, item.raw_id, item.last_message?.content].filter(Boolean).some((value) => String(value).toLowerCase().includes(text));
-            })}
-            query={query}
-            setQuery={setQuery}
-            selectedConversationId={selectedConversationId}
-            setSelectedConversationId={openWechatConversation}
-            unread={wechatUnread}
-            messages={wechatMessages}
-            members={wechatMembers}
-            userDetail={wechatUserDetail}
-            loadUser={async (userId) => setWechatUserDetail(await api.wechatUser(userId, selectedConversationId))}
-            clearUser={() => setWechatUserDetail(null)}
-            onSend={async (text, file) => {
-              const sent = await api.sendWechatMessage(selectedConversationId, { text, file });
-              setWechatMessages((current) => sortWechatMessages(current.some((m) => m.id === sent.id) ? current : [...current, sent]));
-              void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
-              applyWechatConversations(await api.wechatConversations(200));
-            }}
-            onSync={async () => {
-              await api.syncWechatMetadata();
-              applyWechatConversations(await api.wechatConversations(200));
-              if (selectedConversationId) {
-                setWechatMessages(sortWechatMessages(await api.wechatMessages(selectedConversationId, 300)));
-                setWechatMembers(await api.wechatMembers(selectedConversationId));
-              }
-            }}
-          />
-        )}
-        {view === "profiles" && (
-          <WechatProfilesView
-            conversations={wechatConversations.filter((item) => item.scope === "group")}
-            selectedConversationId={profileConversationId}
-            setSelectedConversationId={setProfileConversationId}
-            members={profileMembers}
-            details={profileDetails}
-            page={profilePage}
-            setPage={setProfilePage}
-            total={profileTotal}
-            serverPaged={profileConversationId !== "__all"}
-            search={profileSearch}
-            setSearch={setProfileSearch}
-            onSaveProfile={saveWechatProfile}
-          />
-        )}
-        {view === "groupOps" && (
-          <GroupOpsView
-            conversations={wechatConversations.filter((item) => item.scope === "group")}
-            selectedConversationId={groupOpsConversationId}
-            setSelectedConversationId={setGroupOpsConversationId}
-            members={groupOpsMembers}
-            details={groupOpsDetails}
-            messages={groupOpsMessages}
-            filter={groupOpsFilter}
-            setFilter={setGroupOpsFilter}
-            onSaveProfile={saveWechatProfile}
-          />
-        )}
-        {view === "overview" && <Overview status={status} adapters={adapters} jobs={scheduledJobs} tasks={backgroundTasks} />}
-        {view === "agent" && (
-          <AgentView
-            tools={tools}
-            llmStatus={llmStatus}
-            mcpStatus={mcpStatus}
-            memories={memories}
-            toolQuery={toolQuery}
-            setToolQuery={setToolQuery}
-            memoryKind={memoryKind}
-            setMemoryKind={setMemoryKind}
-            memorySummary={memorySummary}
-            setMemorySummary={setMemorySummary}
-            reloadMcp={reloadMcp}
-            createMemory={createMemory}
-            deleteMemory={deleteMemory}
-            compactMemories={compactMemories}
-            refresh={loadAll}
-          />
-        )}
-        {view === "tasks" && (
-          <TaskMonitor
-            tasks={agentTasks}
-            selectedTaskId={selectedTaskId}
-            setSelectedTaskId={setSelectedTaskId}
-            detail={selectedTaskDetail}
-            refresh={async () => {
-              const next = await api.agentTasks(80);
-              setAgentTasks(next);
-              if (selectedTaskId) setSelectedTaskDetail(await api.agentTaskDetail(selectedTaskId));
-            }}
-          />
-        )}
-        {view === "channels" && (
-          <Channels
-            adapters={adapters}
-            adapterStatuses={adapterStatuses}
-            ilinkQr={ilinkQr}
-            wechat869Qr={wechat869Qr}
-            channelBusy={channelBusy}
-            channelMessage={channelMessage}
-            toggleAdapter={toggleAdapter}
-            refreshAdapterStatus={refreshAdapterStatus}
-            startIlinkLogin={startIlinkLogin}
-            pollIlinkLogin={pollIlinkLogin}
-            startWechat869Login={startWechat869Login}
-            pollWechat869Login={pollWechat869Login}
-            onConfigApplied={handleConfigApplied}
-          />
-        )}
-        {view === "extensions" && (
-          <Extensions
-            plugins={plugins}
-            skills={skills}
-            togglePlugin={togglePlugin}
-            toggleSkill={toggleSkill}
-            reloadPlugins={async () => setPlugins(await api.reloadPlugins())}
-            reloadSkills={async () => setSkills(await api.reloadSkills())}
-          />
-        )}
-        {view === "background" && (
-          <BackgroundTasks
-            tasks={backgroundTasks}
-            replayTask={replayBackgroundTask}
-            cancelTask={cancelBackgroundTask}
-            refresh={async () => setBackgroundTasks(await api.backgroundTasks(50))}
-          />
-        )}
-        {view === "schedules" && (
-          <Schedules
-            jobs={scheduledJobs}
-            name={scheduleName}
-            setName={setScheduleName}
-            schedule={scheduleExpr}
-            setSchedule={setScheduleExpr}
-            input={scheduleInput}
-            setInput={setScheduleInput}
-            timezone={scheduleTimezone}
-            setTimezone={setScheduleTimezone}
-            maxRuns={scheduleMaxRuns}
-            setMaxRuns={setScheduleMaxRuns}
-            createJob={createScheduledJob}
-            updateJob={updateScheduledJob}
-            refresh={async () => setScheduledJobs(await api.scheduledJobs(100))}
-          />
-        )}
-        {view === "logs" && <ActivityPanel events={events} liveEvents={liveEvents} />}
-        {view === "settings" && (
-          <SettingsView onConfigApplied={handleConfigApplied} />
-        )}
+          {view === "home" && (
+            <HomeDashboard
+              adapters={adapters}
+              adapterStatuses={adapterStatuses}
+              plugins={plugins}
+              skills={skills}
+              tools={tools}
+              wechatConversationCount={wechatConversations.length}
+              unreadCount={totalUnreadCount}
+              profileCount={profileTotal || profileMembers.length}
+              liveEvents={liveEvents}
+              websocketState={websocketState}
+              loading={loadingAll}
+              loadErrors={loadErrors}
+              adapterToggleBusy={adapterToggleBusy}
+              onNavigate={setView}
+              onRefresh={() => void loadAll()}
+              onToggleAdapter={toggleAdapter}
+            />
+          )}
+
+          {view === "agentChat" && (
+            <div className="content-scroll agent-stage">
+              <AgentWorkspace
+                renderText={(text) => <MarkdownContent text={text} />}
+                onSettings={() => {
+                  setSettingsSection("agent");
+                  setView("settings");
+                }}
+              />
+            </div>
+          )}
+
+          {view === "wechat" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="微信连接工作台"
+                badge="微信消息矩阵"
+                tagline="沉浸式管理多群聊与私信往来，支持富媒体表情渲染、用户画像穿透与会话上下文提炼。"
+                illustrationSrc="/assets/illustrations/hero-wechat.png"
+                illustrationAlt="微信工作台插画"
+                themeTone="sage"
+                stats={[
+                  { label: "活跃会话", value: wechatConversations.length, tone: "secondary" },
+                  { label: "未读消息", value: totalUnreadCount, tone: totalUnreadCount > 0 ? "primary" : "neutral" },
+                  { label: "群聊覆盖", value: wechatConversations.filter(c => c.scope === "group").length, tone: "amber" },
+                ]}
+              />
+              <WechatWorkbench
+                conversations={wechatConversations}
+                selectedConversationId={selectedConversationId}
+                setSelectedConversationId={openWechatConversation}
+                unread={wechatUnread}
+                messages={wechatMessages}
+                members={wechatMembers}
+                userDetail={wechatUserDetail}
+                loadUser={async (userId) => setWechatUserDetail(await api.wechatUser(userId, selectedConversationId))}
+                clearUser={() => setWechatUserDetail(null)}
+                onEditProfile={(user) => setEditingProfileUser(user)}
+                onSend={async (text, file) => {
+                  const sent = await api.sendWechatMessage(selectedConversationId, { text, file });
+                  setWechatMessages((current) => sortWechatMessages(current.some((m) => m.id === sent.id) ? current : [...current, sent]));
+                  void api.wechatMessages(selectedConversationId, 300).then((items) => setWechatMessages(sortWechatMessages(items))).catch(() => undefined);
+                  applyWechatConversations(await api.wechatConversations(200));
+                }}
+                onSync={async () => {
+                  const result = await api.syncWechatMetadata();
+                  applyWechatConversations(await api.wechatConversations(200));
+                  if (selectedConversationId) {
+                    const [messages, members] = await Promise.all([
+                      api.wechatMessages(selectedConversationId, 300), api.wechatMembers(selectedConversationId),
+                    ]);
+                    if (selectedConversationIdRef.current === selectedConversationId) {
+                      setWechatMessages(sortWechatMessages(messages));
+                      setWechatMembers(members);
+                    }
+                  }
+                  return result.private_avatars_received ?? 0;
+                }}
+              />
+            </div>
+          )}
+
+          {view === "profiles" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="社群用户画像与洞察"
+                badge="用户画像"
+                tagline="基于历史交互自动提取的成员特质、活跃度分析与个性化标签，打造有温度、有记忆的人格化互动。"
+                illustrationSrc="/assets/illustrations/hero-profiles.png"
+                illustrationAlt="用户画像中心插画"
+                themeTone="amber"
+                stats={[
+                  { label: "已画像用户", value: profileTotal || profileMembers.length, tone: "amber" },
+                  { label: "覆盖群组", value: wechatConversations.filter(c => c.scope === "group").length, tone: "primary" },
+                ]}
+              />
+              <WechatProfilesView
+                conversations={wechatConversations.filter((item) => item.scope === "group")}
+                selectedConversationId={profileConversationId}
+                setSelectedConversationId={setProfileConversationId}
+                members={profileMembers}
+                details={profileDetails}
+                page={profilePage}
+                setPage={setProfilePage}
+                total={profileTotal}
+                serverPaged={profileConversationId !== "__all"}
+                search={profileSearch}
+                setSearch={setProfileSearch}
+                onEditProfile={(user) => setEditingProfileUser(user)}
+              />
+            </div>
+          )}
+
+          {view === "groupOps" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="社群守护与风控运营"
+                badge="社群运营"
+                tagline="群聊活跃度热力分布、违规发言风控与群成员健康度管理，让每一个社群充满秩序与活力。"
+                illustrationSrc="/assets/illustrations/hero-group.png"
+                illustrationAlt="社群管理中心插画"
+                themeTone="sage"
+                stats={[
+                  { label: "当前群成员", value: groupOpsMembers.length, tone: "secondary" },
+                  { label: "监控群消息", value: groupOpsMessages.length, tone: "primary" },
+                ]}
+              />
+              <GroupOpsView
+                conversations={wechatConversations.filter((item) => item.scope === "group")}
+                selectedConversationId={groupOpsConversationId}
+                setSelectedConversationId={setGroupOpsConversationId}
+                members={groupOpsMembers}
+                details={groupOpsDetails}
+                messages={groupOpsMessages}
+                filter={groupOpsFilter}
+                setFilter={setGroupOpsFilter}
+                onEditProfile={(user) => setEditingProfileUser(user)}
+              />
+            </div>
+          )}
+
+          {view === "knowledge" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="智慧知识库与记忆晶体"
+                badge="知识核心"
+                tagline="多群聊独立沉淀与自动萃取，构建包含双向链接、实体关联与长期问答的专属知识图谱。"
+                illustrationSrc="/assets/illustrations/hero-knowledge.png"
+                illustrationAlt="群知识库插画"
+                themeTone="lavender"
+              />
+              <KnowledgeCenter />
+            </div>
+          )}
+
+          {view === "operations" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="任务与自动化中心"
+                badge="运行编排"
+                tagline="统一查看后台任务、定时计划和实时活动，失败状态与重试入口清晰可见。"
+                illustrationSrc="/assets/illustrations/hero-agent.png"
+                illustrationAlt="任务与自动化中心插画"
+                themeTone="sage"
+              />
+              <OperationsCenter events={events} liveEvents={liveEvents} />
+            </div>
+          )}
+
+          {view === "channels" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="接入通道与网关协议"
+                badge="多通道网关"
+                tagline={`微信 iLink、${WECHAT_CLIENT_LABEL}、QQ 等全平台通道统一管理，提供扫码鉴权与状态监控。`}
+                illustrationSrc="/assets/illustrations/hero-channels.png"
+                illustrationAlt="接入通道中心插画"
+                themeTone="terracotta"
+                stats={[
+                  { label: "已配置通道", value: adapters.length, tone: "primary" },
+                  { label: "运行中通道", value: adapters.filter(a => a.started).length, tone: "secondary" },
+                ]}
+              />
+              <Channels
+                adapters={adapters}
+                adapterStatuses={adapterStatuses}
+                ilinkQr={ilinkQr}
+                wechat869Qr={wechat869Qr}
+                channelBusy={channelBusy}
+                channelMessage={channelMessage}
+                toggleAdapter={toggleAdapter}
+                refreshAdapterStatus={refreshAdapterStatus}
+                startIlinkLogin={startIlinkLogin}
+                pollIlinkLogin={pollIlinkLogin}
+                startWechat869Login={startWechat869Login}
+                pollWechat869Login={pollWechat869Login}
+                onConfigApplied={handleConfigApplied}
+              />
+            </div>
+          )}
+
+          {view === "extensions" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="扩展生态与技能工坊"
+                badge="能力扩展"
+                tagline="模块化插件与丰富 Skill 库无缝集成，自由装配定制能力，让智能体无所不能。"
+                illustrationSrc="/assets/illustrations/hero-extensions.png"
+                illustrationAlt="扩展与技能中心插画"
+                themeTone="lavender"
+                stats={[
+                  { label: "已安装插件", value: plugins.length, tone: "purple" },
+                  { label: "技能包数量", value: skills.length, tone: "primary" },
+                  { label: "可用工具", value: tools.length, tone: "secondary" },
+                ]}
+              />
+              <Extensions
+                plugins={plugins}
+                skills={skills}
+                togglePlugin={togglePlugin}
+                toggleSkill={toggleSkill}
+                reloadPlugins={async () => setPlugins(await api.reloadPlugins())}
+                reloadSkills={async () => setSkills(await api.reloadSkills())}
+              />
+            </div>
+          )}
+
+          {view === "settings" && (
+            <div className="content-scroll">
+              <IllustrationHero
+                title="控制台设置与运行配置"
+                badge="控制台设置"
+                tagline="全局参数微调、模型密钥管理与通道热重载，安全可控，随心所欲。"
+                illustrationSrc="/assets/illustrations/hero-settings.png"
+                illustrationAlt="控制台设置插画"
+                themeTone="terracotta"
+              />
+              <SettingsView
+                key={settingsSection}
+                initialSection={settingsSection}
+                status={status}
+                themeMode={themeMode}
+                setThemeMode={setThemeMode}
+                onConfigApplied={handleConfigApplied}
+              />
+            </div>
+          )}
         </PageErrorBoundary>
+
+        {editingProfileUser && (
+          <ProfileEditModal
+            user={editingProfileUser}
+            onClose={() => setEditingProfileUser(null)}
+            onSave={saveWechatProfile}
+          />
+        )}
       </main>
     </div>
   );
 }
 
+/* ==========================================================================
+   Theme & Auth Components
+   ========================================================================== */
+
 function ThemeToggle({ value, onChange }: { value: ThemeMode; onChange: (value: ThemeMode) => void }) {
   const next = value === "system" ? "light" : value === "light" ? "dark" : "system";
   const Icon = value === "system" ? Monitor : value === "light" ? Sun : Moon;
-  const label = value === "system" ? "跟随系统" : value === "light" ? "日间模式" : "夜间模式";
+  const label = value === "system" ? "跟随系统" : value === "light" ? "亮色模式" : "暗色模式";
   return (
-    <button className="icon-button" onClick={() => onChange(next)} title={`主题：${label}`}>
-      <Icon size={16} />
+    <button
+      type="button"
+      className="icon-button"
+      onClick={() => onChange(next)}
+      title={`当前主题：${label} (点击切换)`}
+    >
+      <Icon size={15} />
     </button>
   );
 }
@@ -1102,194 +952,439 @@ function AuthGate({
   onClear: () => void;
 }) {
   return (
-    <section className="auth-gate panel">
-      <div>
-        <div className="auth-gate__title">需要 API Token</div>
-        <p>当前后端已开启控制台认证。Token 只保存在本浏览器 localStorage，用于访问 REST API 和 WebSocket 事件流。</p>
+    <div className="modal-backdrop">
+      <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-dialog-title" tabIndex={-1} onKeyDown={(event) => trapDialogFocus(event)}>
+        <div className="modal-header">
+          <h2 className="modal-title" id="auth-dialog-title">需要 API 访问鉴权</h2>
+        </div>
+        <div className="modal-body">
+          <p style={{ color: "var(--text-muted)", marginBottom: 14 }}>
+            当前服务端开启了控制台访问令牌校验，请输入管理 Token 以建立连接：
+          </p>
+          <input
+            type="password"
+            className="input-text"
+            autoFocus
+            value={token}
+            placeholder="输入管理 Token..."
+            onChange={(e) => setToken(e.target.value)}
+          />
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="ghost-button" onClick={onClear}>
+            清除
+          </button>
+          <button type="button" className="primary-button" onClick={onSave}>
+            保存并连接
+          </button>
+        </div>
       </div>
-      <div className="auth-gate__form">
-        <input
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-          placeholder="粘贴 XBOT_API_TOKEN"
-          type="password"
-          autoComplete="current-password"
-        />
-        <button className="primary-button" disabled={!token.trim()} onClick={onSave}>
-          保存并重试
-        </button>
-        <button className="ghost-button" onClick={onClear}>
-          清除
-        </button>
-      </div>
-    </section>
+    </div>
   );
 }
 
+/* ==========================================================================
+   View: 微信工作台 (WechatWorkbench)
+   ========================================================================== */
 
-function AgentConsoleView({
-  consoleMessages,
-  input,
-  setInput,
-  sendMessage,
-  busy,
-  selectedConversation,
-  clearConversationContext,
-  detail,
-  tasks,
-  selectedTaskId,
-  selectedAgentSessionSource,
-  setSelectedAgentSessionSource,
-  setSelectedTaskId,
-  events,
-  liveEvents,
-  refreshTasks,
+function WechatAvatar({ src, fallback }: { src?: string | null; fallback: ReactNode }) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  return src && src !== failedSrc
+    ? <img src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailedSrc(src)} />
+    : <>{fallback}</>;
+}
+
+function WechatWorkbench({
+  conversations,
+  selectedConversationId,
+  setSelectedConversationId,
+  unread,
+  messages,
+  members,
+  userDetail,
+  loadUser,
+  clearUser,
+  onEditProfile,
+  onSend,
+  onSync,
 }: {
-  consoleMessages: ConsoleMessage[];
-  input: string;
-  setInput: (value: string) => void;
-  sendMessage: () => void;
-  busy: boolean;
-  selectedConversation?: Conversation;
-  clearConversationContext: () => void;
-  detail: AgentTaskDetail | null;
-  tasks: AgentTask[];
-  selectedTaskId: string;
-  selectedAgentSessionSource: string;
-  setSelectedAgentSessionSource: (value: string) => void;
-  setSelectedTaskId: (value: string) => void;
-  events: AgentEvent[];
-  liveEvents: UiEvent[];
-  refreshTasks: () => Promise<void>;
+  conversations: WechatConversation[];
+  selectedConversationId: string;
+  setSelectedConversationId: (id: string) => void;
+  unread: Record<string, number>;
+  messages: WechatMessage[];
+  members: WechatMember[];
+  userDetail: WechatUserDetail | null;
+  loadUser: (userId: string) => Promise<void>;
+  clearUser: () => void;
+  onEditProfile: (user: WechatUserDetail) => void;
+  onSend: (text: string, file?: File) => Promise<void>;
+  onSync: () => Promise<number>;
 }) {
-  const currentTask = detail?.task;
-  const sessionSources = agentSessionSources(tasks);
-  const activeSessionSource = agentSessionSource(selectedAgentSessionSource || "terminal:control-ui");
-  const sessionTasks = tasks
-    .filter((task) => agentSessionSource(task.source) === activeSessionSource)
-    .slice()
-    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
-  const latestSessionTask = sessionTasks[sessionTasks.length - 1];
-  const taskStatus = latestSessionTask?.status ?? currentTask?.status ?? (busy ? "running" : "idle");
-  const toolCount = detail?.tool_calls?.length ?? 0;
-  const timelineCount = detail?.timeline?.length ?? 0;
-  const recentEvents = events.filter((event) => !currentTask || event.task_id === taskIdOf(currentTask)).slice(0, 8);
-  const transcriptTurns = buildSessionTranscriptTurns(sessionTasks, detail, consoleMessages);
+  const [search, setSearch] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const timelineEndRef = useRef<HTMLDivElement>(null);
+
+  const filteredConversations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return conversations;
+    return conversations.filter((c) =>
+      [c.id, c.title, c.raw_id, c.last_message?.content].filter(Boolean).some((val) =>
+        String(val).toLowerCase().includes(q),
+      ),
+    );
+  }, [conversations, search]);
+
+  const activeConversation = conversations.find((c) => c.id === selectedConversationId);
+
+  useEffect(() => {
+    const timeline = timelineEndRef.current?.parentElement;
+    timeline?.scrollTo({ top: timeline.scrollHeight, behavior: "smooth" });
+  }, [messages]);
+
+  async function handleSend() {
+    const text = chatInput.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setChatInput("");
+    try {
+      await onSend(text);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSending(true);
+    try {
+      await onSend("", file);
+    } finally {
+      setSending(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleSync() {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncFeedback("");
+    try {
+      const received = await onSync();
+      setSyncFeedback(received > 0 ? `已获取 ${received} 个私聊头像` : "同步完成，未获取到私聊头像");
+    } catch (reason) {
+      setSyncFeedback(reason instanceof Error ? `同步失败：${wechatChannelDisplayText(reason.message)}` : "同步失败，请稍后重试");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   return (
-    <section className="hermes-workspace">
-      <aside className="panel hermes-session-pane">
-        <div className="hermes-pane-head">
-          <div>
-            <span>会话</span>
-            <small>{sessionSources.length} 个 Agent 会话</small>
+    <div className="wechat-shell">
+      {/* Col 1: Conversations list */}
+      <div className="wechat-pane">
+        <div className="wechat-pane__head">
+          <div className="search-field" style={{ flex: 1 }}>
+            <Search size={14} />
+            <input
+              type="text"
+              className="search-box"
+              placeholder="搜索会话或消息..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
-          <button className="icon-button" onClick={() => void refreshTasks()} title="刷新任务">
-            <RefreshCw size={15} />
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => void handleSync()}
+            title={syncFeedback || "同步微信头像、元数据与联系人"}
+            aria-label={syncing ? "正在同步微信头像与联系人" : "同步微信头像、元数据与联系人"}
+            disabled={syncing}
+          >
+            <RefreshCw size={14} className={syncing ? "spin" : ""} />
           </button>
         </div>
-        <div className="hermes-session-scroll">
-          {sessionSources.map((source) => {
-            const sourceTasks = tasks.filter((task) => agentSessionSource(task.source) === source);
-            const latest = sourceTasks[0];
-            return (
-              <button
-                key={source}
-                className={`hermes-session-card ${activeSessionSource === source ? "hermes-session-card--active" : ""}`}
-                onClick={() => {
-                  setSelectedAgentSessionSource(source);
-                  setSelectedTaskId(latest ? taskIdOf(latest) : "");
-                }}
-              >
-                <div className="hermes-session-card__head">
-                  <span>{sessionLabel(source)}</span>
-                  <StatusPill label={`${sourceTasks.length} 轮`} tone="neutral" />
-                </div>
-                <p>{latest?.input || latest?.output || latest?.result || "独立 Agent 对话"}</p>
-                <small>{source}</small>
-              </button>
-            );
-          })}
+        <div role="status">
+          {syncFeedback && <div className={`wechat-sync-feedback ${syncFeedback.startsWith("同步失败") ? "is-error" : ""}`}>{syncFeedback}</div>}
         </div>
-      </aside>
 
-      <main className="panel hermes-chat-pane">
-        <header className="hermes-chat-header">
-          <div className="hermes-avatar">
-            <Bot size={19} />
-          </div>
-          <div className="hermes-chat-title">
-            <strong>Hermes Agent</strong>
-            <span>
-              {selectedConversation
-                ? `${selectedConversation.platform}/${selectedConversation.adapter}/${selectedConversation.scope}`
-                : `${sessionLabel(activeSessionSource)} · 直接对话`}
-            </span>
-          </div>
-          <div className="hermes-chat-header__meta">
-            <StatusPill label={taskStatus} tone={taskTone(taskStatus)} />
-            <span>{toolCount} 工具</span>
-            <span>{timelineCount} 轨迹</span>
-          </div>
-        </header>
-
-        {selectedConversation ? (
-          <div className="hermes-context-bar">
-            <div>
-              已带入通道上下文：{selectedConversation.raw_id}
-            </div>
-            <button className="ghost-button" onClick={clearConversationContext}>
-              取消上下文
-            </button>
-          </div>
-        ) : null}
-
-        <div className="hermes-message-scroll">
-          {transcriptTurns.length === 0 ? (
-            <div className="hermes-welcome">
-              <div className="hermes-welcome__mark">
-                <Sparkles size={26} />
-              </div>
-              <h2>和 Agent 直接对话</h2>
-              <p>像终端一样直接发给 Agent；工具调用、产物和轨迹会嵌在对话流里。</p>
+        <div className="wechat-conv-list">
+          {filteredConversations.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state__title">无匹配微信会话</div>
             </div>
           ) : (
-            <>
-              {transcriptTurns.map((turn) => (
-                <section key={turn.id} className="hermes-turn">
-                  <HermesMessageBubble message={turn.user} />
-                  <HermesInlineTrace detail={turn.detail} recentEvents={turn.recentEvents ?? []} liveEvents={turn.liveEvents ?? []} />
-                  {turn.assistant ? <HermesMessageBubble message={turn.assistant} /> : null}
-                </section>
-              ))}
-            </>
+            filteredConversations.map((conv) => {
+              const count = unread[conv.id] || 0;
+              const isSelected = conv.id === selectedConversationId;
+              return (
+                <div
+                  key={conv.id}
+                  className={`wechat-conv-item ${isSelected ? "wechat-conv-item--active" : ""}`}
+                  onClick={() => setSelectedConversationId(conv.id)}
+                >
+                  <div className="wechat-conv-avatar">
+                    <WechatAvatar src={conv.avatar_url} fallback={conv.avatar_members?.length ? (
+                      <span className="wechat-conv-avatar-grid">
+                        {conv.avatar_members.slice(0, 4).map((src) => <img key={src} src={src} alt="" />)}
+                      </span>
+                    ) : (
+                      <span>{(conv.title || conv.raw_id || "群").slice(0, 1)}</span>
+                    )} />
+                    {count > 0 && <span className="wechat-conv-unread">{count}</span>}
+                  </div>
+
+                  <div className="wechat-conv-info">
+                    <div className="wechat-conv-name">
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {conv.title || conv.raw_id || "未命名会话"}
+                      </span>
+                      {conv.last_message?.timestamp && (
+                        <span className="wechat-conv-time">
+                          {formatTimeShort(conv.last_message.timestamp)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="wechat-conv-snippet">
+                      {conv.last_message?.content || "暂无最新消息"}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Col 2: Chat message stream */}
+      <div className="wechat-pane">
+        <div className="wechat-pane__head">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>
+              {activeConversation?.title || activeConversation?.raw_id || "微信会话"}
+            </span>
+            {activeConversation?.scope === "group" && (
+              <span className="status-pill status-pill--neutral">{members.length} 位群成员</span>
+            )}
+          </div>
+        </div>
+
+        <div className="wechat-chat-timeline">
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <img src="/assets/illustrations/empty-state.png" alt="" className="empty-state__art" />
+              <div className="empty-state__title">暂无消息记录</div>
+              <div className="empty-state__text">选择会话或发送新消息开始互动。</div>
+            </div>
+          ) : (
+            messages.map((m) => {
+              const isOutgoing = m.raw?.direction === "outgoing";
+              return (
+                <div
+                  key={m.id}
+                  className={`wechat-bubble-row ${isOutgoing ? "wechat-bubble-row--outgoing" : ""}`}
+                >
+                  <div
+                    className="wechat-conv-avatar"
+                    style={{ width: 34, height: 34, cursor: "pointer" }}
+                    onClick={() => void loadUser(m.sender_id)}
+                    title="查看用户画像"
+                  >
+                    <WechatAvatar src={m.sender_avatar_url} fallback={<span>{(m.sender_name || m.sender_id || "?").slice(0, 1)}</span>} />
+                  </div>
+
+                  <div>
+                    {!isOutgoing && (
+                      <span className="wechat-sender-tag">{m.sender_name || m.sender_id}</span>
+                    )}
+                    <div className="wechat-bubble-box">
+                      {m.content}
+                    </div>
+                    <span className="agent-msg-time" style={{ textAlign: isOutgoing ? "right" : "left" }}>
+                      {formatTimeShort(m.timestamp)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })
+          )}
+          <div ref={timelineEndRef} />
+        </div>
+
+        <div className="agent-composer-dock">
+          <div className="agent-input-row">
+            <textarea
+              className="agent-textarea"
+              placeholder="输入微信回复消息 (Enter 发送)..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
+              }}
+              rows={1}
+            />
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              style={{ display: "none" }}
+              onChange={handleFileUpload}
+            />
+
+            <button
+              type="button"
+              className="icon-button"
+              title="发送图片/文件"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip size={15} />
+            </button>
+
+            <button
+              type="button"
+              className="primary-button"
+              style={{ padding: "8px 16px" }}
+              onClick={handleSend}
+              disabled={sending || !chatInput.trim()}
+            >
+              {sending ? <RefreshCw size={14} className="spin" /> : <Send size={14} />}
+              <span>发送</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Col 3: Contact & Persona Details */}
+      <aside className="wechat-pane">
+        <div className="wechat-pane__head">
+          <span style={{ fontWeight: 700, fontSize: 13.5 }}>联系人 / 成员画像</span>
+          {userDetail && (
+            <button
+              type="button"
+              className="ghost-button"
+              style={{ padding: "2px 8px", fontSize: 11 }}
+              onClick={clearUser}
+            >
+              关闭
+            </button>
           )}
         </div>
 
-        <footer className="hermes-composer">
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="输入任务或问题，Ctrl/Cmd + Enter 发送"
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                void sendMessage();
-              }
-            }}
-          />
-          <div className="hermes-composer__actions">
-            <span>{selectedConversation ? "仅引用通道上下文，不回发" : `当前会话 · ${activeSessionSource}`}</span>
-            <button className="primary-button" disabled={busy || !input.trim()} onClick={() => void sendMessage()}>
-              <Send size={16} />
-              {busy ? "执行中" : "发送"}
-            </button>
-          </div>
-        </footer>
-      </main>
-    </section>
+        <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+          <WechatPersonaPanel conversation={activeConversation} />
+          {userDetail ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div className="profile-card__avatar">
+                  {userDetail.contact.avatar_url ? (
+                    <img src={userDetail.contact.avatar_url} alt="" />
+                  ) : (
+                    <span>{(userDetail.contact.nickname || "?").slice(0, 1)}</span>
+                  )}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{userDetail.contact.nickname || "未命名"}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>ID: {userDetail.contact.user_id}</div>
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", marginBottom: 6 }}>
+                  画像标签
+                </div>
+                <div className="profile-card__tags">
+                  {userDetail.profile.tags && userDetail.profile.tags.length > 0 ? (
+                    userDetail.profile.tags.map((tag) => (
+                      <span key={tag} className="profile-tag">
+                        #{tag}
+                      </span>
+                    ))
+                  ) : (
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>暂无画像标签</span>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", marginBottom: 6 }}>
+                  交互特征与性格分析
+                </div>
+                <div
+                  style={{
+                    padding: 10,
+                    background: "var(--bg-surface-soft)",
+                    borderRadius: "var(--radius-md)",
+                    fontSize: 12.5,
+                    lineHeight: 1.6,
+                    color: "var(--text-body)",
+                  }}
+                >
+                  {userDetail.profile.summary || "暂无深度画像分析摘要。"}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => onEditProfile(userDetail)}
+              >
+                <Wrench size={13} /> 编辑画像与个性标签
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", marginBottom: 10 }}>
+                群内成员列表 ({members.length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {members.slice(0, 50).map((m) => (
+                  <div
+                    key={m.user_id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "6px 8px",
+                      borderRadius: "var(--radius-sm)",
+                      background: "var(--bg-surface-soft)",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => void loadUser(m.user_id)}
+                  >
+                    <div className="wechat-member-avatar">
+                      <WechatAvatar src={m.avatar_url} fallback={<span>{(m.nickname || "?").slice(0, 1)}</span>} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {m.nickname || m.user_id}
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "var(--text-light)" }}>
+                        发言 {m.message_count || 0} 次
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
   );
 }
 
+/* ==========================================================================
+   View: 用户画像 (WechatProfilesView)
+   ========================================================================== */
 
 function WechatProfilesView({
   conversations,
@@ -1303,145 +1398,157 @@ function WechatProfilesView({
   serverPaged,
   search,
   setSearch,
-  onSaveProfile,
+  onEditProfile,
 }: {
   conversations: WechatConversation[];
   selectedConversationId: string;
-  setSelectedConversationId: (value: string) => void;
+  setSelectedConversationId: (id: string) => void;
   members: WechatMember[];
   details: Record<string, WechatUserDetail>;
   page: number;
-  setPage: (value: number) => void;
+  setPage: (p: number | ((p: number) => number)) => void;
   total: number;
   serverPaged: boolean;
   search: string;
-  setSearch: (value: string) => void;
-  onSaveProfile: (userId: string, conversationId: string | null, summary: string, tags: string[]) => Promise<WechatUserDetail>;
+  setSearch: (s: string) => void;
+  onEditProfile: (user: WechatUserDetail) => void;
 }) {
-  const selected = conversations.find((item) => item.id === selectedConversationId);
-  const isAllProfiles = selectedConversationId === "__all";
-  const [editingProfile, setEditingProfile] = useState<{ member: WechatMember; detail?: WechatUserDetail } | null>(null);
-  const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(() => new Set());
-  const profiled = members.filter((member) => {
-    const detail = details[member.user_id];
-    return detail?.profile?.summary && detail.profile.summary !== "暂无 AI 用户画像。";
-  }).length;
-  const pageSize = 30;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const visibleMembers = serverPaged ? members : members.slice((page - 1) * pageSize, page * pageSize);
-
-  async function editProfile(member: WechatMember, detail?: WechatUserDetail) {
-    setEditingProfile({ member, detail });
-  }
-
-  async function saveEditingProfile(summary: string, tags: string[]) {
-    if (!editingProfile) return;
-    await onSaveProfile(editingProfile.member.user_id, null, summary, tags);
-    setEditingProfile(null);
-  }
-
   return (
-    <section className="profile-lab">
-      <aside className="profile-lab__groups">
-        <div className="profile-lab__brand">
-          <span>Profile Atlas</span>
-          <b>群画像库</b>
-          <small>按群查看成员画像、标签和最近活跃。</small>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div
+        className="card"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 12,
+          padding: 14,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 260 }}>
+          <select
+            className="input-text"
+            style={{ width: 220 }}
+            value={selectedConversationId}
+            onChange={(e) => setSelectedConversationId(e.target.value)}
+          >
+            <option value="__all">全部微信社群成员</option>
+            {conversations.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title || c.raw_id}
+              </option>
+            ))}
+          </select>
+
+          <div className="search-field" style={{ flex: 1 }}>
+            <Search size={14} />
+            <input
+              type="text"
+              className="search-box"
+              placeholder="搜索用户昵称、备注或标签..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
-        <div className="profile-lab__group-list">
-          <button className={`profile-group ${isAllProfiles ? "active" : ""}`} onClick={() => setSelectedConversationId("__all")}>
-            <div className="wechat-session__avatar">全</div>
-            <div><b>全部画像</b><span>所有用户 · 可搜索标签/画像</span></div>
-          </button>
-          {conversations.map((item) => (
-            <button
-              key={item.id}
-              className={`profile-group ${selectedConversationId === item.id ? "active" : ""}`}
-              onClick={() => setSelectedConversationId(item.id)}
-            >
-              <WechatConversationAvatar conversation={item} />
-              <div>
-                <b>{conversationTitle(item)}</b>
-                <span>{item.message_count} 条消息 · {item.raw_id}</span>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            共 {total || members.length} 位画像用户
+          </span>
+          {serverPaged && total > 30 && (
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                type="button"
+                className="ghost-button"
+                style={{ padding: "4px 10px" }}
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                上一页
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                style={{ padding: "4px 10px" }}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="profiles-grid">
+        {members.map((m) => {
+          const detail = details[m.user_id];
+          return (
+            <div key={m.user_id} className="profile-card">
+              <div className="profile-card__head">
+                <div className="profile-card__avatar">
+                  {m.avatar_url ? (
+                    <img src={m.avatar_url} alt="" />
+                  ) : (
+                    <span>{(m.nickname || "?").slice(0, 1)}</span>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {m.nickname || m.user_id}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    发言频次: {m.message_count || 0} 次
+                  </div>
+                </div>
               </div>
-            </button>
-          ))}
-        </div>
-      </aside>
-      <main className="profile-lab__main">
-        <header className="profile-lab__hero">
-          <div>
-            <span className="profile-kicker">成员画像工作台</span>
-            <h2>{isAllProfiles ? "全部用户画像" : selected ? conversationTitle(selected) : "选择一个群聊"}</h2>
-            <p>{isAllProfiles ? "汇总全部用户，可按昵称、wxid、标签、画像搜索。" : "左侧选择群聊，右侧查看每个成员的 AI 画像、标签、发言量和图片量。"}</p>
-            <div className="profile-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索昵称、wxid、标签、画像" /></div>
-          </div>
-          <div className="profile-lab__stats">
-            <span><b>{total}</b>成员</span>
-            <span><b>{profiled}</b>已画像</span>
-            <span><b>{members.reduce((sum, item) => sum + (item.message_count || 0), 0)}</b>发言</span>
-          </div>
-        </header>
-        {members.length ? (
-          <>
-          {pageCount > 1 ? (
-            <nav className="profile-pagination profile-pagination--top" aria-label="画像分页">
-              <button type="button" disabled={page <= 1} onClick={() => setPage(Math.max(1, page - 1))}>上一页</button>
-              <span>第 {page} / {pageCount} 页 · 共 {total} 人</span>
-              <button type="button" disabled={page >= pageCount} onClick={() => setPage(Math.min(pageCount, page + 1))}>下一页</button>
-            </nav>
-          ) : null}
-          <div className="profile-card-grid">
-            {visibleMembers.map((member) => {
-              const detail = details[member.user_id];
-              const tags = detail?.profile?.tags || [];
-              const summary = detail?.profile?.summary || "暂无 AI 用户画像。";
-              const expanded = expandedProfiles.has(member.user_id);
-              return (
-                <article className={`profile-card ${expanded ? "profile-card--expanded" : ""} ${summary === "暂无 AI 用户画像。" ? "profile-card--empty" : ""}`} key={member.user_id}>
-                  <div className="profile-card__top">
-                    <WechatAvatar className="profile-card__avatar" src={member.avatar_url || detail?.contact.avatar_url} text={member.nickname || member.user_id} />
-                    <div>
-                      <h3>{member.nickname || detail?.contact.nickname || member.user_id}</h3>
-                      <p>{member.user_id}</p>
-                    </div>
-                    <button className="profile-card__edit" onClick={() => void editProfile(member, detail)}>编辑</button>
-                  </div>
-                  <p className="profile-card__summary">{summary}</p>
-                  {summary.length > 90 ? (
-                    <button
-                      type="button"
-                      className="profile-card__expand"
-                      onClick={() => setExpandedProfiles((current) => {
-                        const next = new Set(current);
-                        if (next.has(member.user_id)) next.delete(member.user_id);
-                        else next.add(member.user_id);
-                        return next;
-                      })}
-                    >{expanded ? "收起" : "展开全文"}</button>
-                  ) : null}
-                  <div className="profile-card__tags">
-                    {tags.length ? tags.map((tag) => <span key={tag}>{tag}</span>) : <span>未打标签</span>}
-                  </div>
-                  <div className="profile-card__meta">
-                    <span>发言 {detail?.stats.message_count ?? member.message_count ?? 0}</span>
-                    <span>图片 {detail?.stats.image_count ?? 0}</span>
-                    <span>{detail?.profile.updated_at ? formatDate(detail.profile.updated_at) : "未更新"}</span>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-          </>
-        ) : (
-          <EmptyState title="暂无成员画像" text="选择左侧群聊，或先在微信页同步群成员。" />
-        )}
-      </main>
-      {editingProfile ? <ProfileEditModal member={editingProfile.member} detail={editingProfile.detail} onClose={() => setEditingProfile(null)} onSave={saveEditingProfile} /> : null}
-    </section>
+
+              <div className="profile-card__tags">
+                {detail?.profile.tags && detail.profile.tags.length > 0 ? (
+                  detail.profile.tags.map((tag) => (
+                    <span key={tag} className="profile-tag">
+                      #{tag}
+                    </span>
+                  ))
+                ) : (
+                  <span style={{ fontSize: 11, color: "var(--text-light)" }}>暂无标签</span>
+                )}
+              </div>
+
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-body)",
+                  lineHeight: 1.5,
+                  background: "var(--bg-surface-soft)",
+                  padding: 8,
+                  borderRadius: "var(--radius-sm)",
+                  minHeight: 44,
+                }}
+              >
+                {detail?.profile.summary || "等待 Agent 结合多轮互动自动生成画像总结。"}
+              </div>
+
+              <button
+                type="button"
+                className="ghost-button"
+                style={{ fontSize: 12, padding: "5px 12px" }}
+                onClick={() => detail && onEditProfile(detail)}
+              >
+                <Tag size={12} /> 编辑个性标签
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
+/* ==========================================================================
+   View: 社群管理 (GroupOpsView)
+   ========================================================================== */
 
 function GroupOpsView({
   conversations,
@@ -1452,1226 +1559,118 @@ function GroupOpsView({
   messages,
   filter,
   setFilter,
-  onSaveProfile,
+  onEditProfile,
 }: {
   conversations: WechatConversation[];
   selectedConversationId: string;
-  setSelectedConversationId: (value: string) => void;
+  setSelectedConversationId: (id: string) => void;
   members: WechatMember[];
   details: Record<string, WechatUserDetail>;
   messages: WechatMessage[];
   filter: string;
-  setFilter: (value: string) => void;
-  onSaveProfile: (userId: string, conversationId: string | null, summary: string, tags: string[]) => Promise<WechatUserDetail>;
+  setFilter: (s: string) => void;
+  onEditProfile: (user: WechatUserDetail) => void;
 }) {
-  const selected = conversations.find((item) => item.id === selectedConversationId);
-  const [opsUserDetail, setOpsUserDetail] = useState<WechatUserDetail | null>(null);
-  const [editingProfile, setEditingProfile] = useState<{ member: WechatMember; detail?: WechatUserDetail } | null>(null);
-  async function openUser(member: WechatMember, detail?: WechatUserDetail) {
-    setOpsUserDetail(detail || await api.wechatUser(member.user_id, selectedConversationId));
-  }
-  const enriched = members.map((member) => {
-    const detail = details[member.user_id];
-    const tags = detail?.profile.tags || [];
-    const text = `${member.nickname} ${member.user_id} ${tags.join(" ")} ${detail?.profile.summary || ""}`.toLowerCase();
-    return { member, detail, tags, risk: groupRiskScore(member, detail), text };
-  });
-  const shown = enriched.filter((item) => !filter.trim() || item.text.includes(filter.trim().toLowerCase()));
-  const riskKeywords = ["广告", "推广", "引流", "私聊", "加我", "代理", "返利", "兼职", "刷单", "投诉", "退款", "骗子", "竞品", "辱骂", "敏感"];
-  const keywordHits = messages.flatMap((message) => {
-    const content = String(message.content || "");
-    const hits = riskKeywords.filter((keyword) => content.includes(keyword));
-    return hits.length ? [{ message, hits }] : [];
-  }).slice(-30).reverse();
-  const msgCountByUser = new Map<string, number>();
-  const hourMap = new Map<string, number>();
-  for (const message of messages) {
-    if (message.sender_id) msgCountByUser.set(message.sender_id, (msgCountByUser.get(message.sender_id) || 0) + 1);
-    const hour = formatDate(message.timestamp).slice(11, 13) || "--";
-    hourMap.set(hour, (hourMap.get(hour) || 0) + 1);
-  }
-  const enrichedWithMessageRisk = enriched.map((item) => {
-    const keywordRisk = keywordHits.filter((hit) => hit.message.sender_id === item.member.user_id).length * 10;
-    return { ...item, risk: Math.min(100, item.risk + keywordRisk) };
-  });
-  const shownWithRisk = enrichedWithMessageRisk.filter((item) => !filter.trim() || item.text.includes(filter.trim().toLowerCase()));
-  const riskUsers = enrichedWithMessageRisk.filter((item) => item.risk >= 60);
-  const silentUsers = enrichedWithMessageRisk.filter((item) => (item.member.message_count || 0) <= 1);
-  const activeUsers = enrichedWithMessageRisk.slice().sort((a, b) => (msgCountByUser.get(b.member.user_id) || b.member.message_count || 0) - (msgCountByUser.get(a.member.user_id) || a.member.message_count || 0)).slice(0, 8);
-  const hourlyTrend = [...hourMap.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-12);
-  const dailyReport = {
-    messages: messages.length,
-    speakers: msgCountByUser.size,
-    images: messages.filter((m) => m.type === "image" || (m.attachments || []).some((a) => a.kind === "image")).length,
-    keywords: keywordHits.length,
-  };
-  const aiAdvice = riskUsers.length
-    ? `建议优先复核 ${riskUsers.slice(0, 3).map((x) => x.member.nickname || x.member.user_id).join("、")} 的命中消息，再决定提醒、观察或私聊。`
-    : keywordHits.length
-      ? `当前无高风险成员，但有 ${keywordHits.length} 条关键词命中，建议查看预警列表。`
-      : "当前群聊风险较低，建议持续观察活跃度和潜水成员。";
-
-  async function editProfile(member: WechatMember, detail?: WechatUserDetail) {
-    setEditingProfile({ member, detail });
-  }
-
-  async function saveEditingProfile(summary: string, tags: string[]) {
-    if (!editingProfile) return;
-    await onSaveProfile(editingProfile.member.user_id, null, summary, tags);
-    setEditingProfile(null);
-  }
+  const filteredMembers = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter((m) => (m.nickname || m.user_id).toLowerCase().includes(q));
+  }, [members, filter]);
 
   return (
-    <section className="ops-board">
-      <aside className="ops-groups">
-        <div className="ops-groups__head">
-          <ShieldAlert size={20} />
-          <div><b>群管理</b><span>风险、活跃、画像联动</span></div>
-        </div>
-        <div className="ops-group-list">
-          {conversations.map((item) => (
-            <button key={item.id} className={`ops-group ${item.id === selectedConversationId ? "active" : ""}`} onClick={() => setSelectedConversationId(item.id)}>
-              <WechatConversationAvatar conversation={item} />
-              <div><b>{conversationTitle(item)}</b><span>{item.message_count} 条消息</span></div>
-            </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 14, padding: 14 }}>
+        <span style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap" }}>选择社群:</span>
+        <select
+          className="input-text"
+          style={{ width: 280 }}
+          value={selectedConversationId}
+          onChange={(e) => setSelectedConversationId(e.target.value)}
+        >
+          {conversations.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.title || c.raw_id}
+            </option>
           ))}
-        </div>
-      </aside>
-      <main className="ops-main">
-        <header className="ops-hero">
-          <div>
-            <span>Group Command</span>
-            <h2>{selected ? conversationTitle(selected) : "选择群聊"}</h2>
-            <p>成员画像、风险提示、活跃排行和每日群报集中在这里。</p>
-          </div>
-          <div className="ops-metrics">
-            <span><b>{members.length}</b>成员</span>
-            <span><b>{riskUsers.length}</b>风险</span>
-            <span><b>{dailyReport.keywords}</b>预警</span>
-          </div>
-        </header>
-        <section className="ops-report">
-          <div><b>AI 群管建议</b><p>{aiAdvice}</p></div>
-          <div><b>群日报</b><p>{`消息 ${dailyReport.messages} 条 · 发言 ${dailyReport.speakers} 人 · 图片 ${dailyReport.images} 张 · 预警 ${dailyReport.keywords} 条`}</p></div>
-          <div><b>活跃榜</b><p>{activeUsers.length ? activeUsers.map((x) => `${x.member.nickname || x.member.user_id}(${msgCountByUser.get(x.member.user_id) || x.member.message_count})`).join(" / ") : "暂无数据"}</p></div>
-          <div><b>关键词预警</b><p>{keywordHits.length ? keywordHits.slice(0, 5).map((x) => `${x.hits.join("/")}：${x.message.sender_name || x.message.sender_id}`).join("；") : "暂无关键词命中。"}</p></div>
-          <div><b>活跃趋势</b><p>{hourlyTrend.length ? hourlyTrend.map(([h, n]) => `${h}点 ${n}`).join(" / ") : "暂无趋势数据。"}</p></div>
-          <div><b>成员轨迹</b><p>{silentUsers.length ? `潜水成员 ${silentUsers.length} 人；点击成员卡片可查看发言、图片和画像。` : "成员活跃正常。"}</p></div>
-        </section>
-        <div className="ops-toolbar">
-          <div className="ops-search"><Search size={16} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索昵称、wxid、标签、画像" /></div>
-          <span>{shownWithRisk.length} / {members.length}</span>
-        </div>
-        <div className="ops-table">
-          {shownWithRisk.map(({ member, detail, tags, risk }) => (
-            <article className="ops-member" key={member.user_id} onClick={() => void openUser(member, detail)} title="点击查看聊天记录和风险依据">
-              <WechatAvatar className="ops-member__avatar" src={member.avatar_url || detail?.contact.avatar_url} text={member.nickname || member.user_id} />
-              <div className="ops-member__main">
-                <div className="ops-member__line"><b>{member.nickname || detail?.contact.nickname || member.user_id}</b><small>{member.user_id}</small></div>
-                <p>{detail?.profile.summary || "暂无 AI 用户画像。"}</p>
-                <div className="ops-tags">{tags.length ? tags.map((tag) => <span key={tag}>{tag}</span>) : <span>未打标签</span>}</div>
-              </div>
-              <div className="ops-member__score">
-                <span className={risk >= 60 ? "danger" : risk >= 30 ? "warn" : "ok"}>{risk >= 60 ? "高风险" : risk >= 30 ? "观察" : "正常"}</span>
-                <b>{risk}</b>
-                <small>发言 {detail?.stats.message_count ?? member.message_count ?? 0} · 图 {detail?.stats.image_count ?? 0}</small>
-                <button className="ops-member__edit" onClick={(event) => { event.stopPropagation(); void editProfile(member, detail); }}>编辑画像</button>
-                <button className="ops-member__edit" onClick={(event) => { event.stopPropagation(); navigator.clipboard?.writeText(member.user_id); }}>复制 wxid</button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </main>
-      {opsUserDetail ? <WechatMemberModal detail={opsUserDetail} onClose={() => setOpsUserDetail(null)} /> : null}
-      {editingProfile ? <ProfileEditModal member={editingProfile.member} detail={editingProfile.detail} onClose={() => setEditingProfile(null)} onSave={saveEditingProfile} /> : null}
-    </section>
-  );
-}
+        </select>
 
-function groupRiskScore(member: WechatMember, detail?: WechatUserDetail): number {
-  const text = `${detail?.profile.summary || ""} ${(detail?.profile.tags || []).join(" ")}`;
-  let score = 0;
-  if (/广告|推广|引流|营销|敏感|攻击|竞争|刷屏|异常/.test(text)) score += 55;
-  if ((detail?.stats.image_count || 0) >= 10) score += 18;
-  if ((member.message_count || 0) <= 1) score += 8;
-  if ((member.message_count || 0) >= 80) score += 12;
-  return Math.min(100, score);
-}
-
-
-function WechatWorkbench(props: {
-  conversations: WechatConversation[];
-  query: string;
-  setQuery: (value: string) => void;
-  selectedConversationId: string;
-  setSelectedConversationId: (value: string) => void;
-  unread: Record<string, number>;
-  messages: WechatMessage[];
-  members: WechatMember[];
-  userDetail: WechatUserDetail | null;
-  loadUser: (userId: string) => Promise<void>;
-  clearUser: () => void;
-  onSend: (text: string, file: File | null) => Promise<void>;
-  onSync: () => Promise<void>;
-}) {
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [sending, setSending] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const messageListRef = useRef<HTMLDivElement | null>(null);
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
-  const selectedConversation = props.conversations.find((item) => item.id === props.selectedConversationId);
-  const members = props.members;
-  const forceScrollBottom = useCallback(() => {
-    const node = messageListRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-    messageEndRef.current?.scrollIntoView({ block: "end" });
-  }, []);
-  useEffect(() => {
-    forceScrollBottom();
-    const raf = window.requestAnimationFrame(forceScrollBottom);
-    const timer = window.setTimeout(forceScrollBottom, 120);
-    return () => { window.cancelAnimationFrame(raf); window.clearTimeout(timer); };
-  }, [props.messages.length, props.selectedConversationId, forceScrollBottom]);
-  async function submitWechat() {
-    if (!props.selectedConversationId || sending || (!draft.trim() && !file)) return;
-    setSending(true);
-    try {
-      await props.onSend(draft, file);
-      setDraft("");
-      setFile(null);
-    } catch (err) {
-      window.alert(`发送失败：${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  function pickEmoji(value: string) {
-    const text = value.length <= 2 ? value : `[${value}]`;
-    setDraft((current) => `${current}${text}`);
-    setEmojiOpen(false);
-  }
-
-  async function syncWechat() {
-    if (syncing) return;
-    setSyncing(true);
-    try {
-      await props.onSync();
-    } finally {
-      setSyncing(false);
-    }
-  }
-  return (
-    <section className={`wechat-page ${detailOpen ? "wechat-page--detail" : ""} ${drawerOpen ? "wechat-page--drawer-open" : ""}`}>
-      <aside className="wechat-rail">
-        <div className="wechat-avatar">微</div>
-        <div className="wechat-rail__icon active">💬</div>
-        <div className="wechat-rail__icon">👥</div>
-        <div className="wechat-rail__icon">⚙</div>
-      </aside>
-      {drawerOpen || detailOpen ? <button className="wechat-drawer-backdrop" onClick={() => { setDrawerOpen(false); setDetailOpen(false); }} aria-label="关闭抽屉" /> : null}
-      <aside className="wechat-sessions">
-        <div className="wechat-search"><Search size={16} /><input value={props.query} onChange={(event) => props.setQuery(event.target.value)} placeholder="搜索会话" /></div>
-        <div className="wechat-session-list">
-          {props.conversations.map((item) => (
-            <button key={item.id} className={`wechat-session ${props.selectedConversationId === item.id ? "active" : ""}`} onClick={() => { props.setSelectedConversationId(item.id); setDrawerOpen(false); }}>
-              <div className="wechat-session__avatar-wrap">
-                <WechatConversationAvatar conversation={item} />
-                {props.unread[item.id] ? <span className="wechat-unread-badge">{props.unread[item.id] > 99 ? "99+" : props.unread[item.id]}</span> : null}
-              </div>
-              <div className="wechat-session__main"><b>{conversationTitle(item)}</b><span>{item.scope === "group" ? "群聊" : "私聊"} · {item.raw_id}</span></div>
-              <small>{formatDate(item.updated_at).slice(5, 16)}</small>
-            </button>
-          ))}
-        </div>
-      </aside>
-      <main className="wechat-chat">
-        <header className="wechat-chat__header">
-          <button className="wechat-drawer-button" onClick={() => setDrawerOpen(true)}>会话</button>
-          <div><b>{selectedConversation ? conversationTitle(selectedConversation) : "请选择微信会话"}</b>{selectedConversation?.scope === "group" ? <span>（{members.length}）</span> : null}</div>
-          <div className="wechat-header-actions">
-            <button className="wechat-more" disabled={syncing} onClick={() => void syncWechat()}>{syncing ? "同步中" : "同步"}</button>
-            <button className="wechat-more" onClick={() => setDetailOpen((v) => !v)}>•••</button>
-          </div>
-        </header>
-        <div className="wechat-message-list" ref={messageListRef}>
-          {props.messages.length ? props.messages.map((message) => <WechatMessage key={`${message.id}-${message.timestamp}`} message={message} />) : <EmptyState title="暂无聊天记录" text="选择左侧微信会话后展示消息。" />}<div ref={messageEndRef} />
-        </div>
-        <footer className="wechat-input">
-          <button className="wechat-emoji-toggle" type="button" onClick={() => setEmojiOpen((value) => !value)}>😊</button>
-          {emojiOpen ? <div className="wechat-emoji-panel">{QUICK_EMOJIS.map((emoji) => <button key={emoji} type="button" onClick={() => pickEmoji(emoji)}>{emoji}</button>)}</div> : null}
-          <label className={`wechat-file-button ${file ? "wechat-file-button--active" : ""}`}>📁<input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
-          {file ? <button className="wechat-file-chip" type="button" title="移除文件" onClick={() => setFile(null)}>{file.name} ×</button> : <span className="wechat-cut">✂</span>}
-          <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入消息/表情，Enter 发送" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) void submitWechat(); }} />
-          <button className="wechat-send-button" disabled={sending || (!draft.trim() && !file)} onClick={() => void submitWechat()}>{sending ? "发送中" : "发送"}</button>
-        </footer>
-      </main>
-      {detailOpen ? (
-        <aside className="wechat-detail">
-          <div className="wechat-search"><Search size={16} /><input placeholder="搜索群成员" /></div>
-          <div className="wechat-member-grid">
-            {members.slice(0, 24).map((member) => (
-              <button key={member.user_id} className="wechat-member" onClick={() => void props.loadUser(member.user_id)}>
-                <WechatAvatar className="wechat-member__avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><span>{member.nickname || member.user_id}</span>
-              </button>
-            ))}
-            <button className="wechat-member"><div className="wechat-member__avatar dashed">＋</div><span>添加</span></button>
-          </div>
-          <div className="wechat-info-row"><b>群聊名称</b><span>{selectedConversation ? conversationTitle(selectedConversation) : "-"}</span></div>
-          <div className="wechat-info-row"><b>群ID</b><span>{selectedConversation?.raw_id || "-"}</span></div>
-          <div className="wechat-info-row"><b>查找聊天内容</b><span>›</span></div>
-        </aside>
-      ) : null}
-      {props.userDetail ? <WechatMemberModal detail={props.userDetail} onClose={props.clearUser} /> : null}
-    </section>
-  );
-}
-
-function WechatConversationAvatar({ conversation }: { conversation: WechatConversation }) {
-  const avatars = conversation.avatar_members || [];
-  if (conversation.avatar_url) return <img className="wechat-session__avatar" src={conversation.avatar_url} />;
-  if (conversation.scope === "group" && avatars.length) {
-    return <div className="wechat-session__avatar wechat-session__avatar--group">{avatars.slice(0, 4).map((src) => <img key={src} src={src} />)}</div>;
-  }
-  return <div className="wechat-session__avatar">{conversationInitial(conversation)}</div>;
-}
-
-function WechatMessage({ message }: { message: WechatMessage }) {
-  const images = extractMessageImages(message);
-  const emoji = extractWechatEmoji(message);
-  const text = displayMessageContent(message, images.length > 0 || Boolean(emoji));
-  const outgoing = message.raw?.direction === "outgoing";
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
-  return (
-    <article className={`wechat-message ${outgoing ? "wechat-message--outgoing" : ""}`}>
-      <WechatAvatar className="wechat-message__avatar" src={message.sender_avatar_url} text={message.sender_name || message.sender_id || "?"} />
-      <div className="wechat-message__main">
-        <div className="wechat-message__name">{message.sender_name || message.sender_id}<span>{formatDate(message.timestamp)}</span></div>
-        <div className={`wechat-bubble ${emoji ? "wechat-bubble--emoji" : ""}`}>
-          {text ? <span>{renderEmojiAliases(text)}</span> : null}
-          {emoji ? <WechatEmojiCard emoji={emoji} /> : null}
-          {images.map((src) => <button className="wechat-bubble-image" key={src} onClick={() => setPreviewImage(src)}><img src={src} /></button>)}
-        </div>
-      </div>
-      {previewImage ? <div className="wechat-image-preview" onClick={(event) => { event.stopPropagation(); setPreviewImage(null); }}><img src={previewImage} /></div> : null}
-    </article>
-  );
-}
-
-function WechatAvatar({ className, src, text }: { className: string; src?: string | null; text: string }) {
-  return src ? <img className={className} src={src} /> : <div className={className}>{(text || "?").slice(0, 1).toUpperCase()}</div>;
-}
-
-function ProfileEditModal({
-  member,
-  detail,
-  onClose,
-  onSave,
-}: {
-  member: WechatMember;
-  detail?: WechatUserDetail;
-  onClose: () => void;
-  onSave: (summary: string, tags: string[]) => Promise<void>;
-}) {
-  const [summary, setSummary] = useState(detail?.profile.summary === "暂无 AI 用户画像。" ? "" : (detail?.profile.summary || ""));
-  const [tagsText, setTagsText] = useState((detail?.profile.tags || []).join(", "));
-  const [saving, setSaving] = useState(false);
-  const name = member.nickname || detail?.contact.nickname || member.user_id;
-  async function submit() {
-    if (saving) return;
-    setSaving(true);
-    try {
-      const tags = tagsText.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
-      await onSave(summary.trim(), tags);
-    } finally {
-      setSaving(false);
-    }
-  }
-  return (
-    <div className="wechat-modal-backdrop" onClick={onClose}>
-      <div className="wechat-modal profile-edit-modal" onClick={(event) => event.stopPropagation()}>
-        <button className="wechat-modal__close" onClick={onClose}>×</button>
-        <div className="wechat-profile-head"><WechatAvatar className="wechat-profile-avatar" src={member.avatar_url || detail?.contact.avatar_url} text={name} /><div><h3>编辑画像</h3><p>{name} · {member.user_id}</p></div></div>
-        <label className="profile-edit-field"><span>用户画像</span><textarea value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="输入/修改用户画像" /></label>
-        <label className="profile-edit-field"><span>标签</span><input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="多个标签用逗号分隔，例如：活跃, 潜在客户" /></label>
-        <div className="profile-edit-actions"><button onClick={onClose}>取消</button><button className="primary-button" disabled={saving} onClick={() => void submit()}>{saving ? "保存中" : "保存"}</button></div>
-      </div>
-    </div>
-  );
-}
-
-function WechatMemberModal({ detail, onClose }: { detail: WechatUserDetail; onClose: () => void }) {
-  const member = detail.contact;
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
-  return (
-    <div className="wechat-modal-backdrop" onClick={onClose}>
-      <div className="wechat-modal" onClick={(event) => event.stopPropagation()}>
-        <button className="wechat-modal__close" onClick={onClose}>×</button>
-        <div className="wechat-profile-head"><WechatAvatar className="wechat-profile-avatar" src={member.avatar_url} text={member.nickname || member.user_id} /><div><h3>{member.nickname || member.user_id}</h3><p>{member.user_id}</p></div></div>
-        <div className="wechat-profile-stats"><span>发言 {detail.stats.message_count}</span><span>图片 {detail.stats.image_count}</span><span>标签 {detail.profile.tags.length}</span></div>
-        <section><b>AI 用户画像</b><p>{detail.profile.summary}</p><div className="wechat-tags">{detail.profile.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></section>
-        <section><b>图片记录</b><div className="wechat-image-grid">{detail.images.slice(0, 24).map((item) => item.url ? <button key={item.id} onClick={() => setPreviewImage(item.url || "")}><img src={item.url} /></button> : null)}</div></section>
-        <section><b>最近发言</b><div className="wechat-profile-messages">{detail.recent_messages.slice(-30).map((m) => <p key={`${m.id}-${m.timestamp}`}>{m.content || `[${m.type}]`}</p>)}</div></section>
-      </div>
-      {previewImage ? <div className="wechat-image-preview" onClick={(event) => { event.stopPropagation(); setPreviewImage(null); }}><img src={previewImage} /></div> : null}
-    </div>
-  );
-}
-
-
-function conversationTitle(item: Conversation): string { return item.title || item.raw_id || item.id; }
-function conversationInitial(item: Conversation): string { return conversationTitle(item).slice(0, 1).toUpperCase(); }
-function sortWechatMessages(items: WechatMessage[]): WechatMessage[] {
-  return [...items].sort((a, b) => {
-    const at = Date.parse(a.timestamp || "") || 0;
-    const bt = Date.parse(b.timestamp || "") || 0;
-    if (at !== bt) return at - bt;
-    return String(a.id).localeCompare(String(b.id));
-  });
-}
-function displayMessageContent(message: Message | WechatMessage, hasMedia = false): string {
-  const content = String(message.content || "").trim();
-  if (hasMedia && (!content || /^\[(图片|image|动画表情|表情|非文本消息 MsgType=47)\]$/i.test(content))) return "";
-  if (content.includes("<emoji") || content.includes("<msg")) return hasMedia ? "" : "[动画表情]";
-  return content || (hasMedia ? "" : `[${message.type}]`);
-}
-
-type WechatEmojiInfo = { url?: string; md5?: string; name?: string };
-
-function extractWechatEmoji(message: Message | WechatMessage): WechatEmojiInfo | null {
-  const raw = message.raw || {};
-  const content = String(message.content || "");
-  const rawText = JSON.stringify(raw);
-  const source = [content, rawText].join("\n");
-  if (!source.includes("<emoji") && !source.includes("cdnurl") && !source.includes("emoticonmd5") && !/MsgType[=\": ]+47/i.test(source)) return null;
-  const pick = (names: string[]) => {
-    for (const name of names) {
-      const match = source.match(new RegExp(`${name}=["']([^"']+)["']`, "i"));
-      if (match?.[1]) return decodeXmlAttr(match[1]);
-    }
-    return "";
-  };
-  const url = pick(["cdnurl", "thumburl", "url"]);
-  const md5 = pick(["md5", "emoticonmd5", "encrypturl"]);
-  const name = pick(["name", "desc", "title"]) || "动画表情";
-  return { url, md5, name };
-}
-
-function WechatEmojiCard({ emoji }: { emoji: WechatEmojiInfo }) {
-  return <div className="wechat-emoji-card">{emoji.url ? <img src={emoji.url} /> : <span>😄</span>}<small>{emoji.name || "动画表情"}{emoji.md5 ? ` · ${emoji.md5.slice(0, 8)}` : ""}</small></div>;
-}
-
-function renderEmojiAliases(text: string): ReactNode[] {
-  const map: Record<string, string> = { 微笑: "🙂", 呲牙: "😁", 破涕为笑: "😂", 笑哭: "😂", 强: "👍", 弱: "👎", 玫瑰: "🌹", 爱心: "❤️", 握手: "🤝", OK: "👌", 庆祝: "🎉" };
-  const parts = String(text).split(/(\[[^\]]{1,8}\])/g);
-  return parts.map((part, index) => {
-    const key = part.replace(/^\[|\]$/g, "");
-    return map[key] ? <span className="wechat-inline-emoji" key={index}>{map[key]}</span> : <span key={index}>{part}</span>;
-  });
-}
-
-function decodeXmlAttr(value: string): string {
-  return value.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-}
-
-function extractMessageImages(message: Message | WechatMessage): string[] {
-  const raw = message.raw || {};
-  const values: string[] = [];
-  const attachments = "attachments" in message ? message.attachments : [];
-  for (const item of attachments || []) {
-    if (item.kind === "image" && item.url) values.push(item.url);
-  }
-  const scan = (value: unknown) => {
-    if (!value) return;
-    if (typeof value === "string") {
-      const src = normalizeImageSrc(value);
-      if (src) values.push(src);
-      return;
-    }
-    if (Array.isArray(value)) value.forEach(scan);
-    else if (typeof value === "object") Object.values(value as Record<string, unknown>).forEach(scan);
-  };
-  scan(raw.attachments); scan(raw.quote_attachments); scan(raw.media); scan(raw.media_url); scan(raw.url);
-  return [...new Set(values)].slice(0, 8);
-}
-function normalizeImageSrc(value: string): string {
-  const src = value.trim().replace(/\\/g, "/");
-  if (!src) return "";
-  if (src.startsWith("data:image/") || src.startsWith("/files/") || src.startsWith("/media/") || /^https?:\/\//i.test(src)) {
-    return /\.(png|jpe?g|gif|webp)(\?|$)/i.test(src) || src.startsWith("data:image/") ? src : "";
-  }
-  return "";
-}
-
-function ChatView(props: {
-  conversations: Conversation[];
-  query: string;
-  setQuery: (value: string) => void;
-  selectedConversationId: string;
-  setSelectedConversationId: (value: string) => void;
-  deleteConversation: (id: string) => void;
-  messages: Message[];
-  consoleMessages: ConsoleMessage[];
-  input: string;
-  setInput: (value: string) => void;
-  sendMessage: () => void;
-  busy: boolean;
-  deliveryMode: DeliveryMode;
-  setDeliveryMode: (value: DeliveryMode) => void;
-  events: AgentEvent[];
-  liveEvents: UiEvent[];
-}) {
-  return (
-    <section className="chat-grid">
-      <div className="panel conversation-list">
-        <div className="search">
-          <Search size={15} />
-          <input value={props.query} onChange={(event) => props.setQuery(event.target.value)} placeholder="搜索会话" />
-        </div>
-        <div className="conversation-scroll">
-          {props.conversations.map((item) => (
-            <button
-              key={item.id}
-              className={`conversation-item ${props.selectedConversationId === item.id ? "conversation-item--active" : ""}`}
-              onClick={() => props.setSelectedConversationId(item.id)}
-            >
-              <span className="conversation-item__title">{item.title || item.raw_id}</span>
-              <span className="conversation-item__meta">
-                {item.platform} / {item.adapter} / {item.scope}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="panel chat-panel">
-        <div className="chat-panel__toolbar">
-          <Segmented
-            value={props.deliveryMode}
-            onChange={props.setDeliveryMode}
-            options={[
-              ["console", "控制台"],
-              ["channel", "回发通道"],
-            ]}
+        <div className="search-field" style={{ flex: 1 }}>
+          <Search size={14} />
+          <input
+            type="text"
+            className="search-box"
+            placeholder="搜索成员昵称..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
           />
-          {props.selectedConversationId ? (
-            <button className="ghost-button danger" onClick={() => props.deleteConversation(props.selectedConversationId)}>
-              <Trash2 size={15} />
-              删除本地记录
-            </button>
-          ) : null}
-        </div>
-        <div className="message-list">
-          {props.messages.length === 0 && props.consoleMessages.length === 0 ? (
-            <EmptyState title="暂无历史消息" text="选择通道会话后，这里会展示最近消息。页面内聊天默认不回发通道。" />
-          ) : (
-            <>
-              {props.messages.map((message) => <MessageBubble key={`${message.id}-${message.timestamp}`} message={message} />)}
-              {props.consoleMessages.length > 0 ? <div className="message-separator">控制台对话</div> : null}
-              {props.consoleMessages.map((message) => <ConsoleMessageBubble key={message.id} message={message} />)}
-            </>
-          )}
-        </div>
-        <div className="composer">
-          <textarea
-            value={props.input}
-            onChange={(event) => props.setInput(event.target.value)}
-            placeholder="在控制台向 Agent 提问。默认只在页面显示，不回发原通道。"
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                void props.sendMessage();
-              }
-            }}
-          />
-          <button className="primary-button" disabled={props.busy || !props.input.trim()} onClick={() => void props.sendMessage()}>
-            <Send size={16} />
-            {props.busy ? "发送中" : "发送"}
-          </button>
         </div>
       </div>
 
-      <ActivityPanel events={props.events} liveEvents={props.liveEvents} compact />
-    </section>
-  );
-}
-
-function MessageBubble({ message }: { message: Message }) {
-  const isAgent = message.sender_id.includes("agent") || message.raw?.direction === "reply";
-  return (
-    <article className={`message ${isAgent ? "message--agent" : ""}`}>
-      <div className="message__meta">
-        <span>{message.sender_name || message.sender_id}</span>
-        <span>{formatDate(message.timestamp)}</span>
-      </div>
-      <div className="message__body">{message.content || `[${message.type}]`}</div>
-    </article>
-  );
-}
-
-function HermesMessageBubble({ message }: { message: ConsoleMessage }) {
-  const isAssistant = message.role === "assistant";
-  return (
-    <article className={`hermes-message ${isAssistant ? "hermes-message--assistant" : "hermes-message--user"}`}>
-      <div className="hermes-message__avatar">{isAssistant ? <Bot size={16} /> : "你"}</div>
-      <div className="hermes-message__main">
-        <div className="hermes-message__meta">
-          <span>{isAssistant ? "Agent" : "你"}</span>
-          <small>{formatDate(message.created_at)}</small>
-        </div>
-        <div className="hermes-message__body chat-text">{renderChatContent(message.content)}</div>
-      </div>
-    </article>
-  );
-}
-
-
-
-
-type HermesTranscriptTurn = {
-  id: string;
-  user: ConsoleMessage;
-  assistant?: ConsoleMessage;
-  detail: AgentTaskDetail | null;
-  recentEvents?: AgentEvent[];
-  liveEvents?: UiEvent[];
-};
-
-function buildSessionTranscriptTurns(
-  tasks: AgentTask[],
-  selectedDetail: AgentTaskDetail | null,
-  liveMessages: ConsoleMessage[],
-): HermesTranscriptTurn[] {
-  const turns: HermesTranscriptTurn[] = tasks.map((task) => {
-    const taskId = taskIdOf(task);
-    const detail = selectedDetail?.task && taskIdOf(selectedDetail.task) === taskId ? selectedDetail : taskDetailFromTask(task);
-    const output = task.output || task.result || "";
-    return {
-      id: taskId,
-      user: { id: `${taskId}-input`, role: "user" as const, content: task.input || "", created_at: task.created_at },
-      assistant: output || task.status === "running"
-        ? { id: `${taskId}-output`, role: "assistant" as const, content: output || "任务仍在执行中...", created_at: task.updated_at || task.created_at }
-        : undefined,
-      detail,
-    };
-  }).filter((turn) => turn.user.content || turn.assistant);
-  const pendingUserIndex = liveMessages.findIndex((message) => message.role === "user" && !turns.some((turn) => turn.user.content === message.content));
-  if (pendingUserIndex >= 0) {
-    const user = liveMessages[pendingUserIndex];
-    if (user?.role === "user") {
-      const assistant = liveMessages.slice(pendingUserIndex + 1).find((message) => message.role === "assistant");
-      turns.push({ id: user.id, user, assistant, detail: selectedDetail });
-    }
-  }
-  return turns;
-}
-
-function taskDetailFromTask(task: AgentTask): AgentTaskDetail {
-  return { task, events: [], timeline: [], tool_calls: [], repairs: [], artifacts: [], summary: {} };
-}
-
-function agentConsoleContextKey(source: string): string {
-  return `agent:${source || "terminal:control-ui"}`;
-}
-
-function agentSessionSources(tasks: AgentTask[]): string[] {
-  const sources = new Set<string>(["terminal:control-ui"]);
-  for (const task of tasks) sources.add(agentSessionSource(task.source));
-  return [...sources];
-}
-
-function agentSessionSource(source?: string): string {
-  return (source || "terminal:control-ui").replace(/:(?:restricted|member|guest)$/, "");
-}
-
-function sessionLabel(source: string): string {
-  if (source === "terminal:control-ui") return "页面直接对话";
-  return source.replace(/^terminal:/, "");
-}
-
-function tasksToConsoleMessages(tasks: AgentTask[]): ConsoleMessage[] {
-  return tasks.flatMap((task) => taskToConsoleMessages(task));
-}
-
-function taskToConsoleMessages(task: AgentTask): ConsoleMessage[] {
-  const taskId = taskIdOf(task);
-  const messages: ConsoleMessage[] = [];
-  if (task.input) messages.push({ id: `${taskId}-input`, role: "user", content: task.input, created_at: task.created_at });
-  const output = task.output || task.result || "";
-  if (output || task.status === "running") {
-    messages.push({ id: `${taskId}-output`, role: "assistant", content: output || "任务仍在执行中...", created_at: task.updated_at || task.created_at });
-  }
-  return messages;
-}
-
-function mergeConsoleMessages(persisted: ConsoleMessage[], live: ConsoleMessage[]): ConsoleMessage[] {
-  if (live.length === 0) return persisted;
-  const seen = new Set(persisted.map((message) => `${message.role}:${message.content}`));
-  const merged = [...persisted];
-  for (const message of live) {
-    const key = `${message.role}:${message.content}`;
-    if (!seen.has(key) || message.content.includes("正在交给 Hermes Agent 执行")) merged.push(message);
-  }
-  return merged;
-}
-
-function taskDetailToConsoleMessages(detail: AgentTaskDetail): ConsoleMessage[] {
-  const task = detail.task;
-  const taskId = taskIdOf(task);
-  const messages: ConsoleMessage[] = [];
-  if (task.input) {
-    messages.push({ id: `${taskId}-input`, role: "user", content: task.input, created_at: task.created_at });
-  }
-  for (const [index, event] of (detail.events ?? detail.timeline ?? []).entries()) {
-    if (event.type === "task.continue_requested") {
-      messages.push({ id: `${taskId}-continue-user-${index}`, role: "user", content: String(event.content || ""), created_at: event.created_at });
-    }
-    if (event.type === "task.continue_completed" || event.type === "task.completed") {
-      const content = String(event.content || "");
-      if (content && !messages.some((message) => message.role === "assistant" && message.content === content)) {
-        messages.push({ id: `${taskId}-assistant-${index}`, role: "assistant", content, created_at: event.created_at });
-      }
-    }
-  }
-  if (!messages.some((message) => message.role === "assistant")) {
-    messages.push({
-      id: `${taskId}-output`,
-      role: "assistant",
-      content: task.output || task.result || (task.status === "running" ? "任务仍在执行中..." : "Agent 没有返回文本结果。"),
-      created_at: task.updated_at || task.created_at,
-    });
-  }
-  return messages;
-}
-
-function HermesInlineTrace({
-  detail,
-  recentEvents,
-  liveEvents,
-}: {
-  detail: AgentTaskDetail | null;
-  recentEvents: AgentEvent[];
-  liveEvents: UiEvent[];
-}) {
-  if (!detail) return null;
-  const task = detail.task;
-  const toolCalls = detail.tool_calls ?? [];
-  const artifacts = detail.artifacts ?? [];
-  const repairs = detail.repairs ?? [];
-  const live = liveEvents.map((event) => ({
-    task_id: event.id,
-    type: event.type,
-    content: event.data,
-    created_at: event.created_at,
-  } satisfies AgentEvent));
-  return (
-    <section className="hermes-trace-stream" aria-label="工具与轨迹">
-      <div className="hermes-trace-stream__rail">
-        <Wrench size={15} />
-        <span>Agent 工具轨迹</span>
-        <StatusPill label={task.status || "unknown"} tone={taskTone(task.status || "")} />
-      </div>
-      {toolCalls.map((call, index) => <InlineToolCall key={`${toolCallName(call)}-${index}`} call={call} index={index} latest={index === toolCalls.length - 1} />)}
-      {artifacts.map((artifact) => (
-        <article key={artifact.id} className="hermes-inline-artifact">
-          <FileText size={15} />
-          <div><strong>{artifact.kind}</strong><p>{artifact.summary || artifact.path}</p></div>
-        </article>
-      ))}
-      {repairs.map((repair, index) => (
-        <article key={`${repair.tool}-${index}`} className="hermes-inline-artifact hermes-inline-artifact--repair">
-          <RotateCcw size={15} />
-          <div><strong>{repair.tool || repair.error_type || "repair"}</strong><p>{repair.guidance || repair.error}</p></div>
-        </article>
-      ))}
-      {[...recentEvents, ...live].slice(0, 6).map((event, index) => (
-        <details key={`${event.task_id}-${event.type}-${index}`} className="hermes-inline-event">
-          <summary><span>{event.type}</span><small>{formatDate(event.created_at)}</small></summary>
-          <pre>{stringify(event.content)}</pre>
-        </details>
-      ))}
-    </section>
-  );
-}
-
-function InlineToolCall({ call, index, latest }: { call: AgentTaskToolCall; index: number; latest: boolean }) {
-  const status = toolCallStatus(call);
-  const content = eventContent(call);
-  return (
-    <details className={`hermes-inline-tool hermes-inline-tool--${status}`} open={latest || status === "failed"}>
-      <summary>
-        <span className="hermes-inline-tool__prompt">$ tool run</span>
-        <strong>{toolCallName(call)}</strong>
-        <StatusPill label={status} tone={taskTone(status)} />
-      </summary>
-      <div className="hermes-inline-tool__body">
-        <div className="hermes-tool-meta"><span>#{index + 1}</span><span>{formatDate(call.started_at ?? eventTimestamp(call))}</span></div>
-        {toolCallError(call) ? <div className="tool-error">{toolCallError(call)}</div> : null}
-        <label>输入</label><pre>{stringify(call.input ?? content?.input ?? content?.payload ?? content?.arguments ?? {})}</pre>
-        <label>输出</label><pre>{stringify(call.output ?? call.fallback ?? content?.output ?? content?.result ?? content ?? {})}</pre>
-      </div>
-    </details>
-  );
-}
-
-
-function renderChatContent(text: string): ReactNode[] {
-  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
-  const nodes: ReactNode[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) { i += 1; continue; }
-    const fence = line.match(/^```(\w+)?\s*$/);
-    if (fence) {
-      const code: string[] = [];
-      i += 1;
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) code.push(lines[i++]);
-      i += i < lines.length ? 1 : 0;
-      nodes.push(<pre key={`code-${i}`}><code>{code.join("\n")}</code></pre>);
-      continue;
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      const level = heading[1].length;
-      nodes.push(
-        level === 1 ? <h1 key={`h-${i}`}>{renderInline(heading[2])}</h1> :
-        level === 2 ? <h2 key={`h-${i}`}>{renderInline(heading[2])}</h2> :
-        <h3 key={`h-${i}`}>{renderInline(heading[2])}</h3>,
-      );
-      i += 1;
-      continue;
-    }
-    if (/^>\s?/.test(line)) {
-      const quote: string[] = [];
-      while (i < lines.length && /^>\s?/.test(lines[i])) quote.push(lines[i++].replace(/^>\s?/, ""));
-      nodes.push(<blockquote key={`q-${i}`}>{renderChatContent(quote.join("\n"))}</blockquote>);
-      continue;
-    }
-    if (/^\s*[-*+]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*+]\s+/, ""));
-      nodes.push(<ul key={`ul-${i}`}>{items.map((item, n) => <li key={n}>{renderInline(item)}</li>)}</ul>);
-      continue;
-    }
-    if (/^\s*\d+[.)]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ""));
-      nodes.push(<ol key={`ol-${i}`}>{items.map((item, n) => <li key={n}>{renderInline(item)}</li>)}</ol>);
-      continue;
-    }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^```/.test(lines[i]) && !/^(#{1,3})\s+/.test(lines[i]) && !/^>\s?/.test(lines[i]) && !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) para.push(lines[i++]);
-    nodes.push(<p key={`p-${i}`}>{renderInline(para.join("\n"))}</p>);
-  }
-  return nodes.length ? nodes : [<span key="empty" className="markdown-plain-text-fallback">{text}</span>];
-}
-
-function renderInline(text: string): ReactNode[] {
-  const parts: ReactNode[] = [];
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;
-  let last = 0;
-  for (const match of text.matchAll(pattern)) {
-    if (match.index! > last) parts.push(text.slice(last, match.index));
-    const raw = match[0];
-    if (raw.startsWith("**")) parts.push(<strong key={match.index}>{raw.slice(2, -2)}</strong>);
-    else if (raw.startsWith("`")) parts.push(<code key={match.index}>{raw.slice(1, -1)}</code>);
-    else {
-      const m = raw.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
-      parts.push(<a key={match.index} href={m?.[2]} target="_blank" rel="noreferrer">{m?.[1] || raw}</a>);
-    }
-    last = match.index! + raw.length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
-}
-
-function ConsoleMessageBubble({ message }: { message: ConsoleMessage }) {
-  return (
-    <article className={`message ${message.role === "assistant" ? "message--agent" : "message--user"}`}>
-      <div className="message__meta">
-        <span>{message.role === "assistant" ? "Agent" : "你"}</span>
-        <span>{formatDate(message.created_at)}</span>
-      </div>
-      <div className="message__body">{message.content}</div>
-    </article>
-  );
-}
-
-function ToolTracePanel({
-  detail,
-  recentEvents,
-  liveEvents,
-  refresh,
-}: {
-  detail: AgentTaskDetail | null;
-  recentEvents: AgentEvent[];
-  liveEvents: UiEvent[];
-  refresh: () => Promise<void>;
-}) {
-  const task = detail?.task;
-  const taskId = task ? taskIdOf(task) : "";
-  const toolCalls = detail?.tool_calls ?? [];
-  const repairs = detail?.repairs ?? [];
-  const artifacts = detail?.artifacts ?? [];
-  const timeline = detail?.timeline ?? [];
-
-  return (
-    <>
-      <div className="hermes-tool-header">
-        <div>
-          <span>工具与轨迹</span>
-          <small>{taskId ? shortId(taskId) : "等待任务"}</small>
-        </div>
-        <button className="icon-button" onClick={() => void refresh()} title="刷新轨迹">
-          <RefreshCw size={15} />
-        </button>
-      </div>
-
-      {!detail ? (
-        <div className="hermes-tool-empty">
-          <Wrench size={28} />
-          <strong>暂无任务轨迹</strong>
-          <p>发送消息或从左侧选择任务后，工具调用会在这里单独显示。</p>
-        </div>
-      ) : (
-        <div className="hermes-tool-scroll">
-          <section className="hermes-task-card">
-            <div className="hermes-task-card__top">
-              <div>
-                <strong>{shortId(taskId)}</strong>
-                <span>{task?.source}</span>
-              </div>
-              <StatusPill label={task?.status || "unknown"} tone={taskTone(task?.status || "")} />
-            </div>
-            {task?.output ? <p>{task.output}</p> : <p className="muted">Agent 还没有返回最终文本。</p>}
-            <div className="hermes-task-card__stats">
-              <span>{toolCalls.length} 工具</span>
-              <span>{timeline.length} 事件</span>
-              <span>{repairs.length} 修复</span>
-            </div>
-          </section>
-
-          <section className="hermes-tool-section">
-            <div className="hermes-tool-section__title">
-              <Wrench size={15} />
-              <span>工具调用</span>
-            </div>
-            {toolCalls.length === 0 ? (
-              <div className="hermes-mini-empty">本任务没有工具调用。</div>
-            ) : (
-              toolCalls.map((call, index) => {
-                const status = toolCallStatus(call);
-                const content = eventContent(call);
-                return (
-                  <details
-                    key={`${toolCallName(call)}-${index}`}
-                    className={`hermes-tool-call hermes-tool-call--${status}`}
-                    open={index === toolCalls.length - 1 || status === "failed"}
-                  >
-                    <summary>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>成员信息</th>
+              <th>发言活跃度</th>
+              <th>画像标签</th>
+              <th>最后活跃</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredMembers.map((m) => {
+              const detail = details[m.user_id];
+              return (
+                <tr key={m.user_id}>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div className="group-member-avatar">
+                        {m.avatar_url ? <img src={m.avatar_url} alt="" /> : <span>{(m.nickname || "?").slice(0, 1)}</span>}
+                      </div>
                       <div>
-                        <ChevronRight size={14} />
-                        <span>{toolCallName(call)}</span>
+                        <div style={{ fontWeight: 600 }}>{m.nickname || m.user_id}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-light)" }}>ID: {m.user_id}</div>
                       </div>
-                      <StatusPill label={status} tone={taskTone(status)} />
-                    </summary>
-                    <div className="hermes-tool-call__body">
-                      <div className="hermes-tool-meta">
-                        <span>开始 {formatDate(call.started_at ?? eventTimestamp(call))}</span>
-                        <span>结束 {formatDate(call.finished_at)}</span>
-                      </div>
-                      {toolCallError(call) ? <div className="tool-error">{toolCallError(call)}</div> : null}
-                      <label>输入</label>
-                      <pre>{stringify(call.input ?? content?.input ?? content?.payload ?? content?.arguments ?? {})}</pre>
-                      <label>输出</label>
-                      <pre>{stringify(call.output ?? call.fallback ?? content?.output ?? content?.result ?? content ?? {})}</pre>
                     </div>
-                  </details>
-                );
-              })
-            )}
-          </section>
-
-          {artifacts.length > 0 ? (
-            <section className="hermes-tool-section">
-              <div className="hermes-tool-section__title">
-                <FileText size={15} />
-                <span>产物</span>
-              </div>
-              {artifacts.map((artifact) => (
-                <article key={artifact.id} className="hermes-artifact">
-                  <strong>{artifact.kind}</strong>
-                  <p>{artifact.summary || artifact.path}</p>
-                  <small>{formatDate(artifact.created_at)}</small>
-                </article>
-              ))}
-            </section>
-          ) : null}
-
-          {repairs.length > 0 ? (
-            <section className="hermes-tool-section">
-              <div className="hermes-tool-section__title">
-                <RotateCcw size={15} />
-                <span>自动修复</span>
-              </div>
-              {repairs.map((repair, index) => (
-                <article key={`${repair.tool}-${index}`} className="hermes-repair">
-                  <strong>{repair.tool || repair.error_type || "repair"}</strong>
-                  <p>{repair.guidance || repair.error}</p>
-                </article>
-              ))}
-            </section>
-          ) : null}
-
-          <section className="hermes-tool-section">
-            <div className="hermes-tool-section__title">
-              <Activity size={15} />
-              <span>实时事件</span>
-            </div>
-            {[...recentEvents, ...liveEvents.map((event) => ({
-              task_id: event.id,
-              type: event.type,
-              content: event.data,
-              created_at: event.created_at,
-            } satisfies AgentEvent))].slice(0, 10).map((event, index) => (
-              <details key={`${event.task_id}-${event.type}-${index}`} className="hermes-event-line">
-                <summary>
-                  <span>{event.type}</span>
-                  <small>{formatDate(event.created_at)}</small>
-                </summary>
-                <pre>{stringify(event.content)}</pre>
-              </details>
-            ))}
-          </section>
-        </div>
-      )}
-    </>
-  );
-}
-
-function ActivityPanel({ events, liveEvents, compact = false }: { events: AgentEvent[]; liveEvents: UiEvent[]; compact?: boolean }) {
-  const normalized = [
-    ...liveEvents.map((event) => ({
-      id: event.id,
-      type: event.type,
-      subtitle: event.topic,
-      content: event.data,
-      created_at: event.created_at,
-    })),
-    ...events.map((event, index) => ({
-      id: `${event.task_id}-${event.type}-${index}`,
-      type: event.type,
-      subtitle: event.task_id,
-      content: event.content,
-      created_at: event.created_at,
-    })),
-  ].slice(0, compact ? 40 : 120);
-  return (
-    <aside className={`panel activity-panel ${compact ? "activity-panel--compact" : ""}`}>
-      <div className="panel-title">活动流</div>
-      <div className="activity-scroll">
-        {normalized.length === 0 ? (
-          <EmptyState title="暂无活动" text="Agent 工具调用、后台任务和 WebSocket 实时事件会显示在这里。" />
-        ) : (
-          normalized.map((event) => (
-            <details key={event.id} className="activity-item">
-              <summary>
-                <span>{event.type}</span>
-                <small>{formatDate(event.created_at)}</small>
-              </summary>
-              <div className="activity-item__topic">{event.subtitle}</div>
-              <pre>{stringify(event.content)}</pre>
-            </details>
-          ))
-        )}
+                  </td>
+                  <td>
+                    <span className="status-pill status-pill--ok">
+                      {m.message_count || 0} 条发言
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {detail?.profile.tags?.map((t) => (
+                        <span key={t} className="profile-tag">#{t}</span>
+                      )) || <span style={{ color: "var(--text-muted)", fontSize: 11 }}>无</span>}
+                    </div>
+                  </td>
+                  <td style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    {formatTimeShort(m.last_active_at)}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      style={{ fontSize: 11.5, padding: "4px 10px" }}
+                      onClick={() => detail && onEditProfile(detail)}
+                    >
+                      画像管理
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-    </aside>
-  );
-}
-
-function Overview({ status, adapters, jobs, tasks }: { status: SystemStatus | null; adapters: AdapterInfo[]; jobs: ScheduledJob[]; tasks: BackgroundTask[] }) {
-  return (
-    <section className="dashboard-grid">
-      <Metric label="运行状态" value={status?.engine.state ?? "unknown"} />
-      <Metric label="通道" value={String(adapters.length)} />
-      <Metric label="定时任务" value={String(jobs.length)} />
-      <Metric label="后台任务" value={String(tasks.length)} />
-      <div className="panel wide">
-        <div className="panel-title">系统</div>
-        <pre className="code-block">{stringify(status)}</pre>
-      </div>
-    </section>
-  );
-}
-
-function AgentView({
-  tools,
-  llmStatus,
-  mcpStatus,
-  memories,
-  toolQuery,
-  setToolQuery,
-  memoryKind,
-  setMemoryKind,
-  memorySummary,
-  setMemorySummary,
-  reloadMcp,
-  createMemory,
-  deleteMemory,
-  compactMemories,
-  refresh,
-}: {
-  tools: AgentToolInfo[];
-  llmStatus: Record<string, unknown> | null;
-  mcpStatus: Record<string, unknown> | null;
-  memories: AgentMemoryInfo[];
-  toolQuery: string;
-  setToolQuery: (value: string) => void;
-  memoryKind: string;
-  setMemoryKind: (value: string) => void;
-  memorySummary: string;
-  setMemorySummary: (value: string) => void;
-  reloadMcp: () => Promise<void>;
-  createMemory: () => Promise<void>;
-  deleteMemory: (memoryId: string) => void;
-  compactMemories: () => Promise<void>;
-  refresh: () => Promise<void>;
-}) {
-  const query = toolQuery.trim().toLowerCase();
-  const filteredTools = query
-    ? tools.filter((item) =>
-        [item.name, item.description, item.toolset, item.source, item.risk_level]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(query)),
-      )
-    : tools;
-
-  return (
-    <section className="agent-grid">
-      <div className="panel agent-status-panel">
-        <div className="panel-title panel-title--with-action">
-          <span>运行状态</span>
-          <button className="ghost-button" onClick={() => void refresh()}>
-            <RefreshCw size={14} />
-            刷新
-          </button>
-        </div>
-        <div className="status-grid">
-          <StatusBlock title="LLM" data={llmStatus} />
-          <StatusBlock title="MCP" data={mcpStatus} actionLabel="重载 MCP" action={reloadMcp} />
-        </div>
-      </div>
-
-      <div className="panel tools-panel">
-        <div className="panel-title panel-title--with-action">
-          <div>
-            <span>工具</span>
-            <small>{filteredTools.length} / {tools.length}</small>
-          </div>
-          <div className="compact-search">
-            <Search size={14} />
-            <input value={toolQuery} onChange={(event) => setToolQuery(event.target.value)} placeholder="搜索工具" />
-          </div>
-        </div>
-        <div className="tool-list">
-          {filteredTools.length === 0 ? (
-            <EmptyState title="没有匹配工具" text="换一个关键词，或检查 Agent toolset 配置。" />
-          ) : (
-            filteredTools.map((tool) => (
-              <article key={tool.name} className="tool-item">
-                <div className="tool-item__head">
-                  <span>{tool.name}</span>
-                  <StatusPill label={tool.risk_level} tone={tool.risk_level === "read" ? "ok" : tool.risk_level === "write" ? "warn" : "neutral"} />
-                </div>
-                <p>{tool.description || "无描述"}</p>
-                <div className="tool-item__meta">
-                  <span>{tool.toolset || "core"}</span>
-                  <span>{tool.source || "builtin"}</span>
-                  {tool.cacheable ? <span>cacheable</span> : null}
-                </div>
-              </article>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div className="panel memories-panel">
-        <div className="panel-title panel-title--with-action">
-          <span>长期记忆</span>
-          <button className="ghost-button" onClick={() => void compactMemories()}>
-            <RotateCcw size={14} />
-            压缩
-          </button>
-        </div>
-        <div className="memory-editor">
-          <select value={memoryKind} onChange={(event) => setMemoryKind(event.target.value)}>
-            <option value="semantic">semantic</option>
-            <option value="user">user</option>
-            <option value="project">project</option>
-          </select>
-          <textarea
-            value={memorySummary}
-            onChange={(event) => setMemorySummary(event.target.value)}
-            placeholder="写入一条稳定、长期有用的记忆。不要保存密钥、临时日志或一次性任务进度。"
-          />
-          <button className="primary-button" disabled={!memorySummary.trim()} onClick={() => void createMemory()}>
-            添加记忆
-          </button>
-        </div>
-        <div className="memory-list">
-          {memories.length === 0 ? (
-            <EmptyState title="暂无记忆" text="Agent 写入或页面手动添加的长期记忆会显示在这里。" />
-          ) : (
-            memories.map((memory) => (
-              <article key={memory.id} className="memory-item">
-                <div>
-                  <div className="memory-item__meta">
-                    <span>{memory.kind}</span>
-                    <span>{formatDate(memory.created_at)}</span>
-                  </div>
-                  <p>{memory.summary}</p>
-                </div>
-                <button className="icon-button danger" title="删除" onClick={() => deleteMemory(memory.id)}>
-                  <Trash2 size={14} />
-                </button>
-              </article>
-            ))
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function StatusBlock({
-  title,
-  data,
-  actionLabel,
-  action,
-}: {
-  title: string;
-  data: Record<string, unknown> | null;
-  actionLabel?: string;
-  action?: () => Promise<void>;
-}) {
-  return (
-    <div className="status-block">
-      <div className="status-block__head">
-        <span>{title}</span>
-        {action && actionLabel ? (
-          <button className="ghost-button" onClick={() => void action()}>
-            {actionLabel}
-          </button>
-        ) : null}
-      </div>
-      <pre>{stringify(data ?? {})}</pre>
     </div>
   );
 }
+
+/* ==========================================================================
+   View: 接入通道 (Channels)
+   ========================================================================== */
 
 function Channels({
   adapters,
@@ -2694,134 +1693,136 @@ function Channels({
   wechat869Qr: AdapterStatus | null;
   channelBusy: string;
   channelMessage: string;
-  toggleAdapter: (name: string, enabled: boolean) => void;
+  toggleAdapter: (name: string, enabled: boolean) => Promise<void>;
   refreshAdapterStatus: (name: string) => Promise<void>;
   startIlinkLogin: () => Promise<void>;
   pollIlinkLogin: () => Promise<void>;
   startWechat869Login: () => Promise<void>;
   pollWechat869Login: () => Promise<void>;
-  onConfigApplied: (event: ConfigAppliedEvent) => void | Promise<void>;
+  onConfigApplied: (event: ConfigAppliedEvent) => Promise<void>;
 }) {
-  const [mode, setMode] = useState<"status" | "config">("status");
+  const [showQrModal, setShowQrModal] = useState(false);
+
   return (
-    <section className="channels-page">
-      <div className="channels-page__head">
-        <div>
-          <h2>通道管理</h2>
-          <p>先配置凭据与权限，再在运行状态中启停通道并检查连接。</p>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {channelMessage && (
+        <div style={{ padding: "10px 16px", background: "var(--ok-soft)", color: "var(--ok)", border: "1px solid var(--ok-border)", borderRadius: "var(--radius-md)", fontSize: 13 }}>
+          {channelMessage}
         </div>
-        <Segmented
-          value={mode}
-          onChange={setMode}
-          options={[
-            ["status", "运行状态"],
-            ["config", "参数配置"],
-          ]}
-        />
+      )}
+
+      <div className="channels-grid">
+        {adapters.map((ad) => {
+          const isRunning = ad.started;
+          return (
+            <div key={ad.name} className="channel-card">
+              <div className="channel-card__head">
+                <div className="channel-icon-wrap">
+                  <Network size={22} />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className={`status-pill ${isRunning ? "status-pill--ok" : "status-pill--neutral"}`}>
+                    {isRunning ? "在线运行" : "已停止"}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <h3 style={{ margin: "0 0 4px 0", fontSize: 15, fontWeight: 700 }}>
+                  {channelDisplayName(ad.name)}
+                </h3>
+                <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
+                  {ad.name === "wechat869" ? "接入方式：客户端扫码" : <>协议通道标识: <code>{ad.name}</code> ({ad.platform})</>}
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderTop: "1px solid var(--border-subtle)", paddingTop: 12 }}>
+                <button
+                  type="button"
+                  className={`ghost-button ${ad.enabled ? "danger" : ""}`}
+                  style={{ flex: 1, fontSize: 12 }}
+                  onClick={() => void toggleAdapter(ad.name, ad.enabled)}
+                >
+                  {ad.enabled ? "关闭通道" : "启用通道"}
+                </button>
+
+                {ad.name === "wechat_ilink" && (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    style={{ flex: 1, fontSize: 12 }}
+                    onClick={() => {
+                      setShowQrModal(true);
+                      void startIlinkLogin();
+                    }}
+                  >
+                    <QrCode size={13} /> 扫码登录
+                  </button>
+                )}
+
+                {ad.name === "wechat869" && (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    style={{ flex: 1, fontSize: 12 }}
+                    onClick={() => {
+                      setShowQrModal(true);
+                      void startWechat869Login();
+                    }}
+                  >
+                    <QrCode size={13} /> 扫码授权
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
-      {mode === "status" ? (
-      <div className="panel channel-panel">
-        <div className="panel-title panel-title--with-action">
-          <div>
-            <span>通道</span>
-            <small>启停状态写入数据库并立即执行。密钥与通道参数请在“参数配置”中管理。</small>
+
+      {showQrModal && (
+        <div className="modal-backdrop" onClick={() => setShowQrModal(false)}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="channel-qr-title" tabIndex={-1} onClick={(e) => e.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => setShowQrModal(false))}>
+            <div className="modal-header">
+              <h2 className="modal-title" id="channel-qr-title">微信通道扫码登录</h2>
+              <button type="button" className="icon-button" aria-label="关闭扫码登录窗口" autoFocus onClick={() => setShowQrModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ textAlign: "center" }}>
+              {ilinkQr?.qrcode ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(ilinkQr.qrcode)}`}
+                    alt="微信通道登录二维码"
+                    style={{ width: 200, height: 200, borderRadius: 12, border: "1px solid var(--border-card)" }}
+                  />
+                  <p style={{ fontSize: 13, color: "var(--text-muted)" }}>请使用手机微信扫码并确认登录</p>
+                </div>
+              ) : (
+                <div style={{ padding: 30, color: "var(--text-muted)" }}>
+                  正在生成登录凭据...
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => void pollIlinkLogin()}
+              >
+                检查登录状态
+              </button>
+            </div>
           </div>
         </div>
-        <div className="channel-card-grid">
-          {adapters.map((item) => {
-            const status = adapterStatuses[item.name] ?? {};
-            const isIlink = item.name === "wechat_ilink";
-            const is869 = item.name === "wechat869";
-            return (
-              <article key={item.name} className="channel-card">
-                <div className="channel-card__head">
-                  <div className="channel-card__title">
-                    <Network size={18} />
-                    <div>
-                      <span>{channelDisplayName(item.name)}</span>
-                      <small>{item.name} · {item.platform}</small>
-                    </div>
-                  </div>
-                  <StatusPill label={item.status || "unknown"} tone={item.started ? "ok" : item.enabled ? "warn" : "neutral"} />
-                </div>
-
-                <div className="channel-card__actions">
-                  <button className="ghost-button" onClick={() => toggleAdapter(item.name, item.enabled)}>
-                    {item.enabled ? "停用通道" : "启用通道"}
-                  </button>
-                  <button className="icon-button" title="刷新状态" onClick={() => void refreshAdapterStatus(item.name)}>
-                    <RefreshCw size={14} />
-                  </button>
-                  {isIlink ? (
-                    <>
-                      <button className="primary-button" disabled={channelBusy === item.name} onClick={() => void startIlinkLogin()}>
-                        <QrCode size={15} />
-                        获取二维码
-                      </button>
-                      <button className="ghost-button" disabled={channelBusy === item.name} onClick={() => void pollIlinkLogin()}>
-                        <LogIn size={15} />
-                        检查登录
-                      </button>
-                    </>
-                  ) : null}
-                  {is869 ? (
-                    <>
-                      <button className="primary-button" disabled={channelBusy === item.name} onClick={() => void startWechat869Login()}>
-                        <QrCode size={15} />
-                        获取二维码
-                      </button>
-                      <button className="ghost-button" disabled={channelBusy === item.name} onClick={() => void pollWechat869Login()}>
-                        <LogIn size={15} />
-                        检查登录
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-
-                <div className="channel-card__details">
-                  <KeyValue label="配置启用" value={item.configured_enabled ? "是" : "否"} />
-                  <KeyValue label="页面覆盖" value={item.persistent_enabled === undefined || item.persistent_enabled === null ? "默认" : item.persistent_enabled ? "启用" : "停用"} />
-                  <KeyValue label="实际启用" value={item.enabled ? "是" : "否"} />
-                  <KeyValue label="运行中" value={item.started ? "是" : "否"} />
-                </div>
-
-                {isIlink && ilinkQr ? (
-                  <div className="qr-box">
-                    {isImageUrl(ilinkQr.qr_url) ? <img src={ilinkQr.qr_url} alt="iLink 登录二维码" /> : <pre>{ilinkQr.qrcode}</pre>}
-                    <small>扫码后点击“检查登录”。</small>
-                  </div>
-                ) : null}
-
-                {is869 && wechat869Qr ? (
-                  <div className="qr-box">
-                    {isImageUrl(formatStatusValue(wechat869Qr.qr_image_url)) ? (
-                      <img src={formatStatusValue(wechat869Qr.qr_image_url)} alt="869 登录二维码" />
-                    ) : (
-                      <pre>{formatStatusValue(wechat869Qr.qr_url || wechat869Qr.qrcode || wechat869Qr.uuid)}</pre>
-                    )}
-                    <small>{formatStatusValue(wechat869Qr.qr_url || wechat869Qr.qrcode || wechat869Qr.uuid)}</small>
-                  </div>
-                ) : null}
-
-                <div className="channel-keys">
-                  {channelStatusEntries(item.name, status).map(([label, value]) => (
-                    <KeyValue key={label} label={label} value={formatStatusValue(value)} />
-                  ))}
-                </div>
-
-                {status.error ? <div className="channel-card__error">{formatStatusValue(status.error)}</div> : null}
-              </article>
-            );
-          })}
-        </div>
-        {channelMessage ? <div className="channel-message">{channelMessage}</div> : null}
-      </div>
-      ) : (
-        <ConfigCenter scope="channels" onApplied={onConfigApplied} />
       )}
-    </section>
+    </div>
   );
 }
+
+/* ==========================================================================
+   View: 扩展与技能 (Extensions)
+   ========================================================================== */
 
 function Extensions({
   plugins,
@@ -2833,158 +1834,117 @@ function Extensions({
 }: {
   plugins: PluginInfo[];
   skills: SkillInfo[];
-  togglePlugin: (name: string, enabled: boolean) => void;
-  toggleSkill: (name: string, enabled: boolean) => void;
+  togglePlugin: (name: string, enabled: boolean) => Promise<void>;
+  toggleSkill: (name: string, enabled: boolean) => Promise<void>;
   reloadPlugins: () => Promise<void>;
   reloadSkills: () => Promise<void>;
 }) {
+  const [tab, setTab] = useState<"plugins" | "skills">("plugins");
+
   return (
-    <section className="extensions-grid">
-      <ManageList
-        title="插件"
-        subtitle="控制插件是否参与消息分发和工具注册"
-        items={plugins}
-        reload={reloadPlugins}
-        toggle={togglePlugin}
-      />
-
-      <ManageList
-        title="Skills"
-        subtitle="包括内置 Skill、用户 Skill 和 Agent 生成的 Skill"
-        items={skills}
-        reload={reloadSkills}
-        toggle={toggleSkill}
-      />
-    </section>
-  );
-}
-
-function KeyValue({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="key-value">
-      <span>{label}</span>
-      <strong title={value}>{value}</strong>
-    </div>
-  );
-}
-
-function channelDisplayName(name: string): string {
-  if (name === "wechat_ilink") return "iLink 通道";
-  if (name === "wechat869") return "869 通道";
-  if (name === "qq") return "QQ 官方机器人";
-  if (name === "web") return "Web 控制台";
-  return name;
-}
-
-function channelStatusEntries(name: string, status: AdapterStatus): Array<[string, unknown]> {
-  if (name === "wechat_ilink") {
-    return [
-      ["登录状态", status.logged_in],
-      ["Token", status.token_configured],
-      ["Base URL", status.base_url],
-      ["Bot wxid", status.bot_wxid],
-      ["Bot 昵称", status.bot_nickname],
-      ["Cursor", status.cursor_set],
-      ["轮询", status.polling],
-      ["二维码缓存", status.login_qrcode_cached],
-    ];
-  }
-  if (name === "wechat869") {
-    return [
-      ["登录支持", status.login_supported],
-      ["登录状态", status.logged_in ?? status.login_status],
-      ["Host", status.host],
-      ["Port", status.port],
-      ["WebSocket", status.ws_url],
-      ["Admin Key", status.admin_key || status.admin_key_configured],
-      ["Token Key", status.token_key || status.token_key_configured],
-      ["Auth Key", status.auth_key],
-      ["Poll Key", status.poll_key],
-      ["Bot wxid", status.bot_wxid],
-      ["Bot 昵称", status.bot_nickname],
-      ["设备类型", status.device_type],
-      ["设备 ID", status.device_id],
-      ["媒体", status.media_enabled],
-      ["仅文本", status.text_only],
-    ];
-  }
-  if (name === "qq") {
-    return [
-      ["连接状态", status.connected],
-      ["凭据", status.configured],
-      ["Gateway 任务", status.gateway_running],
-      ["会话可恢复", status.session_ready],
-      ["机器人 ID", status.bot_id],
-      ["机器人昵称", status.bot_name],
-      ["最近事件", status.last_event_type],
-      ["最后序列", status.last_sequence],
-      ["Intents", status.intents],
-      ["最近错误", status.last_error],
-    ];
-  }
-  return Object.entries(status)
-    .filter(([key]) => !["adapter", "platform", "error"].includes(key))
-    .slice(0, 12)
-    .map(([key, value]) => [key, value]);
-}
-
-function formatStatusValue(value: unknown): string {
-  if (value === undefined || value === null || value === "") return "-";
-  if (typeof value === "boolean") return value ? "是" : "否";
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  return JSON.stringify(value);
-}
-
-function isImageUrl(value?: string): boolean {
-  if (!value) return false;
-  return value.startsWith("data:image/") || /^https?:\/\//i.test(value);
-}
-
-function ManageList<T extends { name: string; version: string; description: string; enabled: boolean }>({
-  title,
-  subtitle,
-  items,
-  reload,
-  toggle,
-}: {
-  title: string;
-  subtitle: string;
-  items: T[];
-  reload: () => Promise<void>;
-  toggle: (name: string, enabled: boolean) => void;
-}) {
-  return (
-    <div className="panel table-panel">
-      <div className="panel-title panel-title--with-action">
-        <div>
-          <span>{title}</span>
-          <small>{subtitle}</small>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div className="extensions-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className={tab === "plugins" ? "primary-button" : "ghost-button"}
+            onClick={() => setTab("plugins")}
+          >
+            🧩 插件生态 ({plugins.length})
+          </button>
+          <button
+            type="button"
+            className={tab === "skills" ? "primary-button" : "ghost-button"}
+            onClick={() => setTab("skills")}
+          >
+            ⚡ Skill 技能库 ({skills.length})
+          </button>
         </div>
-        <button className="ghost-button" onClick={() => void reload()}>
-          <RefreshCw size={14} />
-          重载
+
+        <button
+          type="button"
+          className="ghost-button"
+          onClick={() => (tab === "plugins" ? void reloadPlugins() : void reloadSkills())}
+        >
+          <RefreshCw size={14} /> 热重载
         </button>
       </div>
-      <div className="manage-scroll">
-        {items.length === 0 ? (
-          <EmptyState title={`暂无${title}`} text="重载后仍为空，请检查目录和配置。" />
-        ) : (
-          items.map((item) => (
-            <article key={item.name} className="manage-item">
-              <div className="manage-item__main">
-                <div className="manage-item__title">
-                  <span>{item.name}</span>
-                  <small>{item.version}</small>
+
+      <div className="extensions-grid">
+        {tab === "plugins" ? (
+          plugins.map((p) => (
+            <div key={p.name} className="extension-card">
+              <div className="extension-card__head">
+                <div className="extension-icon-wrap">
+                  <Package size={22} />
                 </div>
-                <p>{item.description || "无描述"}</p>
+                <span className={`status-pill ${p.enabled ? "status-pill--ok" : "status-pill--neutral"}`}>
+                  {p.enabled ? "已启用" : "已禁用"}
+                </span>
               </div>
-              <div className="manage-item__actions">
-                <StatusPill label={item.enabled ? "正在使用" : "已停用"} tone={item.enabled ? "ok" : "neutral"} />
-                <button className="ghost-button" onClick={() => toggle(item.name, item.enabled)}>
-                  {item.enabled ? "停用" : "启用"}
+
+              <div>
+                <h3 style={{ margin: "0 0 4px 0", fontSize: 15, fontWeight: 700 }}>
+                  {p.name} <small style={{ fontWeight: "normal", color: "var(--text-light)", fontSize: 12 }}>v{p.version}</small>
+                </h3>
+                <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                  {p.description ? wechatChannelDisplayText(p.description) : "暂无插件描述"}
+                </p>
+              </div>
+
+              <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: 12 }}>
+                <button
+                  type="button"
+                  className={`ghost-button ${p.enabled ? "danger" : ""}`}
+                  style={{ width: "100%", fontSize: 12 }}
+                  onClick={() => void togglePlugin(p.name, p.enabled)}
+                >
+                  {p.enabled ? "禁用插件" : "启用插件"}
                 </button>
               </div>
-            </article>
+            </div>
+          ))
+        ) : (
+          skills.map((s) => (
+            <div key={s.name} className="extension-card">
+              <div className="extension-card__head">
+                <div className="extension-icon-wrap" style={{ background: "var(--accent-purple-soft)", color: "var(--accent-purple)" }}>
+                  <Zap size={22} />
+                </div>
+                <span className={`status-pill ${s.enabled ? "status-pill--ok" : "status-pill--neutral"}`}>
+                  {s.enabled ? "已加载" : "未加载"}
+                </span>
+              </div>
+
+              <div>
+                <h3 style={{ margin: "0 0 4px 0", fontSize: 15, fontWeight: 700 }}>
+                  {s.name}
+                </h3>
+                <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                  {s.description || "暂无技能描述"}
+                </p>
+                {s.tools && s.tools.length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {s.tools.map((t) => (
+                      <span key={t} className="profile-tag" style={{ fontSize: 10.5 }}>
+                        🔧 {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: 12 }}>
+                <button
+                  type="button"
+                  className={`ghost-button ${s.enabled ? "danger" : ""}`}
+                  style={{ width: "100%", fontSize: 12 }}
+                  onClick={() => void toggleSkill(s.name, s.enabled)}
+                >
+                  {s.enabled ? "卸载技能" : "启用技能"}
+                </button>
+              </div>
+            </div>
           ))
         )}
       </div>
@@ -2992,568 +1952,261 @@ function ManageList<T extends { name: string; version: string; description: stri
   );
 }
 
-function TaskMonitor({
-  tasks,
-  selectedTaskId,
-  setSelectedTaskId,
-  detail,
-  refresh,
+/* ==========================================================================
+   View: 控制台设置 (SettingsView)
+   ========================================================================== */
+
+function SettingsView({
+  initialSection,
+  status,
+  themeMode,
+  setThemeMode,
+  onConfigApplied,
 }: {
-  tasks: AgentTask[];
-  selectedTaskId: string;
-  setSelectedTaskId: (value: string) => void;
-  detail: AgentTaskDetail | null;
-  refresh: () => Promise<void>;
+  initialSection: string;
+  status: SystemStatus | null;
+  themeMode: ThemeMode;
+  setThemeMode: (t: ThemeMode) => void;
+  onConfigApplied: (event: ConfigAppliedEvent) => Promise<void>;
 }) {
+  const [tab, setTab] = useState<"system" | "channels" | "appearance">("system");
+
   return (
-    <section className="task-monitor-grid">
-      <div className="panel task-list-panel">
-        <div className="panel-title panel-title--with-action">
-          <div>
-            <span>任务轨迹</span>
-            <small>{tasks.length} 个最近任务</small>
-          </div>
-          <button className="ghost-button" onClick={() => void refresh()}>
-            <RefreshCw size={14} />
-            刷新
-          </button>
-        </div>
-        <div className="task-list-scroll">
-          {tasks.length === 0 ? (
-            <EmptyState title="暂无任务" text="页面对话、通道唤醒和后台 Agent 执行后会生成任务轨迹。" />
-          ) : (
-            tasks.map((task) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div className="settings-tabs" style={{ display: "flex", gap: 8 }}>
+        <button
+          type="button"
+          className={tab === "system" ? "primary-button" : "ghost-button"}
+          onClick={() => setTab("system")}
+        >
+          🛠️ 系统与模型配置
+        </button>
+        <button
+          type="button"
+          className={tab === "channels" ? "primary-button" : "ghost-button"}
+          onClick={() => setTab("channels")}
+        >
+          📡 通道参数设置
+        </button>
+        <button
+          type="button"
+          className={tab === "appearance" ? "primary-button" : "ghost-button"}
+          onClick={() => setTab("appearance")}
+        >
+          🎨 界面外观与状态
+        </button>
+      </div>
+
+      {tab === "system" && <ConfigCenter scope="system" initialSection={initialSection} onApplied={onConfigApplied} />}
+      {tab === "channels" && <ConfigCenter scope="channels" onApplied={onConfigApplied} />}
+      {tab === "appearance" && (
+        <div className="settings-appearance-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+          <div className="card">
+            <h3 className="card__title">🎨 外观主题选择</h3>
+            <p className="card__desc">根据您的工作偏好自由切换日间与夜间色彩模式</p>
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
               <button
-                key={taskIdOf(task)}
-                className={`task-list-item ${selectedTaskId === taskIdOf(task) ? "task-list-item--active" : ""}`}
-                onClick={() => setSelectedTaskId(taskIdOf(task))}
+                type="button"
+                className={themeMode === "light" ? "primary-button" : "ghost-button"}
+                onClick={() => setThemeMode("light")}
               >
-                <div className="task-list-item__head">
-                  <strong>{shortId(taskIdOf(task))}</strong>
-                  <StatusPill label={task.status} tone={taskTone(task.status)} />
-                </div>
-                <span>{task.source}</span>
-                <p>{task.input || task.output || task.result || "-"}</p>
-                <small>{formatDate(task.created_at)}</small>
+                <Sun size={15} /> 纯净白底 (亮色)
               </button>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div className="panel task-detail-panel">
-        <TaskDetailContent detail={detail} refresh={refresh} />
-      </div>
-    </section>
-  );
-}
-
-function TaskDetailContent({ detail, refresh }: { detail: AgentTaskDetail | null; refresh: () => Promise<void> }) {
-  if (!detail) {
-    return <EmptyState title="未选择任务" text="选择任务后，这里会展示对话结果、工具调用、时间线和失败修复建议。" />;
-  }
-  const timeline = Array.isArray(detail.timeline) ? detail.timeline : [];
-  const toolCalls = Array.isArray(detail.tool_calls) ? detail.tool_calls : [];
-  const repairs = Array.isArray(detail.repairs) ? detail.repairs : [];
-  const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
-  const summary = detail.summary ?? {};
-  const task = detail.task;
-  const taskId = taskIdOf(task);
-  const toolFailed = summary.tool_failed ?? toolCalls.filter((call) => toolCallStatus(call) === "failed").length;
-  const llmIterations = summary.llm_iterations ?? timeline.filter((item) => String(item.type ?? "").startsWith("llm.")).length;
-
-  return (
-    <>
-      <div className="panel-title task-detail-title">
-        <div>
-          <span>{shortId(taskId)}</span>
-          <small>{task.source}</small>
-        </div>
-        <div className="row-actions">
-          <StatusPill label={task.status || "unknown"} tone={taskTone(task.status)} />
-          <button
-            className="ghost-button"
-            onClick={async () => {
-              await api.resumeAgentTask(taskId);
-              await refresh();
-            }}
-          >
-            <Play size={14} />
-            继续
-          </button>
-        </div>
-      </div>
-      <div className="task-summary-grid">
-        <Metric label="事件" value={String(summary.event_count ?? timeline.length)} />
-        <Metric label="工具调用" value={String(summary.tool_started ?? toolCalls.length)} />
-        <Metric label="失败" value={String(toolFailed)} />
-        <Metric label="LLM 轮次" value={String(llmIterations)} />
-      </div>
-      <div className="task-detail-scroll">
-        {task.output ? (
-          <section className="task-section">
-            <h3>Agent 回复</h3>
-            <div className="assistant-output">{task.output}</div>
-          </section>
-        ) : null}
-
-        <section className="task-section">
-          <h3>工具流</h3>
-          {toolCalls.length === 0 ? (
-            <p className="muted">这个任务没有工具调用。</p>
-          ) : (
-            toolCalls.map((call, index) => {
-              const status = toolCallStatus(call);
-              const content = eventContent(call);
-              return (
-                <details key={`${toolCallName(call)}-${index}`} className={`tool-call-card tool-call-card--${status}`} open={index === toolCalls.length - 1 || status === "failed"}>
-                  <summary>
-                    <span>{toolCallName(call)}</span>
-                    <StatusPill label={status} tone={taskTone(status)} />
-                  </summary>
-                  <div className="tool-call-card__body">
-                    <KeyValue label="开始" value={formatDate(call.started_at ?? eventTimestamp(call))} />
-                    <KeyValue label="结束" value={formatDate(call.finished_at)} />
-                    {toolCallError(call) ? <div className="tool-error">{toolCallError(call)}</div> : null}
-                    <div className="tool-json-grid">
-                      <pre>{stringify(call.input ?? content?.input ?? content?.payload ?? content?.arguments ?? {})}</pre>
-                      <pre>{stringify(call.output ?? call.fallback ?? content?.output ?? content?.result ?? content ?? {})}</pre>
-                    </div>
-                  </div>
-                </details>
-              );
-            })
-          )}
-        </section>
-
-        {repairs.length > 0 ? (
-          <section className="task-section">
-            <h3>失败修复建议</h3>
-            <div className="repair-list">
-              {repairs.map((repair, index) => (
-                <article key={`${repair.tool}-${index}`} className="repair-card">
-                  <div className="repair-card__head">
-                    <strong>{repair.tool || "-"}</strong>
-                    <StatusPill label={repair.error_type || "failed"} tone="warn" />
-                  </div>
-                  <p>{repair.guidance || repair.error}</p>
-                  {repair.repair_steps?.length ? (
-                    <ol>
-                      {repair.repair_steps.map((step) => (
-                        <li key={step}>{step}</li>
-                      ))}
-                    </ol>
-                  ) : null}
-                  {repair.suggested_tool ? (
-                    <pre>{stringify({ tool: repair.suggested_tool, payload: repair.suggested_payload })}</pre>
-                  ) : null}
-                </article>
-              ))}
+              <button
+                type="button"
+                className={themeMode === "dark" ? "primary-button" : "ghost-button"}
+                onClick={() => setThemeMode("dark")}
+              >
+                <Moon size={15} /> 极客暗黑 (深色)
+              </button>
+              <button
+                type="button"
+                className={themeMode === "system" ? "primary-button" : "ghost-button"}
+                onClick={() => setThemeMode("system")}
+              >
+                <Monitor size={15} /> 跟随系统
+              </button>
             </div>
-          </section>
-        ) : null}
-
-        {artifacts.length > 0 ? (
-          <section className="task-section">
-            <h3>产物</h3>
-            <div className="repair-list">
-              {artifacts.map((artifact) => (
-                <article key={artifact.id} className="repair-card">
-                  <div className="repair-card__head">
-                    <strong>{artifact.kind}</strong>
-                    <small>{formatDate(artifact.created_at)}</small>
-                  </div>
-                  <p>{artifact.summary || artifact.path}</p>
-                  <pre>{stringify({ path: artifact.path, hash: artifact.content_hash, metadata: artifact.metadata })}</pre>
-                </article>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        <section className="task-section">
-          <h3>时间线</h3>
-          <div className="timeline-list">
-            {timeline.map((item, index) => (
-              <details key={`${item.type}-${index}`} className="timeline-item">
-                <summary>
-                  <span>{item.title || item.type || "event"}</span>
-                  <small>{formatDate(item.created_at)}</small>
-                </summary>
-                <pre>{stringify(item.content)}</pre>
-              </details>
-            ))}
           </div>
-        </section>
-      </div>
-    </>
+
+          <div className="card">
+            <h3 className="card__title">⚡ 运行环境诊断</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span style={{ color: "var(--text-muted)" }}>服务名称:</span>
+                <b>{status?.name || "xbot-next"}</b>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span style={{ color: "var(--text-muted)" }}>引擎状态:</span>
+                <span className="status-pill status-pill--ok">{status?.engine?.state || "running"}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span style={{ color: "var(--text-muted)" }}>存储层:</span>
+                <span>{status?.storage || "SQLite + PG"}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
-function BackgroundTasks({
-  tasks,
-  replayTask,
-  cancelTask,
-  refresh,
+/* ==========================================================================
+   Modals & Helper Functions
+   ========================================================================== */
+
+function ProfileEditModal({
+  user,
+  onClose,
+  onSave,
 }: {
-  tasks: BackgroundTask[];
-  replayTask: (taskId: string) => void;
-  cancelTask: (taskId: string) => void;
-  refresh: () => Promise<void>;
+  user: WechatUserDetail;
+  onClose: () => void;
+  onSave: (userId: string, conversationId: string | null, summary: string, tags: string[]) => Promise<WechatUserDetail>;
 }) {
-  return (
-    <section className="panel table-panel">
-      <div className="panel-title panel-title--with-action">
-        <span>后台任务</span>
-        <button className="ghost-button" onClick={() => void refresh()}>
-          <RefreshCw size={14} />
-          刷新
-        </button>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>类型</th>
-              <th>状态</th>
-              <th>来源</th>
-              <th>描述</th>
-              <th>时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.length === 0 ? (
-              <tr>
-                <td colSpan={7}>暂无数据</td>
-              </tr>
-            ) : (
-              tasks.map((item) => (
-                <tr key={item.id}>
-                  <td title={item.id}>{shortId(item.id)}</td>
-                  <td>{item.kind}</td>
-                  <td><StatusPill label={item.status} tone={taskTone(item.status)} /></td>
-                  <td>{item.source}</td>
-                  <td>{item.description}</td>
-                  <td>{formatDate(item.created_at)}</td>
-                  <td>
-                    <div className="row-actions">
-                      <button className="icon-button" title="重放" onClick={() => replayTask(item.id)}>
-                        <RotateCcw size={14} />
-                      </button>
-                      {item.status === "running" || item.status === "pending" ? (
-                        <button className="icon-button danger" title="取消" onClick={() => cancelTask(item.id)}>
-                          <XCircle size={14} />
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
+  const [tagsText, setTagsText] = useState((user.profile.tags || []).join(", "));
+  const [summary, setSummary] = useState(user.profile.summary || "");
+  const [saving, setSaving] = useState(false);
 
-function Schedules({
-  jobs,
-  name,
-  setName,
-  schedule,
-  setSchedule,
-  input,
-  setInput,
-  timezone,
-  setTimezone,
-  maxRuns,
-  setMaxRuns,
-  createJob,
-  updateJob,
-  refresh,
-}: {
-  jobs: ScheduledJob[];
-  name: string;
-  setName: (value: string) => void;
-  schedule: string;
-  setSchedule: (value: string) => void;
-  input: string;
-  setInput: (value: string) => void;
-  timezone: string;
-  setTimezone: (value: string) => void;
-  maxRuns: string;
-  setMaxRuns: (value: string) => void;
-  createJob: () => Promise<void>;
-  updateJob: (action: "pause" | "resume" | "run" | "delete", jobId: string) => void;
-  refresh: () => Promise<void>;
-}) {
-  return (
-    <section className="schedule-grid">
-      <div className="panel schedule-create-panel">
-        <div className="panel-title">创建定时任务</div>
-        <div className="schedule-form">
-          <label>
-            <span>名称</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="可选，例如：每日总结" />
-          </label>
-          <label>
-            <span>计划</span>
-            <input value={schedule} onChange={(event) => setSchedule(event.target.value)} placeholder="30m / every 2h / daily 09:00 / 0 9 * * *" />
-          </label>
-          <label>
-            <span>时区</span>
-            <input value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="Asia/Shanghai" />
-          </label>
-          <label>
-            <span>最大次数</span>
-            <input value={maxRuns} onChange={(event) => setMaxRuns(event.target.value.replace(/\D/g, ""))} placeholder="留空不限" />
-          </label>
-          <label className="schedule-form__input">
-            <span>任务内容</span>
-            <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="到时间后让 Agent 执行什么？" />
-          </label>
-          <button className="primary-button" disabled={!schedule.trim() || !input.trim()} onClick={() => void createJob()}>
-            <CalendarClock size={15} />
-            创建任务
-          </button>
-        </div>
-      </div>
-
-      <div className="panel table-panel">
-        <div className="panel-title panel-title--with-action">
-          <span>定时任务</span>
-          <button className="ghost-button" onClick={() => void refresh()}>
-            <RefreshCw size={14} />
-            刷新
-          </button>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>启用</th>
-                <th>计划</th>
-                <th>下次运行</th>
-                <th>次数</th>
-                <th>来源</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>暂无数据</td>
-                </tr>
-              ) : (
-                jobs.map((item) => (
-                  <tr key={item.id}>
-                    <td title={item.id}>{item.name}</td>
-                    <td><StatusPill label={item.enabled ? "启用" : "暂停"} tone={item.enabled ? "ok" : "neutral"} /></td>
-                    <td>{item.schedule_display}</td>
-                    <td>{item.next_run_at ? formatDate(item.next_run_at) : "-"}</td>
-                    <td>{String(item.run_count)}</td>
-                    <td>{item.source}</td>
-                    <td>{item.last_status || "-"}</td>
-                    <td>
-                      <div className="row-actions">
-                        <button className="icon-button" title="立即运行" onClick={() => updateJob("run", item.id)}>
-                          <Play size={14} />
-                        </button>
-                        <button
-                          className="icon-button"
-                          title={item.enabled ? "暂停" : "恢复"}
-                          onClick={() => updateJob(item.enabled ? "pause" : "resume", item.id)}
-                        >
-                          {item.enabled ? <Pause size={14} /> : <Play size={14} />}
-                        </button>
-                        <button className="icon-button danger" title="删除" onClick={() => updateJob("delete", item.id)}>
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SettingsView({ onConfigApplied }: { onConfigApplied: (event: ConfigAppliedEvent) => void | Promise<void> }) {
-  return <ConfigCenter scope="system" onApplied={onConfigApplied} />;
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric panel">
-      <div className="metric__label">{label}</div>
-      <div className="metric__value">{value}</div>
-    </div>
-  );
-}
-
-function DataTable({ columns, rows }: { columns: string[]; rows: string[][] }) {
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={columns.length}>暂无数据</td>
-            </tr>
-          ) : (
-            rows.map((row, index) => (
-              <tr key={index}>
-                {row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function Segmented<T extends string>({ value, onChange, options }: { value: T; onChange: (value: T) => void; options: Array<[T, string]> }) {
-  return (
-    <div className="segmented">
-      {options.map(([option, label]) => (
-        <button key={option} className={value === option ? "segmented__item segmented__item--active" : "segmented__item"} onClick={() => onChange(option)}>
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function StatusPill({ label, tone }: { label: string; tone: "ok" | "warn" | "neutral" }) {
-  return (
-    <span className={`status-pill status-pill--${tone}`}>
-      {tone === "ok" ? <CheckCircle2 size={14} /> : <Circle size={12} />}
-      {label}
-    </span>
-  );
-}
-
-function EmptyState({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="empty-state">
-      <div>{title}</div>
-      <p>{text}</p>
-    </div>
-  );
-}
-
-function formatDate(value?: string | null): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
-
-function makeClientId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function stringify(value: unknown): string {
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-
-function shortId(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
-}
-
-function taskIdOf(task: Pick<AgentTask, "task_id" | "id">): string {
-  return task.task_id || task.id || "";
-}
-
-function taskTone(status: string): "ok" | "warn" | "neutral" {
-  if (["completed", "success"].includes(status)) return "ok";
-  if (["running", "pending", "started"].includes(status)) return "warn";
-  return "neutral";
-}
-
-function eventContent(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object") return null;
-  const maybeContent = (value as { content?: unknown }).content;
-  if (maybeContent && typeof maybeContent === "object") return maybeContent as Record<string, unknown>;
-  return value as Record<string, unknown>;
-}
-
-function toolCallName(call: AgentTaskToolCall | AgentTaskTimelineItem): string {
-  const content = eventContent(call);
-  const direct = "tool" in call ? call.tool : undefined;
-  const type = "type" in call ? call.type : undefined;
-  return String(direct || content?.tool || content?.name || type || "tool");
-}
-
-function toolCallStatus(call: AgentTaskToolCall | AgentTaskTimelineItem): string {
-  const content = eventContent(call);
-  const type = String(("type" in call ? call.type : "") || "");
-  const status = "status" in call ? call.status : undefined;
-  if (status) return String(status);
-  if (content?.status) return String(content.status);
-  if (type.includes("failed") || type.includes("error")) return "failed";
-  if (type.includes("completed") || type.includes("finished")) return "completed";
-  if (type.includes("started")) return "started";
-  return "event";
-}
-
-function toolCallError(call: AgentTaskToolCall | AgentTaskTimelineItem): string {
-  const content = eventContent(call);
-  const direct = "error" in call ? call.error : undefined;
-  return String(direct || content?.error || content?.message || "");
-}
-
-function eventTimestamp(call: AgentTaskToolCall | AgentTaskTimelineItem): string | null {
-  return "created_at" in call ? call.created_at : null;
-}
-
-type PageErrorBoundaryProps = {
-  resetKey: string;
-  children: ReactNode;
-};
-
-type PageErrorBoundaryState = {
-  error: string;
-  resetKey: string;
-};
-
-class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErrorBoundaryState> {
-  state: PageErrorBoundaryState = { error: "", resetKey: this.props.resetKey };
-
-  static getDerivedStateFromError(error: unknown): Partial<PageErrorBoundaryState> {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
-
-  static getDerivedStateFromProps(props: PageErrorBoundaryProps, state: PageErrorBoundaryState): Partial<PageErrorBoundaryState> | null {
-    if (props.resetKey !== state.resetKey) {
-      return { error: "", resetKey: props.resetKey };
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const tags = tagsText.split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean);
+      await onSave(user.contact.user_id, null, summary, tags);
+    } finally {
+      setSaving(false);
     }
-    return null;
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title" tabIndex={-1} onClick={(e) => e.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, onClose)}>
+        <div className="modal-header">
+          <h2 className="modal-title" id="profile-dialog-title">编辑用户画像 · {user.contact.nickname || user.contact.user_id}</h2>
+          <button type="button" className="icon-button" aria-label="关闭用户画像窗口" autoFocus onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div className="modal-body">
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text-main)", display: "block", marginBottom: 6 }}>
+                画像标签 (以逗号分隔)
+              </label>
+              <input
+                type="text"
+                className="input-text"
+                value={tagsText}
+                onChange={(e) => setTagsText(e.target.value)}
+                placeholder="例如: 技术极客, 提问活跃, VIP客户..."
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text-main)", display: "block", marginBottom: 6 }}>
+                个性与交互特征描述
+              </label>
+              <textarea
+                className="input-text"
+                rows={4}
+                value={summary}
+                onChange={(e) => setSummary(e.target.value)}
+                placeholder="输入或修改针对该用户的长期画像分析与记忆摘要..."
+              />
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="ghost-button" onClick={onClose}>
+            取消
+          </button>
+          <button type="button" className="primary-button" onClick={handleSave} disabled={saving}>
+            {saving ? "保存中..." : "保存画像"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function trapDialogFocus(event: ReactKeyboardEvent<HTMLDivElement>, onClose?: () => void) {
+  if (event.key === "Escape" && onClose) {
+    event.preventDefault();
+    onClose();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+    "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])",
+  )).filter((element) => !element.hasAttribute("hidden"));
+  if (focusable.length === 0) {
+    event.preventDefault();
+    event.currentTarget.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function formatTimeShort(value?: string | null): string {
+  if (!value) return "";
+  try {
+    const d = new Date(value.endsWith("Z") ? value : `${value}Z`);
+    return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return value;
+  }
+}
+
+function channelDisplayName(name: string): string {
+  const map: Record<string, string> = {
+    wechat_ilink: "微信 iLink 官方网关",
+    wechat869: WECHAT_CLIENT_LABEL,
+    qq: "QQ 开放平台网关",
+    web: "Web 网页交互通道",
+    telegram: "Telegram Bot 网关",
+  };
+  return map[name] || name;
+}
+
+function sortWechatMessages(items: WechatMessage[]): WechatMessage[] {
+  return [...items].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+
+class PageErrorBoundary extends Component<{ resetKey: string; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
   }
 
   render() {
     if (this.state.error) {
       return (
-        <div className="panel page-error">
-          <div className="panel-title">页面渲染失败</div>
-          <p>{this.state.error}</p>
+        <div style={{ padding: 30, textAlign: "center" }}>
+          <div className="error-banner">页面渲染异常: {this.state.error.message}</div>
+          <button
+            type="button"
+            className="primary-button"
+            style={{ marginTop: 16 }}
+            onClick={() => this.setState({ error: null })}
+          >
+            重试恢复
+          </button>
         </div>
       );
     }

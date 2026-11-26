@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from xbot.app.deps import get_context
 from xbot.runtime.context import AppContext
 from xbot.services.config_service import ConfigApplyError, ConfigConflictError, ConfigService
+from xbot.services.llm_model_service import LLMModelDiscoveryError, LLMModelDiscoveryService
 
 router = APIRouter()
 
@@ -26,6 +27,21 @@ class ConfigUpdateRequest(BaseModel):
 @router.get("")
 async def get_config(ctx: AppContext = Depends(get_context)) -> dict:
     return {"success": True, "data": ConfigService(ctx.settings.config_file).snapshot(ctx.settings)}
+
+
+@router.post("/llm/models/discover")
+async def discover_llm_models(ctx: AppContext = Depends(get_context)) -> dict:
+    try:
+        models = await LLMModelDiscoveryService().discover(ctx.settings.agent.llm)
+    except LLMModelDiscoveryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "data": {
+            "models": models,
+            "count": len(models),
+        },
+    }
 
 
 @router.put("")

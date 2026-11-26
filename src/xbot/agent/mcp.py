@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from contextlib import AsyncExitStack
@@ -49,7 +50,7 @@ class MCPClientManager:
                 logger.warning("MCP server 连接失败: name={} error={}", name, error)
 
     async def stop(self) -> None:
-        for connection in list(self._servers.values()):
+        for connection in self._servers.values():
             await connection.close()
         self._servers.clear()
 
@@ -167,31 +168,54 @@ class MCPServerConnection:
         self.registered_tool_names: list[str] = []
         self.status = "new"
         self.last_error: str | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._stop = asyncio.Event()
 
     async def connect(self) -> None:
         self._validate_config()
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._stop.clear()
+        # The SDK's AnyIO task groups must be entered and exited by the same task.
+        task = self._task = asyncio.create_task(self._run(ready))
+        try:
+            await ready
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+
+    async def _run(self, ready: asyncio.Future[None]) -> None:
         self.status = "connecting"
         try:
-            with anyio.fail_after(max(1, self.config.connect_timeout)):
-                if self.config.command:
-                    await self._connect_stdio()
-                else:
-                    await self._connect_http()
-                await self.session.initialize()
-                result = await self.session.list_tools()
-                self.tools = list(getattr(result, "tools", []) or [])
-            self.status = "connected"
-            self.last_error = None
+            async with self.stack:
+                async with asyncio.timeout(max(1, self.config.connect_timeout)):
+                    if self.config.command:
+                        await self._connect_stdio()
+                    else:
+                        await self._connect_http()
+                    await self.session.initialize()
+                    result = await self.session.list_tools()
+                    self.tools = list(getattr(result, "tools", []) or [])
+                self.status = "connected"
+                self.last_error = None
+                logger.info("MCP server 已连接: name={} tools={}", self.name, len(self.tools))
+                ready.set_result(None)
+                await self._stop.wait()
         except Exception as exc:
             self.status = "failed"
-            self.last_error = str(exc)
-            await self.close()
-            self.status = "failed"
-            raise
-        logger.info("MCP server 已连接: name={} tools={}", self.name, len(self.tools))
+            self.last_error = type(exc).__name__
+            if not ready.done():
+                ready.set_exception(exc)
+            else:
+                logger.warning("MCP 会话结束异常: name={} error={}", self.name, self.last_error)
+        finally:
+            self.session = None
 
     async def close(self) -> None:
-        await self.stack.aclose()
+        self._stop.set()
+        if self._task is not None:
+            await self._task
+            self._task = None
         self.status = "closed"
 
     async def call_tool(self, tool_name: str, payload: dict) -> dict:
@@ -217,15 +241,21 @@ class MCPServerConnection:
         self.session = await self.stack.enter_async_context(ClientSession(read_stream, write_stream))
 
     async def _connect_http(self) -> None:
+        import httpx2
         from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.client.streamable_http import streamable_http_client
 
         if not self.config.url:
             raise XBotError(f"MCP server url is required: {self.name}")
-        client_result = await self.stack.enter_async_context(
-            streamablehttp_client(self.config.url, headers=self.config.headers or None)
+        client = await self.stack.enter_async_context(
+            httpx2.AsyncClient(
+                headers=self.config.headers,
+                timeout=httpx2.Timeout(max(1, self.config.connect_timeout), read=300),
+            )
         )
-        read_stream, write_stream = client_result[0], client_result[1]
+        read_stream, write_stream = await self.stack.enter_async_context(
+            streamable_http_client(self.config.url, http_client=client)
+        )
         self.session = await self.stack.enter_async_context(ClientSession(read_stream, write_stream))
 
     def _validate_config(self) -> None:

@@ -1,5 +1,16 @@
 ARG SQLITE_BUILD_IMAGE=debian:bookworm-slim
-ARG RUNTIME_IMAGE=python:3.11-slim-bookworm
+ARG RUNTIME_IMAGE=python:3.14-slim-bookworm
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.0
+
+FROM ${UV_IMAGE} AS uv_bin
+
+FROM node:22-bookworm-slim AS ui_build
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+WORKDIR /ui
+COPY ui/package*.json ./
+RUN npm ci --registry "$NPM_REGISTRY"
+COPY ui ./
+RUN npm run build
 
 FROM ${SQLITE_BUILD_IMAGE} AS sqlite_build
 ARG SQLITE_AUTOCONF_VERSION=3530400
@@ -37,18 +48,19 @@ FROM ${RUNTIME_IMAGE} AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PATH=/app/.venv/bin:$PATH \
     XBOT_CONFIG_FILE=/app/configs/xbot.toml \
-    XBOT_LOAD_DOTENV=true
+    XBOT_LOAD_DOTENV=false
 
 ARG INSTALL_PLAYWRIGHT=false
 ARG APT_MIRROR=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=localhost,127.0.0.1
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
-ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 WORKDIR /app
+COPY --from=uv_bin /uv /usr/local/bin/uv
 
 RUN if [ -n "$APT_MIRROR" ]; then \
         sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g; s|http://deb.debian.org/debian-security|$APT_MIRROR-security|g" /etc/apt/sources.list.d/debian.sources; \
@@ -62,6 +74,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         ca-certificates \
         curl \
         git \
+        libreoffice-writer \
         nodejs \
         npm \
     && rm -rf /var/lib/apt/lists/*
@@ -73,27 +86,21 @@ RUN ln -sf libsqlite3.so.3.53.4 /usr/local/lib/libsqlite3.so.0 \
     && ldconfig \
     && python -c "import sqlite3; assert sqlite3.sqlite_version_info >= (3, 51, 3), sqlite3.sqlite_version; db=sqlite3.connect(':memory:'); db.execute('CREATE VIRTUAL TABLE docs USING fts5(content)'); db.close()"
 
-COPY pyproject.toml README.md LICENSE alembic.ini ./
+COPY pyproject.toml uv.lock README.md LICENSE alembic.ini ./
 COPY configs ./configs
 COPY migrations ./migrations
 COPY plugins ./plugins
 COPY scripts ./scripts
 COPY skills ./skills
 COPY src ./src
-COPY vendor ./vendor
-COPY ui ./ui
-COPY docker/entrypoint.sh /usr/local/bin/xbot-docker-entrypoint
-
-RUN chmod +x /usr/local/bin/xbot-docker-entrypoint \
-    && python -m pip install --no-build-isolation -i "$PIP_INDEX_URL" -e ./vendor/hermes -e ".[agent]" \
-    && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then python -m pip install --no-build-isolation -i "$PIP_INDEX_URL" -e ".[browser]" && python -m playwright install --with-deps chromium; fi \
-    && cd /app/ui \
-    && npm config set registry "$NPM_REGISTRY" \
-    && npm ci \
-    && npm run build \
+COPY --from=ui_build /ui/dist ./ui/dist
+RUN python scripts/prepare_hermes.py \
+    && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then set -- --extra browser; else set --; fi \
+    && uv sync --locked --python /usr/local/bin/python --extra agent "$@" \
+    && python -c 'from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()' \
+    && if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then python -m playwright install --with-deps chromium; fi \
     && mkdir -p /app/data /app/logs /app/workspace
 
 EXPOSE 8548
 
-ENTRYPOINT ["xbot-docker-entrypoint"]
 CMD ["xbot", "run"]

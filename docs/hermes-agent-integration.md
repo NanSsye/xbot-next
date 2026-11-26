@@ -1,6 +1,6 @@
 # Hermes Agent Integration
 
-更新时间：2026-08-05
+更新时间：2026-11-26
 
 `xbot-next` 现在内嵌 Hermes Agent，默认不再使用自研 Agent 工具循环作为生产执行核心。
 
@@ -9,10 +9,11 @@
 如果只使用通道和插件，用户不需要安装内置 Agent/Hermes 额外依赖。需要使用内置 Agent 时，安装可选依赖：
 
 ```bash
-pip install -e ./vendor/hermes -e ".[agent]"
+uv run --no-project --python 3.14 python scripts/prepare_hermes.py
+uv sync --locked --python 3.14 --extra agent
 ```
 
-Hermes 源码随项目放在 `vendor/hermes/`，不需要单独启动 Hermes。当前固定版本为官方 `v2026.8.3`（package `0.20.0`，commit `3c27eb6234bf91b8ceee9e9071591b31e9b148cb`）。
+不需要单独启动 Hermes。当前固定版本为官方 `v0.23.4`（提交 `8fc0374447313e276f6b9a2764bfc750190c966a`）。上游源码包的 Python 元数据报 `0.0.0`，实际版本以固定提交和 `install-stamp.json` 为准。
 
 正常启动 xbot 即可：
 
@@ -52,19 +53,20 @@ xbot 不再把完整聊天历史和会话 summary 拼进 Agent 输入，也不�
 Hermes 源码放在：
 
 ```text
-vendor/hermes/
+.hermes/v0.23.4/
 ```
 
-`vendor/hermes/` 是生成目录，不在这里直接维护 xbot 工具。固定来源、archive SHA-256、允许同步的目录及有序补丁队列都声明在 `vendor/hermes-upstream.json`，同步与校验命令为：
+`configs/hermes-release.json` 固定提交和归档 SHA-256；准备脚本校验归档后才解压，`uv.lock` 将这个目录作为 editable 依赖。已有归档可离线准备：
 
 ```bash
-python scripts/sync_hermes.py
-python scripts/sync_hermes.py --verify-only
+uv run --no-project --python 3.14 python scripts/prepare_hermes.py --archive /path/to/hermes.zip
 ```
 
-xbot 自有微信工具位于 `src/xbot/agent/tools/hermes_wechat.py`。只有无法在 xbot wrapper 解决的上游改动才放入 `patches/hermes/`，并按顺序写进 manifest；当前补丁队列为空。
+`vendor/hermes/` 和旧同步脚本保留，但不参与新版安装。Xbot 自有工具继续维护在 `src/xbot/agent/tools/`；新版不修改上游源码。依赖锁沿用上游的 Pillow 13 覆盖，以处理 `browser-harness` 元数据的旧版本限制。
 
 Hermes 使用 WAL 模式保存 session。运行时链接的 SQLite 必须为 `>=3.51.3`、`3.50.7` backport 或 `3.44.6` backport；xbot 会在写入 `state.db` 前拒绝已知不安全版本。Docker 镜像固定构建 SQLite 3.53.4，本地部署需使用通过门禁的 Python 运行时。
+
+新版会接管 Hermes 状态库。旧库迁移应先在独立副本演练；回退时恢复升级前的 Hermes 数据快照并使用对应旧运行环境，不要用旧版打开已升级的库。
 
 ## 配置边界
 

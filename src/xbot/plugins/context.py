@@ -19,3 +19,5 @@ class PluginContext:
     conversations: Any | None = None
     settings: Any | None = None
     adapters: Any | None = None
+    events: Any | None = None
+    scheduler: Any | None = None

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from xbot.core.timeutils import utc_now
@@ -63,12 +63,20 @@ class AgentRepository:
     async def get_task(self, task_id: str) -> AgentTaskRecord | None:
         return await self.session.get(AgentTaskRecord, task_id)
 
-    async def list_tasks(self, limit: int = 50) -> list[AgentTaskRecord]:
-        result = await self.session.execute(
-            select(AgentTaskRecord)
-            .order_by(AgentTaskRecord.created_at.desc())
-            .limit(max(1, min(limit, 500)))
-        )
+    async def list_tasks(
+        self, limit: int = 50, *, source: str | None = None, web: bool = False, offset: int = 0
+    ) -> list[AgentTaskRecord]:
+        stmt = select(AgentTaskRecord)
+        if source is not None:
+            stmt = stmt.where(AgentTaskRecord.source == source)
+        elif web:
+            stmt = stmt.where(or_(
+                AgentTaskRecord.source == "terminal:control-ui",
+                AgentTaskRecord.source.startswith("terminal:control-ui:", autoescape=True),
+            ))
+        result = await self.session.execute(stmt.order_by(
+            AgentTaskRecord.created_at.desc(), AgentTaskRecord.id.desc()
+        ).offset(offset).limit(max(1, min(limit, 500))))
         return list(result.scalars().all())
 
     async def add_event(self, task_id: str, event_type: str, content: str) -> None:

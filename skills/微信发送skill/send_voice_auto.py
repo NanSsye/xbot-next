@@ -5,7 +5,7 @@
 
 示例:
   python3.11 send_voice_auto.py "你好！" "wxid_xxx"
-  python3.11 send_voice_auto.py "大家好！" "50540167809@chatroom"
+  python3.11 send_voice_auto.py "大家好！" "demo@chatroom"
   python3.11 send_voice_auto.py "你好！" "wxid_xxx" "Chinese (Mandarin)_Warm_Bestie"
 """
 import sys
@@ -16,7 +16,7 @@ import subprocess
 import time
 
 PYTHON_BIN = "/usr/local/bin/python3.11"
-API_KEY = "sk-cp-_sb6YWyon1RmUZc9-2ELmpLQDq3cnKRdWGL_D24MBw4JLO6UKW1wf3Jl4lRj1UhXxCXjFIOatNiNqBSRUT8vdHR7jGZJAQzuR2PoCyGoe-pG-ACpAzgPTmM"
+API_KEY_ENV = "XBOT_MINIMAX_API_KEY"
 TTS_URL = "https://api.minimaxi.com/v1/t2a_v2"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SEND_SCRIPT = SCRIPT_DIR + "/send_869_media.py"
@@ -29,6 +29,9 @@ DEFAULT_EMOTION = "happy"
 
 def tts_synthesize(text, voice_id=DEFAULT_VOICE, emotion=DEFAULT_EMOTION):
     """Step 1: TTS 合成 → Step 2: 下载 MP3"""
+    api_key = os.environ.get(API_KEY_ENV, "").strip()
+    if not api_key:
+        raise RuntimeError(f"请先设置 {API_KEY_ENV}")
     print(f"[TTS] 合成: {text[:30]}...")
     payload = {
         "model": "speech-2.8-hd",
@@ -52,7 +55,7 @@ def tts_synthesize(text, voice_id=DEFAULT_VOICE, emotion=DEFAULT_EMOTION):
     data_enc = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         TTS_URL, data=data_enc,
-        headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST"
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -113,7 +116,7 @@ def main():
         print("用法: python3.11 send_voice_auto.py \"<文字>\" \"<目标>\" [音色]")
         print("示例:")
         print("  python3.11 send_voice_auto.py \"你好！\" \"wxid_xxx\"")
-        print("  python3.11 send_voice_auto.py \"大家好！\" \"50540167809@chatroom\"")
+        print("  python3.11 send_voice_auto.py \"大家好！\" \"demo@chatroom\"")
         print("  python3.11 send_voice_auto.py \"发语音！\" \"wxid_xxx\" \"Chinese (Mandarin)_Warm_Bestie\"")
         sys.exit(1)
 

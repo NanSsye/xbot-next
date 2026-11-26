@@ -1,6 +1,8 @@
 import {
+  Boxes,
   Check,
   CheckCircle2,
+  ChevronRight,
   CircleAlert,
   Eye,
   EyeOff,
@@ -18,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
+import { WECHAT_CLIENT_LABEL, wechatChannelDisplayText } from "./wechatChannelLabel";
 import type {
   ConfigApplyResult,
   ConfigChange,
@@ -36,6 +39,7 @@ export type ConfigAppliedEvent = {
 
 type ConfigCenterProps = {
   scope: ConfigScope;
+  initialSection?: string;
   onApplied?: (event: ConfigAppliedEvent) => void | Promise<void>;
 };
 
@@ -45,14 +49,24 @@ type EvaluatedChange = {
   preview: string;
 };
 
+type ModelPoolState = {
+  discovered: string[];
+  loading: boolean;
+  loaded: boolean;
+  error: string;
+  connectionDirty: boolean;
+  defaultModel: string;
+  onDiscover: () => void;
+};
+
 const DRAFT_STORAGE_PREFIX = "xbot.config.draft.v1";
 
-export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
+export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCenterProps) {
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
   const [draft, setDraft] = useState<Record<string, DraftValue>>({});
   const [resets, setResets] = useState<Record<string, boolean>>({});
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
-  const [selectedSection, setSelectedSection] = useState("");
+  const [selectedSection, setSelectedSection] = useState(initialSection);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -60,6 +74,10 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [draftSavedAt, setDraftSavedAt] = useState("");
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelsError, setModelsError] = useState("");
 
   const loadSnapshot = useCallback(async () => {
     setLoading(true);
@@ -72,6 +90,9 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
       setDraft({ ...nextDraft, ...restored.values });
       setResets(restored.resets);
       setDraftSavedAt(restored.savedAt);
+      setDiscoveredModels([]);
+      setModelsLoaded(false);
+      setModelsError("");
       const first = next.sections.find((section) => section.scope === scope);
       setSelectedSection((current) =>
         next.sections.some((section) => section.scope === scope && section.key === current)
@@ -95,6 +116,13 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
   );
   const allFields = useMemo(() => scopedSections.flatMap((section) => section.fields), [scopedSections]);
   const evaluation = useMemo(() => evaluateChanges(allFields, draft, resets), [allFields, draft, resets]);
+  const enabledModelOptions = useMemo(
+    () => parseListDraft(draft["agent.llm.enabled_models"]),
+    [draft],
+  );
+  const modelConnectionDirty = evaluation.entries.some((entry) =>
+    ["agent.llm.provider", "agent.llm.base_url", "agent.llm.api_key"].includes(entry.field.path),
+  );
 
   useEffect(() => {
     if (!snapshot || loading) return;
@@ -180,6 +208,23 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
     window.sessionStorage.removeItem(draftStorageKey(scope));
   }
 
+  async function discoverModels() {
+    if (modelsLoading || modelConnectionDirty) return;
+    setModelsLoading(true);
+    setModelsError("");
+    try {
+      const result = await api.discoverLlmModels();
+      setDiscoveredModels(result.models);
+      setModelsLoaded(true);
+    } catch (err) {
+      setDiscoveredModels([]);
+      setModelsLoaded(true);
+      setModelsError(errorMessage(err));
+    } finally {
+      setModelsLoading(false);
+    }
+  }
+
   async function saveChanges() {
     if (!snapshot || evaluation.entries.length === 0 || saving) return;
     if (Object.keys(evaluation.errors).length > 0) {
@@ -192,6 +237,9 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
     setSaving(true);
     setError("");
     setMessage("");
+    const shouldDiscoverModels = evaluation.entries.some((entry) =>
+      ["agent.llm.provider", "agent.llm.base_url", "agent.llm.api_key"].includes(entry.field.path),
+    );
     try {
       const result = await api.updateConfig({
         revision: snapshot.revision,
@@ -214,6 +262,21 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
         result.restart_required.length ? `${result.restart_required.length} 项等待重启` : "",
       ].filter(Boolean).join("，");
       setMessage(summary || "配置已保存，当前运行值没有变化。");
+      if (shouldDiscoverModels) {
+        setModelsLoading(true);
+        setModelsError("");
+        try {
+          const discovery = await api.discoverLlmModels();
+          setDiscoveredModels(discovery.models);
+          setModelsLoaded(true);
+        } catch (discoveryError) {
+          setDiscoveredModels([]);
+          setModelsLoaded(true);
+          setModelsError(errorMessage(discoveryError));
+        } finally {
+          setModelsLoading(false);
+        }
+      }
       try {
         await onApplied?.({ apiToken: nextApiToken, result });
       } catch (refreshError) {
@@ -296,14 +359,14 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
             return (
               <button
                 key={section.key}
-                className={section.key === activeSection?.key ? "is-active" : ""}
+                className={`config-section-button ${section.key === activeSection?.key ? "is-active" : ""}`}
                 onClick={() => setSelectedSection(section.key)}
               >
                 <span>
-                  <strong>{section.title}</strong>
+                  <strong>{sectionDisplayTitle(section)}</strong>
                   <small>{section.fields.length} 个字段</small>
                 </span>
-                {dirty ? <b>{dirty}</b> : <span className="config-section-rail__arrow">›</span>}
+                {dirty ? <b>{dirty}</b> : <ChevronRight className="config-section-rail__arrow" size={17} />}
               </button>
             );
           })}
@@ -315,10 +378,10 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
             <>
               <div className="config-section-intro">
                 <div>
-                  <h3>{activeSection.title}</h3>
-                  <p>{activeSection.description}</p>
+                  <h3>{sectionDisplayTitle(activeSection)}</h3>
+                  <p>{wechatChannelDisplayText(activeSection.description)}</p>
                 </div>
-                <span className="config-chip">{activeSection.key}</span>
+                {activeSection.key !== "adapters.wechat869" && <span className="config-chip">{activeSection.key}</span>}
               </div>
               <div className="config-fields">
                 {visibleFields.map((field) => (
@@ -330,6 +393,16 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
                     dirty={evaluation.entries.some((entry) => entry.field.path === field.path)}
                     error={evaluation.errors[field.path]}
                     visible={Boolean(visibleSecrets[field.path])}
+                    optionsOverride={field.path === "agent.llm.model" ? enabledModelOptions : undefined}
+                    modelPool={field.path === "agent.llm.enabled_models" ? {
+                      discovered: discoveredModels,
+                      loading: modelsLoading,
+                      loaded: modelsLoaded,
+                      error: modelsError,
+                      connectionDirty: modelConnectionDirty,
+                      defaultModel: String(draft["agent.llm.model"] ?? ""),
+                      onDiscover: () => void discoverModels(),
+                    } : undefined}
                     onChange={(value) => updateField(field.path, value)}
                     onToggleReset={() => toggleReset(field)}
                     onToggleVisible={() => setVisibleSecrets((current) => ({ ...current, [field.path]: !current[field.path] }))}
@@ -402,7 +475,7 @@ export function ConfigCenter({ scope, onApplied }: ConfigCenterProps) {
                   window.setTimeout(() => document.getElementById(fieldDomId(entry.field.path))?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
                 }}
               >
-                <span>{entry.field.label}</span>
+                <span>{wechatChannelDisplayText(entry.field.label)}</span>
                 <small>{entry.preview}</small>
               </button>
             )) : <p>修改字段后，这里会列出实际生效内容。</p>}
@@ -472,6 +545,8 @@ function ConfigFieldEditor({
   dirty,
   error,
   visible,
+  optionsOverride,
+  modelPool,
   onChange,
   onToggleReset,
   onToggleVisible,
@@ -482,6 +557,8 @@ function ConfigFieldEditor({
   dirty: boolean;
   error?: string;
   visible: boolean;
+  optionsOverride?: string[];
+  modelPool?: ModelPoolState;
   onChange: (value: DraftValue) => void;
   onToggleReset: () => void;
   onToggleVisible: () => void;
@@ -489,14 +566,15 @@ function ConfigFieldEditor({
   const id = fieldDomId(field.path);
   const descriptionId = `${id}-description`;
   const errorId = `${id}-error`;
+  const isWechatClient = field.path.startsWith("adapters.wechat869.");
   const describedBy = [field.description ? descriptionId : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined;
 
   return (
     <article id={id} className={`config-field ${dirty ? "is-dirty" : ""} ${reset ? "is-reset" : ""} ${error ? "has-error" : ""}`}>
       <div className="config-field__head">
         <div className="config-field__title">
-          <label htmlFor={`${id}-control`}>{field.label}</label>
-          <code>{field.path}</code>
+          <label htmlFor={`${id}-control`}>{wechatChannelDisplayText(field.label)}</label>
+          {!isWechatClient && <code>{field.path}</code>}
         </div>
         <div className="config-field__badges">
           {field.secret ? <span className="config-chip config-chip--secret"><FileKey2 size={11} /> 敏感</span> : null}
@@ -510,10 +588,10 @@ function ConfigFieldEditor({
       </div>
 
       <div className="config-field__meta">
-        {field.env_name ? <span>{field.env_name}</span> : <span>仅 TOML 配置</span>}
+        {!isWechatClient && <span>{field.env_name || "仅 TOML 配置"}</span>}
         {field.pending_restart ? <b>当前值等待重启</b> : null}
       </div>
-      {field.description ? <p id={descriptionId} className="config-field__description">{field.description}</p> : null}
+      {field.description ? <p id={descriptionId} className="config-field__description">{wechatChannelDisplayText(field.description)}</p> : null}
 
       {field.adapter_toggle ? (
         <div className="config-field__readonly">
@@ -535,6 +613,8 @@ function ConfigFieldEditor({
           field={field}
           value={value}
           visible={visible}
+          optionsOverride={optionsOverride}
+          modelPool={modelPool}
           describedBy={describedBy}
           invalid={Boolean(error)}
           onChange={onChange}
@@ -548,7 +628,7 @@ function ConfigFieldEditor({
           <span>{field.configured ? `${field.masked_value || "已配置"}，留空保持现有值` : "尚未配置，保存后将只显示配置状态"}</span>
         </div>
       ) : null}
-      {error ? <div id={errorId} className="config-field__error">{error}</div> : null}
+      {error ? <div id={errorId} className="config-field__error">{wechatChannelDisplayText(error)}</div> : null}
       {field.overridden && !field.adapter_toggle && !reset ? (
         <button type="button" className="config-reset-link" onClick={onToggleReset}>
           <RotateCcw size={12} />
@@ -564,6 +644,8 @@ function FieldControl({
   field,
   value,
   visible,
+  optionsOverride,
+  modelPool,
   describedBy,
   invalid,
   onChange,
@@ -573,11 +655,26 @@ function FieldControl({
   field: ConfigField;
   value: DraftValue;
   visible: boolean;
+  optionsOverride?: string[];
+  modelPool?: ModelPoolState;
   describedBy?: string;
   invalid: boolean;
   onChange: (value: DraftValue) => void;
   onToggleVisible: () => void;
 }) {
+  if (field.path === "agent.llm.enabled_models" && modelPool) {
+    return (
+      <ModelPoolControl
+        id={id}
+        value={String(value)}
+        describedBy={describedBy}
+        invalid={invalid}
+        state={modelPool}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (field.type === "boolean") {
     const checked = Boolean(value);
     return (
@@ -596,7 +693,8 @@ function FieldControl({
     );
   }
 
-  if (field.options.length > 0) {
+  const selectOptions = optionsOverride ?? field.options;
+  if (selectOptions.length > 0) {
     return (
       <select
         id={id}
@@ -605,7 +703,7 @@ function FieldControl({
         aria-invalid={invalid}
         onChange={(event) => onChange(event.target.value)}
       >
-        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+        {selectOptions.map((option) => <option key={option} value={option}>{option}</option>)}
       </select>
     );
   }
@@ -645,6 +743,98 @@ function FieldControl({
           {visible ? <EyeOff size={15} /> : <Eye size={15} />}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function ModelPoolControl({
+  id,
+  value,
+  describedBy,
+  invalid,
+  state,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  describedBy?: string;
+  invalid: boolean;
+  state: ModelPoolState;
+  onChange: (value: DraftValue) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const enabled = parseListDraft(value);
+  const [knownModels, setKnownModels] = useState<string[]>(enabled);
+  useEffect(() => {
+    setKnownModels((current) =>
+      Array.from(new Set([...current, ...enabled, ...state.discovered])).sort((a, b) => a.localeCompare(b)),
+    );
+  }, [value, state.discovered]);
+  const candidates = knownModels;
+  const normalizedQuery = query.trim().toLowerCase();
+  const visible = candidates.filter((model) => model.toLowerCase().includes(normalizedQuery));
+
+  function toggle(model: string) {
+    if (model === state.defaultModel) return;
+    const next = enabled.includes(model)
+      ? enabled.filter((item) => item !== model)
+      : [...enabled, model];
+    onChange(next.join("\n"));
+  }
+
+  return (
+    <div id={id} className="model-pool" aria-describedby={describedBy} aria-invalid={invalid}>
+      <div className="model-pool__toolbar">
+        <div className="model-pool__identity">
+          <span><Boxes size={17} /></span>
+          <div><strong>{enabled.length} 个模型已启用</strong><small>群聊只能选择模型池中的模型</small></div>
+        </div>
+        <button
+          type="button"
+          className="ghost-button model-pool__discover"
+          disabled={state.loading || state.connectionDirty}
+          onClick={state.onDiscover}
+        >
+          <RefreshCw className={state.loading ? "spin" : ""} size={14} />
+          {state.loading ? "获取中…" : "获取模型"}
+        </button>
+      </div>
+
+      {state.connectionDirty ? (
+        <div className="model-pool__notice model-pool__notice--warn"><CircleAlert size={14} />先保存 API 地址、协议或 Key，再自动获取最新模型。</div>
+      ) : state.error ? (
+        <div className="model-pool__notice model-pool__notice--error" role="alert"><CircleAlert size={14} />{state.error}</div>
+      ) : state.loaded ? (
+        <div className="model-pool__notice model-pool__notice--success"><CheckCircle2 size={14} />已发现 {state.discovered.length} 个模型，勾选后保存才会生效。</div>
+      ) : (
+        <div className="model-pool__notice"><Network size={14} />使用当前已生效的 API 地址和密钥读取模型列表。</div>
+      )}
+
+      {candidates.length ? (
+        <>
+          <label className="model-pool__search">
+            <Search size={14} />
+            <span className="sr-only">搜索模型</span>
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型名称" />
+          </label>
+          <div className="model-pool__list">
+            {visible.map((model) => {
+              const checked = enabled.includes(model);
+              const isDefault = model === state.defaultModel;
+              return (
+                <label key={model} className={`model-pool__item ${checked ? "is-checked" : ""}`}>
+                  <input type="checkbox" checked={checked} disabled={isDefault} onChange={() => toggle(model)} />
+                  <span><strong>{model}</strong><small>{isDefault ? "全局默认，不能移除" : checked ? "已启用" : "未启用"}</small></span>
+                  {checked ? <Check size={15} /> : null}
+                </label>
+              );
+            })}
+            {!visible.length ? <div className="model-pool__empty">没有匹配的模型。</div> : null}
+          </div>
+        </>
+      ) : (
+        <div className="model-pool__empty">尚未发现模型。确认连接配置已保存后，点击“获取模型”。</div>
+      )}
     </div>
   );
 }
@@ -690,6 +880,11 @@ function fieldDraftValue(field: ConfigField): DraftValue {
   if (field.type === "list") return Array.isArray(field.value) ? field.value.map(String).join("\n") : "";
   if (field.type === "json") return JSON.stringify(field.value ?? {}, null, 2);
   return field.value === null || field.value === undefined ? "" : String(field.value);
+}
+
+function parseListDraft(value: DraftValue | undefined): string[] {
+  if (typeof value !== "string") return [];
+  return Array.from(new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean)));
 }
 
 function evaluateChanges(fields: ConfigField[], draft: Record<string, DraftValue>, resets: Record<string, boolean>) {
@@ -770,9 +965,13 @@ function sectionMatches(section: ConfigSection, query: string): boolean {
   return sectionOwnTextMatches(section, query) || section.fields.some((field) => fieldMatches(field, query));
 }
 
+function sectionDisplayTitle(section: ConfigSection): string {
+  return section.key === "adapters.wechat869" ? WECHAT_CLIENT_LABEL : section.title;
+}
+
 function sectionOwnTextMatches(section: ConfigSection, query: string): boolean {
   if (!query) return true;
-  return [section.title, section.description, section.key].some((value) => value.toLowerCase().includes(query));
+  return [sectionDisplayTitle(section), wechatChannelDisplayText(section.description), section.key].some((value) => value.toLowerCase().includes(query));
 }
 
 function fieldMatches(field: ConfigField, query: string): boolean {
@@ -826,5 +1025,5 @@ function formatClock(value: string): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return wechatChannelDisplayText(error instanceof Error ? error.message : String(error));
 }

@@ -292,10 +292,73 @@ export type ConfigApplyResult = {
   snapshot: ConfigSnapshot;
 };
 
+export type LlmModelDiscovery = {
+  models: string[];
+  count: number;
+};
+
 export type WechatConversation = Conversation & {
   message_count: number;
   avatar_members?: string[];
   last_message?: WechatMessage | null;
+};
+
+export type WechatConversationPersona = {
+  conversation_id: string;
+  scope: "group" | "private";
+  enabled: boolean;
+  prompt: string;
+  model?: string | null;
+  default_model: string;
+  enabled_models: string[];
+  updated_at?: string | null;
+};
+
+export type KnowledgeBase = {
+  conversation_id: string;
+  title: string;
+  platform: string;
+  adapter: string;
+  enabled: boolean;
+  interval_seconds: number;
+  cursor_record_id: number;
+  status: "idle" | "running" | "failed" | string;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  last_error?: string | null;
+  page_count: number;
+  source_count: number;
+  file_count: number;
+  person_count: number;
+  updated_at: string;
+};
+
+export type KnowledgePage = {
+  id: number;
+  conversation_id: string;
+  relative_path: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  source_ids: string[];
+  updated_at: string;
+};
+
+export type KnowledgeRun = {
+  id: string;
+  conversation_id: string;
+  status: string;
+  from_cursor: number;
+  to_cursor: number;
+  message_count: number;
+  file_count: number;
+  page_change_count: number;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  error?: string | null;
+  started_at: string;
+  finished_at?: string | null;
 };
 
 export type WechatMember = {

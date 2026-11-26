@@ -19,14 +19,27 @@ import type {
   SystemStatus,
   IlinkQrCode,
   WechatConversation,
+  WechatConversationPersona,
   WechatMember,
   WechatMessage,
   WechatUserDetail,
   WechatProfilePage,
+  KnowledgeBase,
+  KnowledgePage,
+  KnowledgeRun,
+  LlmModelDiscovery,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_XBOT_API_BASE ?? "/api/v1";
 const TOKEN_STORAGE_KEY = "xbot.api.token";
+
+export type AgentChatFrame =
+  | { type: "accepted"; task_id: string }
+  | { type: "delta"; text: string }
+  | { type: "tool.started" | "tool.completed"; tool: string }
+  | { type: "heartbeat" }
+  | { type: "done"; task: AgentTask }
+  | { type: "error"; message: string };
 
 export function apiBase(): string {
   return API_BASE;
@@ -49,7 +62,7 @@ export function clearApiToken(): void {
   window.localStorage.removeItem(TOKEN_STORAGE_KEY);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const token = getApiToken();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -78,11 +91,50 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(detail || `${response.status} ${response.statusText}`);
   }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await requestResponse(path, init);
   const envelope = (await response.json()) as ApiEnvelope<T>;
   return envelope.data;
 }
 
+async function streamAgentChat(input: string, source: string, onFrame: (frame: AgentChatFrame) => void) {
+  const response = await requestResponse("/agent/chat/stream", {
+    method: "POST", body: JSON.stringify({ input, source }),
+  });
+  if (!response.body) throw new Error("无法读取 Agent 回复。");
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffered = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const lines = (buffered + value).split("\n");
+      buffered = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const frame = JSON.parse(line) as AgentChatFrame;
+        if (frame.type === "error") throw new Error(frame.message);
+        onFrame(frame);
+        if (frame.type === "done") return frame.task;
+      }
+    }
+    throw new Error("连接中断。任务可能仍在运行，可刷新历史确认结果。");
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
 export const api = {
+  streamAgentChat,
+  agentChatHistory: (source?: string, offset = 0) => {
+    const params = new URLSearchParams({ limit: "50", offset: String(offset) });
+    if (source) params.set("source", source);
+    return request<AgentTask[]>(`/agent/chat/history?${params}`);
+  },
   status: () => request<SystemStatus>("/system/status"),
   adapters: () => request<AdapterInfo[]>("/adapters"),
   enableAdapter: (name: string) => request<AdapterInfo[]>(`/adapters/${encodeURIComponent(name)}/enable`, { method: "POST" }),
@@ -115,6 +167,15 @@ export const api = {
     request<WechatMessage[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`),
   wechatMembers: (conversationId: string) =>
     request<WechatMember[]>(`/wechat/conversations/${encodeURIComponent(conversationId)}/members`),
+  wechatConversationPersona: (conversationId: string) =>
+    request<WechatConversationPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`),
+  updateWechatConversationPersona: (conversationId: string, payload: { enabled: boolean; prompt: string; model?: string | null }) =>
+    request<WechatConversationPersona>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  resetWechatConversationPersonaSession: (conversationId: string) =>
+    request<Record<string, unknown>>(`/wechat/conversations/${encodeURIComponent(conversationId)}/persona/reset-session`, { method: "POST" }),
   wechatProfilePage: (conversationId: string, limit = 30, cursor = "") =>
     request<WechatProfilePage>(`/wechat/conversations/${encodeURIComponent(conversationId)}/profiles?limit=${limit}&cursor=${encodeURIComponent(cursor)}`),
   wechatUsers: (limit = 500, q = "") =>
@@ -175,6 +236,7 @@ export const api = {
     request<BackgroundTask>(`/agent/background-tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }),
   scheduledJobs: (limit = 100) => request<ScheduledJob[]>(`/agent/scheduled-jobs?limit=${limit}&include_disabled=true`),
   config: () => request<ConfigSnapshot>("/config"),
+  discoverLlmModels: () => request<LlmModelDiscovery>("/config/llm/models/discover", { method: "POST" }),
   updateConfig: (payload: { revision?: string | null; changes: ConfigChange[] }) =>
     request<ConfigApplyResult>("/config", {
       method: "PUT",
@@ -201,6 +263,35 @@ export const api = {
     request<ScheduledJob>(`/agent/scheduled-jobs/${encodeURIComponent(jobId)}/run`, { method: "POST" }),
   deleteScheduledJob: (jobId: string) =>
     request(`/agent/scheduled-jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
+  knowledgeBases: () => request<KnowledgeBase[]>("/knowledge/bases"),
+  knowledgeBase: (conversationId: string) =>
+    request<KnowledgeBase>(`/knowledge/bases/${encodeURIComponent(conversationId)}`),
+  updateKnowledgeBase: (conversationId: string, enabled: boolean) =>
+    request<KnowledgeBase>(`/knowledge/bases/${encodeURIComponent(conversationId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  runKnowledgeBase: (conversationId: string) =>
+    request<{ conversation_id: string; started: boolean }>(`/knowledge/bases/${encodeURIComponent(conversationId)}/run`, { method: "POST" }),
+  knowledgePages: (conversationId: string, q = "") =>
+    request<KnowledgePage[]>(`/knowledge/bases/${encodeURIComponent(conversationId)}/pages?q=${encodeURIComponent(q)}&limit=500`),
+  knowledgePage: (conversationId: string, path: string) =>
+    request<{ conversation_id: string; relative_path: string; content: string }>(`/knowledge/bases/${encodeURIComponent(conversationId)}/page?path=${encodeURIComponent(path)}`),
+  knowledgeRuns: (conversationId: string) =>
+    request<KnowledgeRun[]>(`/knowledge/bases/${encodeURIComponent(conversationId)}/runs?limit=30`),
+  downloadKnowledgeVault: async (conversationId: string) => {
+    const token = getApiToken();
+    const response = await fetch(`${API_BASE}/knowledge/bases/${encodeURIComponent(conversationId)}/download`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) throw new Error(await response.text() || "下载 Vault 失败");
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "xbot-group-vault.zip";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 export function wsUrl(): string {

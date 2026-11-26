@@ -33,6 +33,7 @@ class QQAdapter(BaseAdapter):
     AUXILIARY_EVENTS: ClassVar[set[str]] = {
         "INTERACTION_CREATE", "MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE",
         "PUBLIC_GUILD_MESSAGES", "AUDIT_PASS", "AUDIT_FAIL", "GUILD_CREATE",
+        "GROUP_MSG_RECEIVE", "GROUP_MSG_REJECT",
     }
     INVALID_SESSION_CLOSE_CODES: ClassVar[set[int]] = {4006, 4007}
     PASSIVE_REPLY_LIMITS: ClassVar[dict[str, int]] = {"c2c": 4, "group": 5}
@@ -62,6 +63,7 @@ class QQAdapter(BaseAdapter):
         self._reply_targets: dict[str, dict[str, str]] = {}
         self._reply_sequences: dict[str, int] = {}
         self._sent_message_ids: dict[str, set[str]] = {}
+        self._recall_tasks: set[asyncio.Task] = set()
         self._stream_ids: dict[str, str] = {}
         self._stream_indexes: dict[str, int] = {}
         # Keep the triggering message id alongside the sequence.  A stream is
@@ -91,6 +93,12 @@ class QQAdapter(BaseAdapter):
     async def stop(self) -> None:
         self.started = False
         self.connected = False
+        recall_tasks = list(self._recall_tasks)
+        for task in recall_tasks:
+            task.cancel()
+        if recall_tasks:
+            await asyncio.gather(*recall_tasks, return_exceptions=True)
+        self._recall_tasks.clear()
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -166,7 +174,7 @@ class QQAdapter(BaseAdapter):
                 channel_id=target["target_id"], message_id=message_id,
                 reaction_type=reaction_type, reaction_id=reaction_id, method=method,
             )
-            self._record_sent(reply.conversation_id, result)
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             return result
         # Channel and DM APIs have a different request schema (no msg_type and
         # no C2C/group file_info).  Route them before the v2 user/group paths.
@@ -193,7 +201,7 @@ class QQAdapter(BaseAdapter):
                 image=channel_image,
                 **reference,
             )
-            self._record_sent(reply.conversation_id, result)
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             return result
         if reply.type == "text":
             return await self._send_text_reply(client, target, reply, reference)
@@ -203,11 +211,31 @@ class QQAdapter(BaseAdapter):
             if reply.type == "keyboard" and keyboard is None:
                 raise QQBotApiError("keyboard 回复缺少 metadata.keyboard")
             reference = self._prepare_passive_reference(target, reference)
-            result = await client.send_markdown(
-                target_type=target["target_type"], target_id=target["target_id"],
-                content=markdown, keyboard=keyboard, **reference,
-            )
-            self._record_sent(reply.conversation_id, result)
+            try:
+                result = await client.send_markdown(
+                    target_type=target["target_type"], target_id=target["target_id"],
+                    content=markdown, keyboard=keyboard, **reference,
+                )
+            except QQBotApiError as exc:
+                fallback_text = str(reply.metadata.get("fallback_text") or "").strip()
+                can_fallback = bool(fallback_text) and (
+                    exc.status in {400, 403} or exc.err_code not in {None, "", 0, "0"}
+                )
+                if not can_fallback:
+                    raise
+                logger.warning(
+                    "QQ Markdown 不可用，自动回退文本: status={} err_code={} trace_id={}",
+                    exc.status,
+                    exc.err_code,
+                    exc.trace_id,
+                )
+                result = await client.send_text(
+                    target_type=target["target_type"],
+                    target_id=target["target_id"],
+                    content=fallback_text[: max(100, int(self.config.max_reply_chars))],
+                    **reference,
+                )
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             return result
         if reply.type in {"image", "file", "voice", "video"}:
             if not self.config.media_enabled:
@@ -228,7 +256,7 @@ class QQAdapter(BaseAdapter):
                 target_type=target["target_type"], target_id=target["target_id"],
                 file_info=file_info, **reference,
             )
-            self._record_sent(reply.conversation_id, result)
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             return result
         if reply.type == "stream":
             if target["target_type"] not in {"c2c", "user"}:
@@ -264,7 +292,7 @@ class QQAdapter(BaseAdapter):
             elif returned_stream_id:
                 self._stream_ids[reply.conversation_id] = returned_stream_id
                 self._stream_indexes[reply.conversation_id] = index + 1
-            self._record_sent(reply.conversation_id, result)
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             return result
         if reply.type == "input_notify":
             if target["target_type"] not in {"c2c", "user"}:
@@ -272,7 +300,7 @@ class QQAdapter(BaseAdapter):
             seconds = int((reply.metadata or {}).get("input_second") or reply.content or 5)
             reference = self._prepare_passive_reference(target, reference)
             result = await client.input_notify(target_id=target["target_id"], input_second=seconds, **reference)
-            self._record_sent(reply.conversation_id, result)
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             return result
         if reply.type in {"embed", "ark"}:
             metadata = reply.metadata if isinstance(reply.metadata, dict) else {}
@@ -284,7 +312,7 @@ class QQAdapter(BaseAdapter):
                 ark=metadata.get("ark") if reply.type == "ark" else None,
                 image=metadata.get("image"), **reference,
             )
-            self._record_sent(reply.conversation_id, result)
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             return result
         raise QQBotApiError(f"不支持的 QQ Reply 类型: {reply.type}")
 
@@ -348,7 +376,7 @@ class QQAdapter(BaseAdapter):
                 self._reply_sequences[reference_message_id] = max(
                     self._reply_sequences.get(reference_message_id, 0), sent_seq
                 )
-            self._record_sent(reply.conversation_id, result)
+            self._record_sent(reply.conversation_id, result, self._recall_delay(reply))
             if isinstance(result, dict):
                 message_id = str(result.get("id") or result.get("message_id") or "")
                 if message_id:
@@ -458,7 +486,19 @@ class QQAdapter(BaseAdapter):
             reaction_type=reaction_type, reaction_id=reaction_id, method=method,
         )
 
-    def _record_sent(self, conversation_id: str, result: Any) -> None:
+    @staticmethod
+    def _recall_delay(reply: Reply) -> float:
+        try:
+            return max(0.0, min(float((reply.metadata or {}).get("auto_recall_seconds") or 0), 120.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _record_sent(
+        self,
+        conversation_id: str,
+        result: Any,
+        recall_after: float = 0.0,
+    ) -> None:
         if not isinstance(result, dict):
             return
         message_id = str(result.get("id") or result.get("message_id") or "")
@@ -468,6 +508,32 @@ class QQAdapter(BaseAdapter):
         bucket.add(message_id)
         if len(bucket) > 2000:
             bucket.pop()
+        if recall_after > 0:
+            task = asyncio.create_task(
+                self._recall_later(conversation_id, message_id, recall_after),
+                name=f"xbot-qq-recall-{message_id[:16]}",
+            )
+            self._recall_tasks.add(task)
+            task.add_done_callback(self._recall_tasks.discard)
+
+    async def _recall_later(
+        self,
+        conversation_id: str,
+        message_id: str,
+        delay_seconds: float,
+    ) -> None:
+        try:
+            await asyncio.sleep(delay_seconds)
+            await self.recall(conversation_id, message_id)
+            logger.info("QQAdapter 已自动撤回机器人消息: conversation={}", conversation_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "QQAdapter 自动撤回失败: conversation={} error={}",
+                conversation_id,
+                exc,
+            )
 
     async def normalize(self, raw: dict) -> Message:
         event_type = str(raw.get("_event_type") or raw.get("t") or "")
@@ -503,10 +569,10 @@ class QQAdapter(BaseAdapter):
             if scene_name == "group" and not group_id:
                 group_id = payload.get("openid") or interaction_data.get("openid")
             interaction_event_id = str(
-                payload.get("event_id")
-                or payload.get("id")
-                or raw.get("event_id")
+                raw.get("event_id")
                 or raw.get("id")
+                or payload.get("event_id")
+                or payload.get("id")
                 or ""
             )
             if group_id:
@@ -577,6 +643,26 @@ class QQAdapter(BaseAdapter):
         attachments = await self._normalize_attachments(
             payload.get("attachments"), message_id=message_id, conversation_id=conversation_id,
         )
+        quoted_raw_attachments: list[dict[str, Any]] = []
+        message_scene = payload.get("message_scene")
+        scene_ext = message_scene.get("ext") if isinstance(message_scene, dict) else []
+        has_reference = str(payload.get("message_type") or "") == "103" or any(
+            str(item).startswith("ref_msg_idx=") for item in scene_ext or []
+        )
+        if has_reference and isinstance(payload.get("msg_elements"), list):
+            for element in payload["msg_elements"]:
+                if not isinstance(element, dict) or not isinstance(element.get("attachments"), list):
+                    continue
+                quoted_raw_attachments.extend(
+                    item for item in element["attachments"] if isinstance(item, dict)
+                )
+        quote_attachments = await self._normalize_attachments(
+            quoted_raw_attachments,
+            message_id=f"{message_id}-quote",
+            conversation_id=conversation_id,
+        )
+        for item in quote_attachments:
+            item["quoted"] = True
         content = str(payload.get("content") or "").strip()
         message_type = "text"
         if attachments:
@@ -596,6 +682,35 @@ class QQAdapter(BaseAdapter):
                     )
                     for item in attachments
                 )
+        mentions = payload.get("mentions") if isinstance(payload.get("mentions"), list) else []
+        mentioned_bot = event_type in {"GROUP_AT_MESSAGE_CREATE", "AT_MESSAGE_CREATE"}
+        bot_mention_ids: set[str] = set()
+        for mention in mentions:
+            if not isinstance(mention, dict):
+                continue
+            mention_ids = {
+                str(value)
+                for value in (
+                    mention.get("id"),
+                    mention.get("user_openid"),
+                    mention.get("member_openid"),
+                )
+                if value
+            }
+            is_current_bot = (
+                mention.get("bot") is True
+                and mention.get("is_you") is True
+                and str(mention.get("scope") or "single") != "all"
+            )
+            matches_gateway_id = bool(self.bot_id and self.bot_id in mention_ids)
+            if is_current_bot or matches_gateway_id:
+                mentioned_bot = True
+                bot_mention_ids.update(mention_ids)
+        for mention_id in bot_mention_ids:
+            content = content.replace(f"<@{mention_id}>", "").replace(
+                f"<@!{mention_id}>", ""
+            )
+        content = content.strip()
         payload.update(
             {
                 "scope": scope,
@@ -607,10 +722,11 @@ class QQAdapter(BaseAdapter):
                 "member_openid": sender_id if is_group else "",
                 "channel_id": target_id if is_channel and not is_dm else str(payload.get("channel_id") or ""),
                 "guild_id": str(payload.get("guild_id") or "") if is_channel else "",
-                "mentions_bot": bool(event_type == "GROUP_AT_MESSAGE_CREATE" or event_type == "AT_MESSAGE_CREATE" or payload.get("mentions")),
+                "mentions_bot": mentioned_bot,
                 "bot_id": self.bot_id,
                 "bot_name": self.bot_name,
                 "attachments": attachments,
+                "quote_attachments": quote_attachments,
                 "qq_event_type": event_type,
                 "gateway_event_id": str(raw.get("id") or ""),
                 "event_id": str(payload.get("event_id") or raw.get("id") or ""),

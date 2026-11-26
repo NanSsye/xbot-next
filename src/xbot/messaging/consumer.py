@@ -43,6 +43,7 @@ class MessageConsumer:
         self.backoff_exponential = bool(backoff_exponential)
         self._semaphore = asyncio.Semaphore(self.max_message_tasks)
         self._tasks: set[asyncio.Task] = set()
+        self._event_tasks: set[asyncio.Task] = set()
         self._conversation_locks: dict[str, asyncio.Lock] = {}
         self.event_bus = event_bus
 
@@ -103,6 +104,7 @@ class MessageConsumer:
                     await self._handle_with_timeout(envelope)
             else:
                 await self._handle_with_timeout(envelope)
+            await queue.ack(envelope)
         except TimeoutError:
             logger.error(
                 "MessageConsumer 处理消息超时: message_id={} conversation={} timeout={}s",
@@ -174,9 +176,11 @@ class MessageConsumer:
                 await bus.publish(event_type, payload)
 
         task = asyncio.create_task(_fire(), name=f"xbot-event-{event_type}")
+        self._event_tasks.add(task)
         task.add_done_callback(self._on_event_task_done)
 
     def _on_event_task_done(self, task: asyncio.Task) -> None:
+        self._event_tasks.discard(task)
         if task.cancelled():
             return
         exc = task.exception()
@@ -200,5 +204,11 @@ class MessageConsumer:
         for task in tasks:
             task.cancel()
         for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+        event_tasks = list(self._event_tasks)
+        for task in event_tasks:
+            task.cancel()
+        for task in event_tasks:
             with suppress(asyncio.CancelledError):
                 await task

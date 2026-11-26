@@ -36,23 +36,6 @@ run_git_network() {
   fi
 }
 
-install_build_tools() {
-  if python -m pip install -U setuptools wheel; then
-    return 0
-  fi
-
-  echo "Current pip index failed to install setuptools/wheel, retrying with PyPI." >&2
-  if python -m pip install -U --index-url https://pypi.org/simple setuptools wheel; then
-    return 0
-  fi
-
-  echo >&2
-  echo "Failed to install build tools. Check your proxy or pip index, then retry:" >&2
-  echo "  python -m pip install -U --index-url https://pypi.org/simple setuptools wheel" >&2
-  echo >&2
-  return 1
-}
-
 update_install_repo() {
   echo "Upgrading xbot-next in $INSTALL_DIR"
   echo "Protected user data: .env, data/, logs/, local database files, untracked uploads and generated skills."
@@ -86,20 +69,7 @@ if [ ! -d "$INSTALL_DIR/.git" ]; then
   exit 1
 fi
 
-if command -v python3.11 >/dev/null 2>&1; then
-  PYTHON_BIN="$(command -v python3.11)"
-elif command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="$(command -v python3)"
-else
-  echo "Missing Python 3.11+. Please install Python 3.11 or newer." >&2
-  exit 1
-fi
-
-"$PYTHON_BIN" - <<'PY'
-import sys
-if sys.version_info < (3, 11):
-    raise SystemExit("Python 3.11+ is required.")
-PY
+need_cmd uv
 
 update_install_repo
 cd "$INSTALL_DIR"
@@ -108,13 +78,10 @@ if [ ! -f .env ]; then
   echo ".env not found. Upgrade will not create or overwrite user config; run xbot setup if you need to initialize config." >&2
 fi
 
-"$PYTHON_BIN" -m venv .venv
-. .venv/bin/activate
-python -m pip install -U pip
-install_build_tools
-python -m pip install --no-build-isolation -e ./vendor/hermes -e ".[agent]"
-python -c 'from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()'
-python -m playwright install chromium || true
+uv run --no-project --python 3.14 python scripts/prepare_hermes.py
+uv sync --locked --python 3.14 --extra agent --extra browser
+.venv/bin/python -c 'from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()'
+.venv/bin/python -m playwright install chromium || true
 
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/xbot" <<EOF

@@ -6,7 +6,9 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from xbot.core.proxy import NetworkConfig, merge_proxy_env
 
 
 class XBotConfig(BaseModel):
@@ -130,12 +132,58 @@ class AgentLLMConfig(BaseModel):
     base_url: str = "https://api.openai.com/v1"
     api_key: str | None = None
     model: str = "gpt-4.1-mini"
+    enabled_models: list[str] = Field(default_factory=list)
     context_window_tokens: int | None = None
     timeout_seconds: int = 60
     max_attempts: int = 3
     retry_backoff_seconds: float = 1.0
     max_tokens: int = 2000
     temperature: float = 0.2
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_enabled_models(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "enabled_models" in data:
+            return data
+        normalized = dict(data)
+        model = str(normalized.get("model") or "gpt-4.1-mini").strip()
+        normalized["enabled_models"] = [model]
+        return normalized
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str) -> str:
+        model = value.strip()
+        if not model:
+            raise ValueError("全局默认模型不能为空")
+        if len(model) > 256:
+            raise ValueError("模型名称不能超过 256 个字符")
+        return model
+
+    @field_validator("enabled_models")
+    @classmethod
+    def _normalize_enabled_models(cls, value: list[str]) -> list[str]:
+        models: list[str] = []
+        seen: set[str] = set()
+        for raw_model in value:
+            model = str(raw_model).strip()
+            if not model or model in seen:
+                continue
+            if len(model) > 256:
+                raise ValueError("模型名称不能超过 256 个字符")
+            seen.add(model)
+            models.append(model)
+        if not models:
+            raise ValueError("至少启用一个模型")
+        if len(models) > 500:
+            raise ValueError("最多启用 500 个模型")
+        return models
+
+    @model_validator(mode="after")
+    def _validate_default_model(self) -> AgentLLMConfig:
+        if self.model not in self.enabled_models:
+            raise ValueError("全局默认模型必须属于已启用模型")
+        return self
 
 
 class AgentMCPServerConfig(BaseModel):
@@ -196,7 +244,7 @@ class WebAdapterConfig(BaseModel):
 
 class Wechat869AdapterConfig(BaseModel):
     enabled: bool = False
-    host: str = "192.168.6.19"
+    host: str = "127.0.0.1"
     port: int = 8848
     admin_key: str = ""
     token_key: str = ""
@@ -265,11 +313,30 @@ class QQAdapterConfig(BaseModel):
     default_profile: Literal["member", "guest"] = "guest"
 
 
+class TelegramAdapterConfig(BaseModel):
+    enabled: bool = False
+    force_disabled: bool = False
+    bot_token: str = ""
+    api_base_url: str = "https://api.telegram.org"
+    polling_timeout_seconds: int = 30
+    connect_timeout_seconds: float = 40.0
+    reconnect_seconds: float = 3.0
+    max_reply_chars: int = 4096
+    media_enabled: bool = True
+    media_dir: str = "data/telegram/media"
+    auto_download_media: bool = True
+    media_max_bytes: int = 100 * 1024 * 1024
+    admin_user_ids: list[str] = Field(default_factory=list)
+    member_user_ids: list[str] = Field(default_factory=list)
+    default_profile: Literal["member", "guest"] = "guest"
+
+
 class AdapterConfig(BaseModel):
     web: WebAdapterConfig = Field(default_factory=WebAdapterConfig)
     wechat869: Wechat869AdapterConfig = Field(default_factory=Wechat869AdapterConfig)
     wechat_ilink: WechatIlinkAdapterConfig = Field(default_factory=WechatIlinkAdapterConfig)
     qq: QQAdapterConfig = Field(default_factory=QQAdapterConfig)
+    telegram: TelegramAdapterConfig = Field(default_factory=TelegramAdapterConfig)
 
 
 class Settings(BaseModel):
@@ -280,6 +347,7 @@ class Settings(BaseModel):
     queue: QueueSettings = Field(default_factory=QueueSettings)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     plugins: PluginConfig = Field(default_factory=PluginConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
@@ -365,6 +433,7 @@ def load_settings(
         else _load_dotenv(path.parent.parent / ".env")
     )
     env = {**dotenv_values, **os.environ}
+    merge_proxy_env(data, env)
     if server_host := env.get("XBOT_SERVER_HOST") or env.get("XBOT_HOST"):
         data.setdefault("server", {})["host"] = server_host
     if server_port := env.get("XBOT_SERVER_PORT") or env.get("XBOT_PORT"):
@@ -407,6 +476,10 @@ def load_settings(
         data.setdefault("agent", {}).setdefault("llm", {})["base_url"] = llm_base_url
     if llm_model := env.get("XBOT_LLM_MODEL"):
         data.setdefault("agent", {}).setdefault("llm", {})["model"] = llm_model
+    if llm_enabled_models := env.get("XBOT_LLM_ENABLED_MODELS"):
+        data.setdefault("agent", {}).setdefault("llm", {})["enabled_models"] = _env_list(
+            llm_enabled_models
+        )
     if llm_context_window := env.get("XBOT_LLM_CONTEXT_WINDOW_TOKENS"):
         data.setdefault("agent", {}).setdefault("llm", {})["context_window_tokens"] = _env_int(llm_context_window)
     if llm_timeout := env.get("XBOT_LLM_TIMEOUT_SECONDS"):
@@ -653,11 +726,33 @@ def load_settings(
         data.setdefault("adapters", {}).setdefault("qq", {})["default_profile"] = (
             qq_default_profile
         )
+    telegram = data.setdefault("adapters", {}).setdefault("telegram", {})
+    telegram_env: tuple[tuple[str, str, Any], ...] = (
+        ("XBOT_TELEGRAM_ENABLED", "enabled", _env_bool),
+        ("XBOT_TELEGRAM_BOT_TOKEN", "bot_token", str),
+        ("XBOT_TELEGRAM_API_BASE_URL", "api_base_url", str),
+        ("XBOT_TELEGRAM_POLLING_TIMEOUT_SECONDS", "polling_timeout_seconds", _env_int),
+        ("XBOT_TELEGRAM_CONNECT_TIMEOUT_SECONDS", "connect_timeout_seconds", float),
+        ("XBOT_TELEGRAM_RECONNECT_SECONDS", "reconnect_seconds", float),
+        ("XBOT_TELEGRAM_MAX_REPLY_CHARS", "max_reply_chars", _env_int),
+        ("XBOT_TELEGRAM_MEDIA_ENABLED", "media_enabled", _env_bool),
+        ("XBOT_TELEGRAM_MEDIA_DIR", "media_dir", str),
+        ("XBOT_TELEGRAM_AUTO_DOWNLOAD_MEDIA", "auto_download_media", _env_bool),
+        ("XBOT_TELEGRAM_MEDIA_MAX_BYTES", "media_max_bytes", _env_int),
+        ("XBOT_TELEGRAM_ADMIN_USER_IDS", "admin_user_ids", _env_list),
+        ("XBOT_TELEGRAM_MEMBER_USER_IDS", "member_user_ids", _env_list),
+        ("XBOT_TELEGRAM_DEFAULT_PROFILE", "default_profile", str),
+    )
+    for env_name, field, parser in telegram_env:
+        if value := env.get(env_name):
+            telegram[field] = parser(value)
     if include_runtime_overrides:
         override_data = (
             load_runtime_overrides(path) if runtime_overrides is None else runtime_overrides
         )
         _deep_update(data, override_data)
+    if value := env.get("XBOT_TELEGRAM_FORCE_DISABLED"):
+        data.setdefault("adapters", {}).setdefault("telegram", {})["force_disabled"] = _env_bool(value)
     _normalize_agent_config(data)
     if isinstance(data.get("xbot"), dict):
         data.setdefault("agent", {})["timezone"] = data["xbot"].get("timezone", "Asia/Shanghai")

@@ -40,41 +40,6 @@ function Invoke-OptionalNative {
     }
 }
 
-function Install-BuildTools {
-    param(
-        [Parameter(Mandatory = $true)][string]$PythonPath
-    )
-    $Packages = @("setuptools", "wheel")
-    try {
-        Invoke-Native -FilePath $PythonPath -Arguments (@("-m", "pip", "install", "-U") + $Packages)
-        return
-    } catch {
-        Write-Warning "当前 pip 源安装 setuptools/wheel 失败，改用 PyPI 官方源重试。"
-    }
-
-    try {
-        Invoke-Native -FilePath $PythonPath -Arguments (@("-m", "pip", "install", "-U", "--index-url", "https://pypi.org/simple") + $Packages)
-        return
-    } catch {
-        Write-Host ""
-        Write-Warning "安装构建工具失败。请检查代理或 pip 源，然后重试。"
-        Write-Host "手动修复示例："
-        Write-Host "  $PythonPath -m pip install -U --index-url https://pypi.org/simple setuptools wheel"
-        Write-Host ""
-        throw
-    }
-}
-
-function Get-PythonCommand {
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        return @("py", "-3.11")
-    }
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-        return @("python")
-    }
-    throw "Missing Python 3.11+. Please install Python 3.11 or newer."
-}
-
 function Invoke-Git {
     param(
         [string[]]$Arguments = @()
@@ -121,12 +86,7 @@ function Update-InstallRepo {
 }
 
 Require-Command git
-$Python = Get-PythonCommand
-$PythonExe = $Python[0]
-$PythonBaseArgs = @($Python | Select-Object -Skip 1)
-
-$VersionArgs = @($PythonBaseArgs) + @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)")
-Invoke-Native -FilePath $PythonExe -Arguments $VersionArgs
+Require-Command uv
 
 New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent), $BinDir | Out-Null
 
@@ -139,16 +99,9 @@ Invoke-GitNetwork -Arguments @("clone", "--depth", "1", "--branch", $Branch, $Re
 
 Set-Location $InstallDir
 
-$VenvArgs = @($PythonBaseArgs) + @("-m", "venv", ".venv")
-Invoke-Native -FilePath $PythonExe -Arguments $VenvArgs
+Invoke-Native -FilePath "uv" -Arguments @("run", "--no-project", "--python", "3.14", "python", "scripts/prepare_hermes.py")
+Invoke-Native -FilePath "uv" -Arguments @("sync", "--locked", "--python", "3.14", "--extra", "agent", "--extra", "browser")
 $VenvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
-Invoke-Native -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-U", "pip")
-Install-BuildTools -PythonPath $VenvPython
-Invoke-Native -FilePath $VenvPython -Arguments @(
-    "-m", "pip", "install", "--no-build-isolation",
-    "-e", ".\vendor\hermes",
-    "-e", ".[agent]"
-)
 Invoke-Native -FilePath $VenvPython -Arguments @(
     "-c", "from xbot.agent.hermes_runtime import _assert_safe_hermes_sqlite; _assert_safe_hermes_sqlite()"
 )

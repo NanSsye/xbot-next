@@ -10,6 +10,7 @@ __pycache__/
 .mypy_cache/
 
 .venv/
+.hermes/
 venv/
 env/
 *.egg-info/
@@ -80,3 +81,4 @@ vendor/hermes/scripts/whatsapp-bridge/package-lock.json
 vendor/hermes/__pycache__/
 
 skills/**/credentials/
+/state/

@@ -1,0 +1,59 @@
+:root {
+  --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --motion-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --motion-fast: 120ms;
+  --motion-ui: 160ms;
+  --motion-overlay: 200ms;
+}
+
+button:not(:disabled):active:not(:focus-visible) {
+  transform: scale(0.97);
+  transition-duration: var(--motion-fast);
+}
+
+.home-loading {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.home-loading span {
+  height: 46px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--bg-surface-soft), var(--bg-hover), var(--bg-surface-soft));
+  background-size: 200% 100%;
+  animation: loading-shimmer 1.2s linear infinite;
+}
+
+@keyframes loading-shimmer {
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 80ms;
+    --motion-ui: 100ms;
+    --motion-overlay: 120ms;
+  }
+
+  button:not(:disabled):active:not(:focus-visible) {
+    transform: none;
+  }
+
+  .home-loading span {
+    animation: none;
+    background: var(--bg-surface-soft);
+  }
+
+  .modal-card {
+    transform: none;
+    transition-property: opacity;
+  }
+
+  @starting-style {
+    .modal-card {
+      opacity: 0;
+      transform: none;
+    }
+  }
+}

@@ -226,18 +226,18 @@ async def test_wechat869_uses_cdata_msg_source_atuserlist_for_mentions() -> None
         {
             "msg_id": 459,
             "msg_type": 1,
-            "from_user_name": {"str": "44694849727@chatroom"},
-            "to_user_name": {"str": "wxid_p60yfpl5zg2m29"},
-            "content": {"str": "wxid_3ic17l92pics22:\n@小小x 写一个skill"},
+            "from_user_name": {"str": "demo-group@chatroom"},
+            "to_user_name": {"str": "wxid_demo_bot"},
+            "content": {"str": "wxid_demo_member:\n@小小x 写一个skill"},
             "msg_source": (
-                "<msgsource><atuserlist><![CDATA[wxid_p60yfpl5zg2m29]]></atuserlist>"
+                "<msgsource><atuserlist><![CDATA[wxid_demo_bot]]></atuserlist>"
                 "<membercount>8</membercount></msgsource>"
             ),
         }
     )
 
-    assert message.raw["bot_wxid"] == "wxid_p60yfpl5zg2m29"
-    assert message.raw["at_user_list"] == ["wxid_p60yfpl5zg2m29"]
+    assert message.raw["bot_wxid"] == "wxid_demo_bot"
+    assert message.raw["at_user_list"] == ["wxid_demo_bot"]
     assert message.raw["mentions_bot"] is True
 
 
