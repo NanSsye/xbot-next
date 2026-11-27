@@ -103,6 +103,9 @@ class RedisMessageQueue(MessageQueue):
     async def close(self) -> None:
         await self._redis.aclose()
 
+    async def ping(self) -> bool:
+        return bool(await self._redis.ping())
+
     async def _ensure_group(self) -> None:
         if self._groups_ready:
             return

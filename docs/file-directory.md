@@ -3,7 +3,7 @@
 > 由 `pg dir` 维护：新增路径会追加，并把职责标为 `TODO`，需要人工或 Agent 补全；已删除的路径会自动移除。
 > 职责列可以直接手工编辑，`pg dir` 会保留已填写的内容。
 > 旧版 Hermes 第三方快照只登记目录，不追踪快照内部文件；新版依赖由发行清单和锁文件管理。
-> 最后同步：2026-11-26
+> 最后同步：2026-11-27
 
 <!-- pg:dir:start -->
 | 路径 | 类型 | 职责 |
@@ -20,14 +20,31 @@
 | `alembic.ini` | 文件 | Alembic 迁移位置与日志配置 |
 | `configs` | 目录 | 应用配置模板和固定依赖发行清单 |
 | `configs/hermes-release.json` | 文件 | 固定内嵌 Hermes 版本、提交及源码归档 SHA-256 |
+| `configs/release-signing.pub` | 文件 | 客户端内置的正式 Ed25519 发行验签公钥 |
+| `configs/web-baselines` | 目录 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.0-94df383.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.0-bootstrap.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.0-delta.20261127.1.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.1.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.2.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.3.json` | 文件 | 正式 Web 构建的文件哈希清单 |
 | `configs/xbot.toml` | 文件 | 后端运行、通道、任务与 Agent 的默认配置 |
 | `data` | 目录 | 本地运行生成的应用状态、会话和产物，不纳入源码 |
+| `data/qq` | 目录 | QQ 通道持久数据 |
+| `data/qq/media` | 目录 | QQ 对话媒体 |
+| `data/telegram` | 目录 | Telegram 通道持久数据 |
+| `data/telegram/media` | 目录 | Telegram 对话媒体 |
+| `data/wechat869` | 目录 | 微信客户端通道持久数据 |
+| `data/wechat869/media` | 目录 | 微信客户端对话媒体 |
+| `data/wechat_ilink` | 目录 | 微信 iLink 通道持久数据 |
+| `data/wechat_ilink/media` | 目录 | 微信 iLink 对话媒体 |
 | `docker-compose.yml` | 文件 | 运行预构建镜像、隔离数据库和 Redis，声明持久化挂载 |
 | `docs` | 目录 | 人类可读文档 |
 | `docs/backend-framework-design.md` | 文件 | 后端模块划分、运行时和数据边界设计 |
 | `docs/changelog.md` | 文件 | 变更记录（pg log 维护） |
 | `docs/docker-deployment.md` | 文件 | 镜像交付、独立初始化、访问范围与备份说明 |
 | `docs/file-directory.md` | 文件 | 文件目录说明（pg dir 维护） |
+| `docs/framework-update.md` | 文件 | 宿主机更新任务的安装、暂存计划和恢复说明 |
 | `docs/frontend-control-ui.md` | 文件 | 控制台功能、API 对接与本地构建说明 |
 | `docs/hermes-agent-integration.md` | 文件 | 内嵌 Hermes 的版本、安装、配置、状态和回退说明 |
 | `docs/product-knowledge-graph.md` | 文件 | 产品知识图谱的可读视图（pg update 自动生成，勿手改） |
@@ -39,12 +56,15 @@
 | `docs/screenshots/desktop-settings.png` | 文件 | 控制台设置分组和模型配置入口示例 |
 | `docs/screenshots/desktop-wechat.png` | 文件 | 微信工作台、头像和出站回复示例 |
 | `files` | 目录 | 本地运行生成的静态文件目录，不纳入源码 |
+| `files/wechat_outbox` | 目录 | 微信工作台发件附件 |
 | `knowledge` | 目录 | 知识库根目录 |
 | `knowledge/audit.jsonl` | 文件 | 图谱写入审计日志（谁/何时/来源/版本/diff） |
 | `knowledge/graph` | 目录 | 产品知识图谱数据（唯一事实源） |
 | `knowledge/graph/edges.jsonl` | 文件 | 图谱关系，一行一个 JSON |
 | `knowledge/graph/nodes.jsonl` | 文件 | 图谱节点，一行一个 JSON |
 | `knowledge/index` | 目录 | 检索索引（可随时用 pg index 重建，勿手改） |
+| `logs` | 目录 | 本机运行日志，不纳入发行包 |
+| `logs/xbot.log` | 文件 | 本机服务运行日志，不提交内容 |
 | `migrations` | 目录 | Alembic 迁移环境及数据库版本脚本 |
 | `migrations/README.md` | 文件 | 数据库迁移操作和版本说明 |
 | `migrations/env.py` | 文件 | 加载 ORM 元数据并配置在线和离线迁移 |
@@ -115,12 +135,22 @@
 | `plugins/xhs_content/plugin.toml` | 文件 | 声明小红书图文和视频解析插件的注册信息和入口 |
 | `pyproject.toml` | 文件 | Python 构建元数据、依赖安全下限、可选功能与测试配置 |
 | `scripts` | 目录 | 安装、升级和源码归档准备脚本 |
+| `scripts/build_web_delta.py` | 文件 | 比较两个前端构建目录并打包变更文件与删除清单 |
+| `scripts/framework_bundle.py` | 文件 | 签名整包生成 |
+| `scripts/framework_manifest.py` | 文件 | 签名验证与下载计算 |
+| `scripts/framework_stage.py` | 文件 | 官方文件按需暂存 |
 | `scripts/install.ps1` | 文件 | Windows 首次安装，按锁文件准备 Hermes 和运行环境 |
 | `scripts/install.sh` | 文件 | Unix 首次安装，按锁文件准备 Hermes 和运行环境 |
 | `scripts/prepare_hermes.py` | 文件 | 校验固定归档并准备独立的内嵌 Hermes 源码目录 |
+| `scripts/publish_web_version.py` | 文件 | 生成并发布所有历史构建直升包 |
+| `scripts/release_catalog.py` | 文件 | 按基线发现并验证官方增量 |
+| `scripts/release_delta.py` | 文件 | 检测增量文件冲突并执行更新和失败恢复 |
+| `scripts/release_switch.py` | 文件 | 已暂存整版目录的宿主机切换、冲突复核和回滚 |
+| `scripts/release_worker.py` | 文件 | 宿主机持久更新任务与执行结果 |
 | `scripts/sync_hermes.py` | 文件 | 旧快照的校验与同步流程，归档校验函数由准备脚本复用 |
 | `scripts/upgrade.ps1` | 文件 | Windows 更新工作副本和锁定的运行环境 |
 | `scripts/upgrade.sh` | 文件 | Unix 更新工作副本和锁定的运行环境 |
+| `scripts/xbot-updater.service` | 文件 | 独立于 Xbot 容器运行更新器 |
 | `skills` | 目录 | 随项目提供的通用和通道专用技能 |
 | `skills/.agent` | 目录 | Agent 技能沉淀、策展和使用记录 |
 | `skills/.agent/.curator` | 目录 | Agent 技能策展说明 |
@@ -165,6 +195,38 @@
 | `specs/008-syndex-console-design/plan.md` | 文件 | 原配置契约、前端改动和回滚方案 |
 | `specs/008-syndex-console-design/spec.md` | 文件 | 前端布局、配置分类和图标的验收范围 |
 | `specs/008-syndex-console-design/tasks.md` | 文件 | 前端实施、构建验证和发布任务 |
+| `specs/009-channel-config-cards` | 目录 | 通道卡片配置改动记录 |
+| `specs/009-channel-config-cards/plan.md` | 文件 | 通道表单复用与范围隔离方案 |
+| `specs/009-channel-config-cards/spec.md` | 文件 | 单一配置入口与验收要求 |
+| `specs/009-channel-config-cards/tasks.md` | 文件 | 任务进度与验证结果 |
+| `specs/010-console-settings-ux` | 目录 | 控制台设置交互设计 |
+| `specs/010-console-settings-ux/plan.md` | 文件 | 分阶段实施、复用与回滚方案 |
+| `specs/010-console-settings-ux/spec.md` | 文件 | 页面布局、交互路径与验收标准 |
+| `specs/010-console-settings-ux/tasks.md` | 文件 | 方案与后续实现的任务状态 |
+| `specs/011-release-center` | 目录 | 发布中心交付文档 |
+| `specs/011-release-center/plan.md` | 文件 | 发布中心实施方案 |
+| `specs/011-release-center/spec.md` | 文件 | 更新与扩展需求 |
+| `specs/011-release-center/tasks.md` | 文件 | 部署验证与剩余工作 |
+| `specs/012-home-release` | 目录 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/012-home-release/plan.md` | 文件 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/012-home-release/spec.md` | 文件 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/012-home-release/tasks.md` | 文件 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/013-framework-release-policy` | 目录 | 框架发布规范与验收记录 |
+| `specs/013-framework-release-policy/plan.md` | 文件 | 规范维护范围 |
+| `specs/013-framework-release-policy/spec.md` | 文件 | 正式框架发布和客户端差异下载要求 |
+| `specs/013-framework-release-policy/tasks.md` | 文件 | 规范落盘进展与后续实施边界 |
+| `specs/014-framework-bundle` | 目录 | 整包发布实施与验收记录 |
+| `specs/014-framework-bundle/plan.md` | 文件 | 整包发布实施与验收记录 |
+| `specs/014-framework-bundle/spec.md` | 文件 | 整包发布实施与验收记录 |
+| `specs/014-framework-bundle/tasks.md` | 文件 | 整包发布实施与验收记录 |
+| `specs/015-wechat-message-display` | 目录 | 微信消息与更新提醒规格及验收 |
+| `specs/015-wechat-message-display/plan.md` | 文件 | 微信消息与更新提醒规格及验收 |
+| `specs/015-wechat-message-display/spec.md` | 文件 | 微信消息与更新提醒规格及验收 |
+| `specs/015-wechat-message-display/tasks.md` | 文件 | 微信消息与更新提醒规格及验收 |
+| `specs/016-updater-validation` | 目录 | 跨版本更新和合并门禁验收 |
+| `specs/016-updater-validation/plan.md` | 文件 | 宿主发现与任务回执验证方案 |
+| `specs/016-updater-validation/spec.md` | 文件 | 可信历史基线及兼容性要求 |
+| `specs/016-updater-validation/tasks.md` | 文件 | 本地验证结果与生产限制 |
 | `specs/ACTIVE` | 文件 | 当前进行中的 feature-id（pg new/use 维护） |
 | `specs/_template` | 目录 | SDD 模板（spec/plan/tasks） |
 | `specs/_template/plan.md` | 文件 | 技术方案模板 |
@@ -206,6 +268,13 @@
 | `tests/integration/api/test_hermes_smoke.py` | 文件 | 用本地模型桩回归真实 Hermes 的流式输出、会话和人设隔离 |
 | `tests/integration/api/test_wechat_workbench.py` | 文件 | 工具台私聊头像、通道隔离、出站回执和实时事件回归 |
 | `tests/integration/messaging` | 目录 | 消息队列与 Redis Streams 行为回归 |
+| `tests/integration/rehearse_docker_update.sh` | 文件 | 同机隔离 Docker 目录切换、冲突保留、回滚验证。 |
+| `tests/integration/test_framework_bundle.py` | 文件 | 签名清单与差异更新回归 |
+| `tests/integration/test_framework_mailbox.py` | 文件 | 网页确认、重复请求、重启恢复、Chrome 验收 |
+| `tests/integration/test_framework_switch.py` | 文件 | 冲突复核、独立 Xbot 进程切换及恢复检查 |
+| `tests/integration/test_release_rehearsal.py` | 文件 | 模拟官方目录下载，验证实际安装路由、加载管理器与失败恢复。 |
+| `tests/marketplace-browser.cjs` | 文件 | 浏览器验证市场独立导航、目录隔离、重试及分类。 |
+| `tests/settings-browser.cjs` | 文件 | 模拟设置流程、重试、写入隔离与窄屏交互验收 |
 | `tests/unit` | 目录 | 独立模块的单元回归 |
 | `tests/unit/core` | 目录 | 运行核心、Agent、插件、通道和存储行为回归 |
 | `tests/unit/core/test_agent_chat_concurrency.py` | 文件 | 通道 Agent 排队、群人设和会话串行回归 |
@@ -213,6 +282,9 @@
 | `tests/unit/core/test_hermes_context_policy.py` | 文件 | 上下文窗口、压缩策略及分群模型回归 |
 | `tests/unit/core/test_hermes_session_resolution.py` | 文件 | 验证 Hermes 压缩后的单级及多级会话续接 |
 | `tests/unit/core/test_migrations.py` | 文件 | 空库升级、回退、重建与 ORM 一致性检查 |
+| `tests/unit/test_framework_manifest.py` | 文件 | 签名清单与差异更新回归 |
+| `tests/unit/test_release_signature.py` | 文件 | 验证官方签名绑定类型、名称、版本和包内容。 |
+| `tests/wechat-bubble-browser.cjs` | 文件 | 微信图片、引用及红点浏览器回归 |
 | `ui` | 目录 | React 控制台与 TypeScript、Vite 构建配置 |
 | `ui/index.html` | 文件 | Vite 构建和挂载控制台的 HTML 入口 |
 | `ui/package-lock.json` | 文件 | 锁定 React 控制台及其构建链的依赖版本和完整性 |
@@ -242,7 +314,9 @@
 | `ui/src/ui/HomeDashboard.tsx` | 文件 | 控制台首页、快捷入口与运行总览 |
 | `ui/src/ui/IllustrationHero.tsx` | 文件 | 非对话页面复用的紧凑标题与状态摘要 |
 | `ui/src/ui/MarkdownContent.tsx` | 文件 | 控制台消息 Markdown 渲染 |
+| `ui/src/ui/OfficialMarketplace.tsx` | 文件 | 用户端官方插件与技能市场。 |
 | `ui/src/ui/OperationsCenter.tsx` | 文件 | 后台任务、定时计划与运行事件管理 |
+| `ui/src/ui/WechatBubble.tsx` | 文件 | 聊天正文、媒体及引用呈现 |
 | `ui/src/ui/WechatPersonaPanel.tsx` | 文件 | 微信会话 Agent 人设编辑面板 |
 | `ui/src/ui/agent-workspace.css` | 文件 | 紧凑工作区、消息滚动与窄屏会话列表 |
 | `ui/src/ui/wechatChannelLabel.ts` | 文件 | 微信客户端通道统一展示名与旧提示转换 |

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 import asyncio
 import os
-from contextlib import suppress
+import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import httpx
-
 from fastapi import FastAPI
 
 from xbot.core.config import load_settings
@@ -31,9 +30,20 @@ async def report_instance(token: str) -> None:
             await asyncio.sleep(60)
 
 
+def startup_release_digest() -> str | None:
+    marker = Path(__file__).resolve().parents[3] / '.xbot-release-sha256'
+    try:
+        with marker.open('rb') as stream:
+            digest = stream.read(66).removesuffix(b'\n')
+    except FileNotFoundError:
+        digest = b''
+    return digest.decode('ascii') if re.fullmatch(b'[0-9a-f]{64}', digest) else None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = load_settings()
+    app.state.release_digest = await asyncio.to_thread(startup_release_digest)
     configure_logging(settings.xbot.debug)
     await ensure_storage_ready(settings)
     context = build_context(settings)
@@ -42,10 +52,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await context.engine.start()
     token = os.getenv('XBOT_INSTANCE_TOKEN')
     if not token:
-        try:
-            token = Path('/app/configs/.instance-token').read_text().strip()
-        except FileNotFoundError:
-            pass
+        with suppress(FileNotFoundError):
+            token = (await asyncio.to_thread(Path('/app/configs/.instance-token').read_text)).strip()
     heartbeat = asyncio.create_task(report_instance(token)) if token else None
     try:
         yield

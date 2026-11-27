@@ -10,4 +10,4 @@
 
 ## 项目特有约定
 - 源码目录：<!-- 例如 frontend/ = 前端，backend/ = 后端 -->
-- 其他：
+- 开展框架发布、在线更新或发布验收前，先读[框架发布规范](specs/013-framework-release-policy/spec.md)。

@@ -296,7 +296,7 @@ a:focus-visible,
 }
 
 .home-events-card {
-  flex: 1;
+  flex: none;
 }
 
 .home-event-list {

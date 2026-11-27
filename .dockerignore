@@ -19,6 +19,8 @@ screenshots
 *.pyo
 *.pyd
 .env
+configs/.instance-token
+release/
 .env.*
 !.env.example
 *.db

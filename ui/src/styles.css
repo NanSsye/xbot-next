@@ -448,14 +448,16 @@ button {
 }
 
 .frontend-version {
-  flex: none;
-  align-self: flex-end;
-  padding: 2px max(12px, env(safe-area-inset-right)) max(3px, env(safe-area-inset-bottom));
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
+.update-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #e54446; }
+.config-confirm-dialog:modal { overscroll-behavior: contain; }
+.config-confirm-dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 
 .content-scroll {
   flex: 1;
@@ -921,24 +923,23 @@ button {
 
 .home-main-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  align-items: start;
   gap: 20px;
 }
 
 .home-radar-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
 }
 
 .home-radar-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--bg-surface-soft);
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-md);
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border-card);
   transition: background-color var(--motion-ui) var(--motion-ease-out),
               border-color var(--motion-ui) var(--motion-ease-out);
 }
@@ -949,17 +950,18 @@ button {
 
 .home-quick-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
   margin-top: 6px;
 }
 
 .home-quick-btn {
   display: flex;
-  flex-direction: column;
+  text-decoration: none;
+  color: var(--primary);
   align-items: center;
-  justify-content: center;
-  padding: 16px 12px;
+  min-height: 44px;
+  padding: 8px 12px;
   background: var(--bg-surface-soft);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-md);
@@ -1374,6 +1376,13 @@ button {
   border-color: #82d854;
   color: #151311;
 }
+.wechat-bubble-row > :last-child { min-width: 0; }
+.wechat-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.wechat-photo { display: block; max-width: min(100%, 260px); max-height: 240px; border-radius: 6px; object-fit: contain; }
+.wechat-quote { margin: 6px 0 0; padding: 4px 0 4px 10px; border-inline-start: 3px solid var(--border-strong); font-size: 12px; }
+.wechat-quote strong { display: block; margin-bottom: 3px; font-size: 11px; opacity: .75; }
+.wechat-quote .wechat-photo { max-height: 96px; }
+.wechat-media-missing { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 [data-theme="dark"] .wechat-bubble-row--outgoing .wechat-bubble-box {
   background: #2b5e28;
   border-color: #3b7e36;
@@ -1483,6 +1492,22 @@ button {
 .channel-card:hover, .extension-card:hover {
   box-shadow: var(--shadow-hover);
 }
+.market-loading > p { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 12px; color: var(--text-muted); }
+.market-loading .extensions-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.market-placeholder { gap: 9px; pointer-events: none; }
+.market-placeholder :is(i,b,span) { display: block; background: var(--border-card); border-radius: 4px; height: 8px; }
+.market-placeholder i { width: 32px; }
+.market-placeholder b { width: 39%; height: 12px; margin-top: 6px; }
+.market-placeholder span { width: 83%; }
+.market-placeholder span:last-child { width: 61%; }
+@media (prefers-reduced-motion: no-preference) {
+  .market-loading > p svg { animation: market-turn 1.8s linear infinite; }
+  .market-placeholder :is(b,span) { animation: market-pulse 1.7s ease-in-out infinite alternate; }
+  .market-placeholder:nth-child(2) :is(b,span) { animation-delay: -.5s; }
+  .market-placeholder:nth-child(3) :is(b,span) { animation-delay: -1s; }
+}
+@keyframes market-turn { to { transform: rotate(1turn); } }
+@keyframes market-pulse { from { opacity: .5; } to { opacity: 1; } }
 
 .channel-card__head, .extension-card__head {
   display: flex;

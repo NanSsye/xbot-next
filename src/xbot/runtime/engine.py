@@ -162,6 +162,9 @@ class XBotEngine:
             data["attachments"] = message.raw.get("attachments", [])
             await self._events.publish("message.created", {"message": data})
 
+    def is_serving(self) -> bool:
+        return self._status.state == 'running' and self._consumer_task is not None and not self._consumer_task.done()
+
     def status(self) -> RuntimeStatus:
         self._refresh_counts()
         return self._status
