@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api";
+import { fieldCopy, optionCopy } from './settingsTasks';
 import { WECHAT_CLIENT_LABEL, wechatChannelDisplayText } from "./wechatChannelLabel";
 import type {
   ConfigApplyResult,
@@ -37,6 +38,11 @@ export type ConfigAppliedEvent = {
 type ConfigCenterProps = {
   scope: ConfigScope;
   initialSection?: string;
+  channel?: string;
+  task?: { id: string; paths: string[]; snapshot: ConfigSnapshot; choices: string[] };
+  onState?: (dirty: boolean, busy: boolean) => void;
+  onFound?: (models: string[]) => void;
+  onNext?: () => void;
   onApplied?: (event: ConfigAppliedEvent) => void | Promise<void>;
 };
 
@@ -70,7 +76,18 @@ const COMMON_FIELDS: Record<string, string[]> = {
   "adapters.telegram": ["enabled", "bot_token", "api_base_url"],
 };
 
-export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCenterProps) {
+function channelSnapshot(snapshot: ConfigSnapshot, channel?: string): ConfigSnapshot {
+  if (!channel) return snapshot;
+  const key = `adapters.${channel}`;
+  return { ...snapshot, sections: snapshot.sections.filter(s => s.scope === "channels" && s.key === key),
+    pending_restart: snapshot.pending_restart.filter(path => path.startsWith(`${key}.`)) };
+}
+
+export function ConfigCenter({ scope, initialSection = "", channel, task, onState, onFound, onNext, onApplied }: ConfigCenterProps) {
+  const storageKey = `${DRAFT_STORAGE_PREFIX}.${scope}${channel ? `.${channel}` : task ? `.${task.id}` : ""}`;
+  const project = useCallback((full: ConfigSnapshot) => !task ? channelSnapshot(full, channel) : ({ ...full,
+    sections: full.sections.map(s=>({...s,fields:s.fields.filter(f=>task.paths.includes(f.path))})).filter(s=>s.fields.length),
+    pending_restart:full.pending_restart.filter(p=>task.paths.includes(p)) }),[task,channel]);
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
   const [draft, setDraft] = useState<Record<string, DraftValue>>({});
   const [resets, setResets] = useState<Record<string, boolean>>({});
@@ -92,9 +109,9 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
     setLoading(true);
     setError("");
     try {
-      const next = await api.config();
+      const next = project(task?.snapshot ?? await api.config());
       const nextDraft = buildDraft(next, scope);
-      const restored = restoreDraft(next, scope);
+      const restored = restoreDraft(next, scope, storageKey);
       setSnapshot(next);
       setDraft({ ...nextDraft, ...restored.values });
       setResets(restored.resets);
@@ -114,7 +131,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
     } finally {
       setLoading(false);
     }
-  }, [scope]);
+  }, [scope, project, task, storageKey]);
 
   useEffect(() => {
     void loadSnapshot();
@@ -126,6 +143,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
   );
   const allFields = useMemo(() => scopedSections.flatMap((section) => section.fields), [scopedSections]);
   const evaluation = useMemo(() => evaluateChanges(allFields, draft, resets), [allFields, draft, resets]);
+  useEffect(()=>onState?.(evaluation.entries.length>0, saving || modelsLoading),[onState,evaluation.entries.length,saving,modelsLoading]);
   const enabledModelOptions = useMemo(
     () => parseListDraft(draft["agent.llm.enabled_models"]),
     [draft],
@@ -146,7 +164,6 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
       const storedResets = evaluation.entries
         .filter((entry) => entry.change.reset)
         .map((entry) => entry.field.path);
-      const storageKey = draftStorageKey(scope);
       if (Object.keys(storedValues).length === 0 && storedResets.length === 0) {
         window.sessionStorage.removeItem(storageKey);
         setDraftSavedAt("");
@@ -160,7 +177,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
       setDraftSavedAt(savedAt);
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [draft, evaluation.entries, loading, resets, scope, snapshot]);
+  }, [draft, evaluation.entries, loading, resets, storageKey, snapshot]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const matchingSections = useMemo(
@@ -180,10 +197,11 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
     ? activeSection.fields.filter((field) => fieldMatches(field, normalizedQuery) || sectionOwnTextMatches(activeSection, normalizedQuery))
     : [];
   const commonKeys = activeSection && COMMON_FIELDS[activeSection.key];
-  const commonFields = commonKeys && !normalizedQuery
+  const taskFields = visibleFields.filter(f=>!(task?.id==='model' && f.path==='agent.llm.enabled_models'));
+  const commonFields = task ? taskFields.filter(f=>task.id!=='connection' || f.path!=='agent.llm.provider') : commonKeys && !normalizedQuery
     ? commonKeys.flatMap((key) => visibleFields.filter((field) => field.path === `${activeSection.key}.${key}`))
     : visibleFields;
-  const advancedFields = visibleFields.filter((field) => !commonFields.includes(field));
+  const advancedFields = taskFields.filter((field) => !commonFields.includes(field));
   const navigation = scope === "channels" ? [{ title: "通道", sections: matchingSections }] : [
     ...SYSTEM_GROUPS.map(({ title, keys }) => ({
       title,
@@ -197,7 +215,11 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
   const pendingRestartCount = snapshot?.pending_restart.length ?? 0;
 
   function updateField(path: string, value: DraftValue) {
-    setDraft((current) => ({ ...current, [path]: value }));
+    setDraft((current) => { const next={ ...current, [path]: value };
+      if(task?.id==='model' && path==='agent.llm.model') {
+        const pool=allFields.find(f=>f.path==='agent.llm.enabled_models');
+        if(pool) next[pool.path]=Array.from(new Set([...parseListDraft(fieldDraftValue(pool)),String(value).trim()].filter(Boolean))).join('\n');
+      } return next; });
     setResets((current) => ({ ...current, [path]: false }));
     setError("");
     setMessage("");
@@ -217,7 +239,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
     setError("");
     setMessage("已放弃未应用的修改。");
     setDraftSavedAt("");
-    window.sessionStorage.removeItem(draftStorageKey(scope));
+    window.sessionStorage.removeItem(storageKey);
   }
 
   async function discoverModels() {
@@ -226,6 +248,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
     setModelsError("");
     try {
       const result = await api.discoverLlmModels();
+      onFound?.(result.models);
       setDiscoveredModels(result.models);
       setModelsLoaded(true);
     } catch (err) {
@@ -262,12 +285,13 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
       const nextApiToken = apiTokenEntry && typeof apiTokenEntry.change.value === "string"
         ? apiTokenEntry.change.value
         : undefined;
-      setSnapshot(result.snapshot);
-      setDraft(buildDraft(result.snapshot, scope));
+      const next = project(result.snapshot);
+      setSnapshot(next);
+      setDraft(buildDraft(next, scope));
       setResets({});
       setVisibleSecrets({});
       setDraftSavedAt("");
-      window.sessionStorage.removeItem(draftStorageKey(scope));
+      window.sessionStorage.removeItem(storageKey);
       const summary = [
         result.applied.length ? `${result.applied.length} 项已实时生效` : "",
         result.restart_required.length ? `${result.restart_required.length} 项等待重启` : "",
@@ -278,6 +302,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
         setModelsError("");
         try {
           const discovery = await api.discoverLlmModels();
+          onFound?.(discovery.models);
           setDiscoveredModels(discovery.models);
           setModelsLoaded(true);
         } catch (discoveryError) {
@@ -320,8 +345,8 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
 
   return (
     <section className="config-center" aria-busy={saving}>
-      <div className="config-center__toolbar">
-        <label className="config-search">
+      {!task && <div className="config-center__toolbar">
+        {!channel && <label className="config-search">
           <Search size={15} />
           <span className="sr-only">搜索配置</span>
           <input
@@ -330,7 +355,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
             type="search"
             placeholder="搜索设置或环境变量"
           />
-        </label>
+        </label>}
         <div className="config-center__header-actions">
           {pendingRestartCount ? <span className="config-chip config-chip--warn">{pendingRestartCount} 项待重启</span> : null}
           <button type="button" className="icon-button" title="重新读取配置" aria-label="重新读取配置"
@@ -339,13 +364,13 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
             <RefreshCw className={loading ? "spin" : ""} size={16} />
           </button>
         </div>
-      </div>
+      </div>}
 
       {error ? <div className="config-notice config-notice--error" role="alert"><CircleAlert size={16} />{error}</div> : null}
       {message ? <div className="config-notice config-notice--success" aria-live="polite"><CheckCircle2 size={16} />{message}</div> : null}
 
       <div className="config-workflow">
-        {matchingSections.length > 0 && <div className="config-section-picker">
+        {!channel && !task && matchingSections.length > 0 && <div className="config-section-picker">
           <label htmlFor={`config-section-picker-${scope}`}>配置分区</label>
           <select id={`config-section-picker-${scope}`} value={activeSection?.key ?? ""}
             onChange={(event) => setSelectedSection(event.target.value)}>
@@ -354,7 +379,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
             </optgroup>)}
           </select>
         </div>}
-        <nav className="config-section-rail" aria-label="配置分区">
+        {!channel && !task && <nav className="config-section-rail" aria-label="配置分区">
           {navigation.filter(({ sections }) => sections.length).map(({ title, sections }) => <div key={title} className="config-nav-group">
             <div className="config-section-rail__label">{title}</div>
             {sections.map((section) => {
@@ -373,37 +398,45 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
             );
             })}
           </div>)}
-        </nav>
+        </nav>}
 
         <div className="config-form-column">
           {activeSection ? (
             <>
-              <div className="config-section-intro">
+              {!task && <div className="config-section-intro">
                 <div>
-                  <h2>{sectionDisplayTitle(activeSection)}</h2>
+                  {!channel && <h2>{sectionDisplayTitle(activeSection)}</h2>}
                   <p>{activeSection.key === "agent" ? "模型连接、默认模型与可用模型。" : wechatChannelDisplayText(activeSection.description)}</p>
                 </div>
-              </div>
+              </div>}
+              {task?.id==='connection' && !modelConnectionDirty && <div className="settings-discover">
+                {modelsError && <p role="alert">连接信息未被撤销，但未能获取模型列表。{modelsError}</p>}
+                {modelsLoaded && !modelsError && <p role="status">已获取 {discoveredModels.length} 个模型。此结果不代表已验证回复。</p>}
+                <button className="ghost-button" disabled={modelsLoading || saving} onClick={()=>void discoverModels()}><RefreshCw size={14}/>{modelsLoading?'获取中…':modelsError?'重试获取模型':'获取模型列表'}</button>
+                <button className="ghost-button" disabled={saving || modelsLoading || !!evaluation.entries.length} onClick={onNext}>选择默认模型 ›</button>
+              </div>}
+              {task?.id==='model' && <p className="config-field__description">新的模型 ID 会同时加入群聊可选列表，不改变已有群聊选择。</p>}
               <div className={`config-fields${activeSection.key === "agent" && !normalizedQuery ? " config-fields--model" : ""}`}>
                 {[commonFields, advancedFields].map((fields, index) => {
                   if (!fields.length) return null;
                   const editors = fields.map((field) => (
                   <ConfigFieldEditor
                     key={field.path}
-                    field={field}
+                    hideSource={Boolean(task)}
+                    field={task && fieldCopy[field.path] ? {...field,label:fieldCopy[field.path][0],description:fieldCopy[field.path][1]} : field}
                     value={draft[field.path] ?? fieldDraftValue(field)}
                     reset={Boolean(resets[field.path])}
                     dirty={evaluation.entries.some((entry) => entry.field.path === field.path)}
                     error={evaluation.errors[field.path]}
                     visible={Boolean(visibleSecrets[field.path])}
-                    optionsOverride={field.path === "agent.llm.model" ? enabledModelOptions : undefined}
+                    optionsOverride={field.path === "agent.llm.model" ? task ? [...new Set([...task.choices,...parseListDraft(fieldDraftValue(allFields.find(f=>f.path==='agent.llm.enabled_models')!))])] : enabledModelOptions : undefined}
                     modelPool={field.path === "agent.llm.enabled_models" ? {
                       discovered: discoveredModels,
                       loading: modelsLoading,
                       loaded: modelsLoaded,
                       error: modelsError,
                       connectionDirty: modelConnectionDirty,
-                      defaultModel: String(draft["agent.llm.model"] ?? ""),
+                    defaultModel: String(draft["agent.llm.model"] ?? task?.snapshot.sections.find(s=>s.key==='agent')?.fields.find(f=>f.path==='agent.llm.model')?.value ?? ""),
                       onDiscover: () => void discoverModels(),
                     } : undefined}
                     onChange={(value) => updateField(field.path, value)}
@@ -415,7 +448,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
                   const changed = fields.filter((field) => evaluation.entries.some((entry) => entry.field === field)
                     || evaluation.errors[field.path]).length;
                   return <details key={activeSection.key} className="config-advanced" open={changed ? true : undefined}>
-                    <summary>{activeSection.key === "agent" ? "Hermes 与进阶参数" : "进阶参数"}</summary>
+                    <summary>{task?.id==='connection' ? '更多连接选项' : activeSection.key === "agent" ? "Hermes 与进阶参数" : "进阶参数"}</summary>
                     <div className="config-fields">{editors}</div>
                   </details>;
                 })}
@@ -426,6 +459,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
                     <span>清除搜索词后可查看完整配置。</span>
                   </div>
                 ) : null}
+                {task && <details className="config-advanced"><summary>技术详情与配置来源</summary>{taskFields.map(f=><div key={f.path} className="settings-source"><strong>{fieldCopy[f.path]?.[0] || f.label}</strong><small>{f.source==='web'?'网页设置':'环境变量或配置文件'} · {f.env_name || f.path}</small>{f.overridden && <button type="button" className="config-reset-link" onClick={()=>toggleReset(f)}>{resets[f.path]?'撤销恢复':'恢复配置来源'}</button>}</div>)}</details>}
               </div>
             </>
           ) : (
@@ -458,7 +492,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
                     disabled={!evaluation.entries.length || saving || Object.keys(evaluation.errors).length > 0}
                   >
                     {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
-                    {saving ? "应用中…" : "保存并应用"}
+                    {saving ? "应用中…" : task?.id==='connection' ? '保存连接并获取模型' : "保存并应用"}
                   </button>
                 </div>
               </div>
@@ -512,6 +546,7 @@ export function ConfigCenter({ scope, initialSection = "", onApplied }: ConfigCe
 }
 
 function ConfigFieldEditor({
+  hideSource,
   field,
   value,
   reset,
@@ -524,6 +559,7 @@ function ConfigFieldEditor({
   onToggleReset,
   onToggleVisible,
 }: {
+  hideSource?: boolean;
   field: ConfigField;
   value: DraftValue;
   reset: boolean;
@@ -560,7 +596,7 @@ function ConfigFieldEditor({
       {field.adapter_toggle ? (
         <div className="config-field__readonly">
           <CircleAlert size={16} />
-          <span>在「接入通道 → 运行状态」启停。</span>
+          <span>启停状态由通道卡片上的开关管理。</span>
         </div>
       ) : reset ? (
         <div className="config-field__reset-state">
@@ -593,7 +629,7 @@ function ConfigFieldEditor({
         </div>
       ) : null}
       {error ? <div id={errorId} className="config-field__error">{wechatChannelDisplayText(error)}</div> : null}
-      <details className="config-field__meta">
+      {!hideSource && <details className="config-field__meta">
         <summary>配置来源</summary>
         <div>
           <span>{field.source === "web" ? "网页覆盖" : "ENV / TOML"}</span>
@@ -602,7 +638,7 @@ function ConfigFieldEditor({
         {field.overridden && !field.adapter_toggle && !reset ? <button type="button" className="config-reset-link" onClick={onToggleReset}>
           <RotateCcw size={12} /> 恢复 ENV / TOML 来源
         </button> : null}
-      </details>
+      </details>}
     </article>
   );
 }
@@ -662,7 +698,16 @@ function FieldControl({
   }
 
   const selectOptions = optionsOverride ?? field.options;
+  if (field.path==='agent.llm.model' && optionsOverride) return <><input id={id} list={`${id}-choices`} value={String(value)} aria-describedby={describedBy} onChange={e=>onChange(e.target.value)} /><datalist id={`${id}-choices`}>{selectOptions.map(o=><option key={o} value={o}/>)}</datalist></>;
   if (selectOptions.length > 0) {
+    if (!optionsOverride && selectOptions.every(o=>Object.hasOwn(optionCopy,o))) return (
+      <div className="setting-choices" role="radiogroup" aria-label={field.label} aria-describedby={describedBy}>
+        {selectOptions.map((o,i)=>{const [label,help]=optionCopy[o];const control=i===0?id:`${id}-${i}`;return <label key={o}>
+          <input id={control} type="radio" name={id} value={o} checked={value===o} aria-labelledby={`${control}-name`} aria-describedby={`${control}-help`} onChange={()=>onChange(o)}/>
+          <span><strong id={`${control}-name`}>{label}</strong><small id={`${control}-help`}>{help}</small></span>
+        </label>;})}
+      </div>
+    );
     return (
       <select
         id={id}
@@ -671,7 +716,7 @@ function FieldControl({
         aria-invalid={invalid}
         onChange={(event) => onChange(event.target.value)}
       >
-        {selectOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+        {selectOptions.map((option) => <option key={option} value={option}>{option==='openai_compatible'?'OpenAI 兼容接口':option==='anthropic'?'Anthropic 接口':option}</option>)}
       </select>
     );
   }
@@ -932,18 +977,14 @@ function fieldMatches(field: ConfigField, query: string): boolean {
     .some((value) => value.toLowerCase().includes(query));
 }
 
-function draftStorageKey(scope: ConfigScope): string {
-  return `${DRAFT_STORAGE_PREFIX}.${scope}`;
-}
-
-function restoreDraft(snapshot: ConfigSnapshot, scope: ConfigScope): { values: Record<string, DraftValue>; resets: Record<string, boolean>; savedAt: string } {
+function restoreDraft(snapshot: ConfigSnapshot, scope: ConfigScope, storageKey: string): { values: Record<string, DraftValue>; resets: Record<string, boolean>; savedAt: string } {
   const empty = { values: {}, resets: {}, savedAt: "" } as { values: Record<string, DraftValue>; resets: Record<string, boolean>; savedAt: string };
   try {
-    const raw = window.sessionStorage.getItem(draftStorageKey(scope));
+    const raw = window.sessionStorage.getItem(storageKey);
     if (!raw) return empty;
     const stored = JSON.parse(raw) as { revision?: string; values?: Record<string, DraftValue>; resets?: string[]; savedAt?: string };
     if (stored.revision !== snapshot.revision) {
-      window.sessionStorage.removeItem(draftStorageKey(scope));
+      window.sessionStorage.removeItem(storageKey);
       return empty;
     }
     const allowedFields = snapshot.sections.filter((section) => section.scope === scope).flatMap((section) => section.fields);
@@ -960,7 +1001,7 @@ function restoreDraft(snapshot: ConfigSnapshot, scope: ConfigScope): { values: R
     }
     return { values, resets, savedAt: stored.savedAt ?? "" };
   } catch {
-    window.sessionStorage.removeItem(draftStorageKey(scope));
+    window.sessionStorage.removeItem(storageKey);
     return empty;
   }
 }

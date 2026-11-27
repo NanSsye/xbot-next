@@ -30,7 +30,7 @@
 
 ### 控制台设置
 
-打开设置默认进入模型配置。系统设置按用途分组，通道参数按平台分组；常用项直接显示，进阶参数按需展开，也可以搜索定位。
+打开控制台设置默认进入模型配置。配置微信、QQ 或 Telegram 时，在「接入通道」点击对应卡片的齿轮；常用参数直接显示，进阶参数可以展开或搜索。Web 通道只需在卡片上启停。
 
 ![控制台设置桌面界面：分组导航、模型配置与进阶选项](docs/screenshots/desktop-settings.png)
 
@@ -47,8 +47,8 @@
 ### Docker 独立部署
 
 1. 按 [Docker 部署指南](docs/docker-deployment.md) 构建并加载镜像。部署端不需要同步源码。
-2. 准备独立的 `.env`，设置 `XBOT_IMAGE`、新的 `XBOT_API_TOKEN` 和 `XBOT_POSTGRES_PASSWORD`，再执行 `docker compose up -d`。
-3. 打开 `http://127.0.0.1:18548`，输入 API Token。默认只监听回环地址，不要直接把控制台暴露到公网。
+2. 准备独立的 `.env`，设置 `XBOT_IMAGE`、宿主机可信局域网地址 `XBOT_LAN_IP` 和 `XBOT_POSTGRES_PASSWORD`，再执行 `docker compose up -d`。
+3. 打开 `http://<局域网地址>:18548`，默认免登录。首次启动从镜像初始化完整的 `release/app/` 并挂载至 `/app`；后续启动保留本地修改。不要将免登录控制台暴露到公网。
 
 > [!IMPORTANT]
 > 新版只支持空库初始化，不能直接连接旧实例的数据库或复用旧数据目录。备份时同时保留 `.env`、`state/`、PostgreSQL 和 Redis 持久化数据；不要随容器删除数据卷。

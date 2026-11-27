@@ -157,6 +157,7 @@ export const api = {
   disablePlugin: (name: string) => request(`/plugins/${encodeURIComponent(name)}/disable`, { method: "POST" }),
   skills: () => request<SkillInfo[]>("/skills"),
   reloadSkills: () => request<SkillInfo[]>("/skills/reload", { method: "POST" }),
+  officialCatalog: () => request<{Kind:string;Name:string;Version:string;Notes:string;Digest:string}[]>("/skills/catalog"),
   enableSkill: (name: string) => request(`/skills/${encodeURIComponent(name)}/enable`, { method: "POST" }),
   disableSkill: (name: string) => request(`/skills/${encodeURIComponent(name)}/disable`, { method: "POST" }),
   conversations: (limit = 100) => request<Conversation[]>(`/conversations?limit=${limit}`),

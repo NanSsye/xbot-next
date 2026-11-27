@@ -1,6 +1,26 @@
 name: xbot-next-clean
 
 services:
+  init-code:
+    image: ${XBOT_IMAGE:?Set XBOT_IMAGE to the release image tag}
+    pull_policy: never
+    network_mode: none
+    volumes:
+      - ./release:/release
+    entrypoint: ["/usr/local/bin/python", "-c"]
+    command:
+      - |
+        import os, pathlib, shutil, tempfile
+        target = pathlib.Path('/release/app')
+        if target.is_symlink(): raise SystemExit('Unexpected app symlink')
+        if target.exists() and any(target.iterdir()):
+            if not (target / '.venv/bin/xbot').is_file(): raise SystemExit('Existing app is incomplete; not overwriting')
+        else:
+            with tempfile.TemporaryDirectory(dir=target.parent) as stage:
+                ready = pathlib.Path(stage) / 'app'
+                shutil.copytree('/app', ready, symlinks=True)
+                if not (ready / '.venv/bin/xbot').is_file(): raise SystemExit('Invalid runtime image')
+                os.replace(ready, target)
   xbot:
     image: ${XBOT_IMAGE:?Set XBOT_IMAGE to the release image tag}
     pull_policy: never
@@ -10,22 +30,25 @@ services:
       XBOT_SERVER_HOST: 0.0.0.0
       XBOT_SERVER_PORT: "8548"
       XBOT_LOAD_DOTENV: "false"
-      XBOT_API_AUTH_ENABLED: "true"
-      XBOT_API_TOKEN: ${XBOT_API_TOKEN:?Set a new XBOT_API_TOKEN}
+      XBOT_API_AUTH_ENABLED: ${XBOT_API_AUTH_ENABLED:-false}
       XBOT_DATABASE_URL: "postgresql+asyncpg://xbot:${XBOT_POSTGRES_PASSWORD:?Set a URL-safe database password}@postgres:5432/xbot"
       XBOT_ADMIN_DATABASE_URL: ""
       XBOT_QUEUE_TYPE: redis
       XBOT_REDIS_URL: redis://redis:6379/0
     ports:
-      - "127.0.0.1:${XBOT_HOST_PORT:-18548}:8548"
+      - "${XBOT_LAN_IP:?Set the trusted LAN interface address}:${XBOT_HOST_PORT:-18548}:8548"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      - ./release/app:/app
       - ./state/data:/app/data
       - ./state/logs:/app/logs
       - ./state/files:/app/files
       - ./state/workspace:/app/workspace
+      - ./state/agent-workspace:/app/.agent-workspace
     depends_on:
+      init-code:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

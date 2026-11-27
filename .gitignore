@@ -82,3 +82,4 @@ vendor/hermes/__pycache__/
 
 skills/**/credentials/
 /state/
+/configs/.instance-token
