@@ -131,6 +131,12 @@ def main(root):
         count = 0
         while True:
             try:
+                if count % 60 == 0 and (Path(__file__).with_name('release-signing.pub')).exists():
+                    try:
+                        from release_catalog import discover
+                        discover(root, Path(__file__).with_name('release-signing.pub').read_bytes())
+                    except Exception:
+                        logging.exception('Official catalog discovery failed')
                 if (root / "updater/approved.json").exists():
                     mounts = json.loads(
                         subprocess.check_output(

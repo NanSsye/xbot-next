@@ -33,10 +33,17 @@
 {"from": "page.channel-management", "to": "component.wechat-client-label", "type": "depends_on", "source": "006-wechat-channel-label", "note": "", "updated_at": "2026-11-26T17:39:23+09:00"}
 {"from": "page.channel-management", "to": "spec.009-channel-config-cards", "type": "implements", "source": "009-channel-config-cards", "note": "", "updated_at": "2026-11-27T11:46:00+09:00"}
 {"from": "page.framework-update", "to": "api.framework-update", "type": "calls", "source": "011-release-center", "note": "", "updated_at": "2026-11-27T13:54:50+09:00"}
+{"from": "page.home-dashboard", "to": "spec.012-home-release", "type": "implements", "source": "012-home-release", "note": "", "updated_at": "2026-11-27T14:54:43+09:00"}
 {"from": "page.official-marketplace", "to": "integration.official-catalog", "type": "calls", "source": "011-release-center", "note": "", "updated_at": "2026-11-27T13:30:13+09:00"}
 {"from": "page.wechat-workbench", "to": "api.wechat-workbench", "type": "depends_on", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}
 {"from": "page.wechat-workbench", "to": "component.console-shell", "type": "depends_on", "source": "008-syndex-console-design", "note": "", "updated_at": "2026-11-26T18:54:18+09:00"}
 {"from": "page.wechat-workbench", "to": "spec.005-wechat-workbench", "type": "implements", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}
+{"from": "service.framework-stage", "to": "spec.014-framework-bundle", "type": "implements", "source": "014-framework-bundle", "note": "", "updated_at": "2026-11-27T15:08:59+09:00"}
+{"from": "service.framework-stage", "to": "api.framework-update", "type": "related_to", "source": "014-framework-bundle", "note": "", "updated_at": "2026-11-27T15:08:59+09:00"}
 {"from": "service.release-switch", "to": "api.release-readiness", "type": "depends_on", "source": "011-release-center", "note": "", "updated_at": "2026-11-27T13:48:00+09:00"}
+{"from": "service.web-release-discovery", "to": "spec.012-home-release", "type": "implements", "source": "012-home-release", "note": "", "updated_at": "2026-11-27T14:54:43+09:00"}
 {"from": "service.wechat-workbench-outgoing", "to": "integration.wechat869-workbench", "type": "depends_on", "source": "005-wechat-workbench", "note": "", "updated_at": "2026-11-26T17:31:38+09:00"}
 {"from": "spec.010-console-settings-ux", "to": "component.agent-model-settings", "type": "related_to", "source": "010-console-settings-ux", "note": "", "updated_at": "2026-11-27T12:02:32+09:00"}
+{"from": "spec.013-framework-release-policy", "to": "page.framework-update", "type": "affects", "source": "013-framework-release-policy", "note": "", "updated_at": "2026-11-27T14:57:58+09:00"}
+{"from": "spec.013-framework-release-policy", "to": "service.web-release-discovery", "type": "affects", "source": "013-framework-release-policy", "note": "", "updated_at": "2026-11-27T14:57:58+09:00"}
+{"from": "spec.013-framework-release-policy", "to": "spec.011-release-center", "type": "affects", "source": "013-framework-release-policy", "note": "", "updated_at": "2026-11-27T14:57:58+09:00"}

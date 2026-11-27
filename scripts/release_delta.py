@@ -67,6 +67,10 @@ def replace_file(source, target):
 def apply_delta(root, plan, token, service, report=lambda phase: None):
     live = root/'release/app'
     payload = root/'updater/payload'
+    if 'payload_digest' in plan:
+        if not re.fullmatch('[a-f0-9]{64}', plan['payload_digest']):
+            raise ValueError('Invalid payload identity')
+        payload = root/'updater'/('payload-' + plan['payload_digest'])
     changes = plan['changes']
     def confirm():
         if inspect_delta(live,plan)['confirmation'] != token:

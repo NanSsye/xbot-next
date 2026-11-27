@@ -1,7 +1,7 @@
 # 产品知识图谱（可读视图）
 
-> 自动生成，图谱版本 `94df383+011-release-center@20261127143544`。**请勿手改**；修改请用 `pg update`。
-> 数据源：`knowledge/graph/nodes.jsonl`（37 节点）、`edges.jsonl`（42 边）。
+> 自动生成，图谱版本 `9d78d42+014-framework-bundle@20261127150859`。**请勿手改**；修改请用 `pg update`。
+> 数据源：`knowledge/graph/nodes.jsonl`（43 节点）、`edges.jsonl`（49 边）。
 
 ## 共享 / 业务（shared）
 
@@ -25,6 +25,9 @@
 | `spec.009-channel-config-cards` | 接入通道卡片配置 | active | specs/009-channel-config-cards/spec.md | 需求 009-channel-config-cards：接入通道卡片配置 |
 | `spec.010-console-settings-ux` | 控制台设置：从首次接入到日常管理 | active | specs/010-console-settings-ux/spec.md | 控制台设置改版已本地实现并通过模拟浏览器回归及配置接口测试，未部署。 |
 | `spec.011-release-center` | 独立发布后台与整版更新 | active | specs/011-release-center/spec.md | 需求 011-release-center：独立发布后台与整版更新 |
+| `spec.012-home-release` | 首页布局与后台增量发布 | active | specs/012-home-release/spec.md | 需求 012-home-release：首页布局与后台增量发布 |
+| `spec.013-framework-release-policy` | 框架更新发布规范 | active | specs/013-framework-release-policy/spec.md | 管理后台只上传一次完整的 Xbot 程序包，发布一个目标版本；客户端按需下载差异文件，兼容旧版可直接跨版本更新。已确认的要求，不表示已经上线。 |
+| `spec.014-framework-bundle` | 签名完整包与按需文件下载实现 | active | specs/014-framework-bundle/spec.md | 需求 014-framework-bundle：签名完整包与按需文件下载实现 |
 
 ### doc
 
@@ -41,6 +44,7 @@
 | `page.agent-workspace` | Agent 对话工作台 | active | ui/src/ui/AgentWorkspace.tsx | 中性工作台主题，192px 独立历史栏、紧凑标题及居中消息流；保留独立会话、流式消息、历史与执行过程。 |
 | `page.channel-management` | 接入通道和通道配置 | active | ui/src/ui/App.tsx | 四种外部通道从卡片打开右侧独立配置抽屉，手机全宽；卡片开关管理启停，运行状态不代表登录。Web 无配置表单。 |
 | `page.framework-update` | 框架更新确认 | active | ui/src/ui/FrameworkUpdate.tsx | 控制台偏好展示前端版本及官方增量下载；本机安装单独预检，其他页面保留右下角入口 |
+| `page.home-dashboard` | 运行概览 | active | ui/src/ui/HomeDashboard.tsx | 紧凑通道、快捷入口、实时事件与独立后台链接 |
 | `page.official-marketplace` | 官方市场 | active | ui/src/ui/OfficialMarketplace.tsx | 独立目录页，按插件或技能浏览和下载；本机扩展页不请求官方服务。 |
 | `page.wechat-workbench` | 微信工作台 | active | ui/src/ui/App.tsx | 会话和消息读取头像；失败回退首字。同步提示按私聊头像返回量显示，出站消息沿用右侧气泡和实时事件。 |
 
@@ -73,7 +77,9 @@
 
 | ID | 名称 | 状态 | 路径 | 说明 |
 |----|------|------|------|------|
+| `service.framework-stage` | 签名完整包差异暂存 | active | scripts/framework_stage.py | 基于可信完整程序清单，只取发生变化的目标对象，尚未部署。 |
 | `service.release-switch` | 宿主机整版切换 | active | scripts/release_switch.py | 受控暂存目录切换和旧版本复验，尚未连接网页 |
+| `service.web-release-discovery` | 跨版本增量发现 | active | scripts/release_catalog.py | 按当前构建指纹筛选正式签名增量包；下载不触发安装 |
 | `service.wechat-workbench-outgoing` | 微信工作台出站消息入库 | active | src/xbot/runtime/engine.py | 同步和队列成功发送的 869 文本共用历史写入和 message.created 事件；不会把模型输出或发送失败投影成已发送。 |
 
 ### data_model
@@ -140,10 +146,17 @@
 | 接入通道和通道配置 (`page.channel-management`) | depends_on | 微信客户端通道显示名 (`component.wechat-client-label`) |
 | 接入通道和通道配置 (`page.channel-management`) | implements | 接入通道卡片配置 (`spec.009-channel-config-cards`) |
 | 框架更新确认 (`page.framework-update`) | calls | 宿主机更新任务 (`api.framework-update`) |
+| 运行概览 (`page.home-dashboard`) | implements | 首页布局与后台增量发布 (`spec.012-home-release`) |
 | 官方市场 (`page.official-marketplace`) | calls | 客户端官方目录 (`integration.official-catalog`) |
 | 微信工作台 (`page.wechat-workbench`) | depends_on | 微信工作台 API (`api.wechat-workbench`) |
 | 微信工作台 (`page.wechat-workbench`) | depends_on | 控制台工作区外壳 (`component.console-shell`) |
 | 微信工作台 (`page.wechat-workbench`) | implements | 微信工作台 869 头像与机器人回复回显 (`spec.005-wechat-workbench`) |
+| 签名完整包差异暂存 (`service.framework-stage`) | implements | 签名完整包与按需文件下载实现 (`spec.014-framework-bundle`) |
+| 签名完整包差异暂存 (`service.framework-stage`) | related_to | 宿主机更新任务 (`api.framework-update`) |
 | 宿主机整版切换 (`service.release-switch`) | depends_on | 发行就绪检查 (`api.release-readiness`) |
+| 跨版本增量发现 (`service.web-release-discovery`) | implements | 首页布局与后台增量发布 (`spec.012-home-release`) |
 | 微信工作台出站消息入库 (`service.wechat-workbench-outgoing`) | depends_on | 869 联系人资料与发送回执 (`integration.wechat869-workbench`) |
 | 控制台设置：从首次接入到日常管理 (`spec.010-console-settings-ux`) | related_to | Agent 模型设置 (`component.agent-model-settings`) |
+| 框架更新发布规范 (`spec.013-framework-release-policy`) | affects | 框架更新确认 (`page.framework-update`) |
+| 框架更新发布规范 (`spec.013-framework-release-policy`) | affects | 跨版本增量发现 (`service.web-release-discovery`) |
+| 框架更新发布规范 (`spec.013-framework-release-policy`) | affects | 独立发布后台与整版更新 (`spec.011-release-center`) |

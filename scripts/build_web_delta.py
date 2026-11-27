@@ -22,6 +22,10 @@ def inventory(root):
 
 def build(old, new, output, version):
     before, after = inventory(old), inventory(new)
+    return build_from_inventory(before, after, new, output, version)
+
+
+def build_from_inventory(before, after, new, output, version):
     identify = lambda files: hashlib.sha256(json.dumps(files,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     changes = {k:{'before':before.get(k),'after':after.get(k)} for k in sorted(before.keys() | after.keys()) if before.get(k)!=after.get(k)}
     if not changes:

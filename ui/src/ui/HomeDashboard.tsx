@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowRight,
+  ExternalLink,
   Bot,
   BookOpenText,
   MessagesSquare,
@@ -65,7 +66,7 @@ export function HomeDashboard(props: HomeDashboardProps) {
           {degradedCount > 0 ? (
             <span className="status-pill status-pill--warn">{degradedCount} 项数据暂不可用</span>
           ) : (
-            <span className="status-pill status-pill--ok">数据读取正常</span>
+            !props.loading && <span className="status-pill status-pill--ok">数据读取正常</span>
           )}
         </div>
       </PageHeading>
@@ -198,6 +199,7 @@ export function HomeDashboard(props: HomeDashboardProps) {
                 <QuickAction icon={<BookOpenText size={19} />} label="群知识库" onClick={() => props.onNavigate("knowledge")} />
                 <QuickAction icon={<Users size={19} />} label={`用户画像 ${props.profileCount || ""}`} onClick={() => props.onNavigate("profiles")} />
                 <QuickAction icon={<Settings size={19} />} label="系统配置" onClick={() => props.onNavigate("settings")} />
+                <a className="home-quick-btn" href="https://xbot.catmi.si/" target="_blank" rel="noopener noreferrer"><ExternalLink size={19} /><span>管理后台</span></a>
               </div>
             </section>
 

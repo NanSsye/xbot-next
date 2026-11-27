@@ -926,24 +926,23 @@ button {
 
 .home-main-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  align-items: start;
   gap: 20px;
 }
 
 .home-radar-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
 }
 
 .home-radar-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--bg-surface-soft);
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-md);
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border-card);
   transition: background-color var(--motion-ui) var(--motion-ease-out),
               border-color var(--motion-ui) var(--motion-ease-out);
 }
@@ -954,17 +953,18 @@ button {
 
 .home-quick-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
   margin-top: 6px;
 }
 
 .home-quick-btn {
   display: flex;
-  flex-direction: column;
+  text-decoration: none;
+  color: var(--primary);
   align-items: center;
-  justify-content: center;
-  padding: 16px 12px;
+  min-height: 44px;
+  padding: 8px 12px;
   background: var(--bg-surface-soft);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-md);

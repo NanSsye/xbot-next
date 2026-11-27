@@ -21,6 +21,13 @@
 | `configs` | 目录 | 应用配置模板和固定依赖发行清单 |
 | `configs/hermes-release.json` | 文件 | 固定内嵌 Hermes 版本、提交及源码归档 SHA-256 |
 | `configs/release-signing.pub` | 文件 | 客户端内置的正式 Ed25519 发行验签公钥 |
+| `configs/web-baselines` | 目录 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.0-94df383.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.0-bootstrap.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.0-delta.20261127.1.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.1.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.2.json` | 文件 | 正式 Web 构建的文件哈希清单 |
+| `configs/web-baselines/0.1.3.json` | 文件 | 正式 Web 构建的文件哈希清单 |
 | `configs/xbot.toml` | 文件 | 后端运行、通道、任务与 Agent 的默认配置 |
 | `data` | 目录 | 本地运行生成的应用状态、会话和产物，不纳入源码 |
 | `data/qq` | 目录 | QQ 通道持久数据 |
@@ -129,9 +136,14 @@
 | `pyproject.toml` | 文件 | Python 构建元数据、依赖安全下限、可选功能与测试配置 |
 | `scripts` | 目录 | 安装、升级和源码归档准备脚本 |
 | `scripts/build_web_delta.py` | 文件 | 比较两个前端构建目录并打包变更文件与删除清单 |
+| `scripts/framework_bundle.py` | 文件 | 签名整包生成 |
+| `scripts/framework_manifest.py` | 文件 | 签名验证与下载计算 |
+| `scripts/framework_stage.py` | 文件 | 官方文件按需暂存 |
 | `scripts/install.ps1` | 文件 | Windows 首次安装，按锁文件准备 Hermes 和运行环境 |
 | `scripts/install.sh` | 文件 | Unix 首次安装，按锁文件准备 Hermes 和运行环境 |
 | `scripts/prepare_hermes.py` | 文件 | 校验固定归档并准备独立的内嵌 Hermes 源码目录 |
+| `scripts/publish_web_version.py` | 文件 | 生成并发布所有历史构建直升包 |
+| `scripts/release_catalog.py` | 文件 | 按基线发现并验证官方增量 |
 | `scripts/release_delta.py` | 文件 | 检测增量文件冲突并执行更新和失败恢复 |
 | `scripts/release_switch.py` | 文件 | 已暂存整版目录的宿主机切换、冲突复核和回滚 |
 | `scripts/release_worker.py` | 文件 | 宿主机持久更新任务与执行结果 |
@@ -195,6 +207,18 @@
 | `specs/011-release-center/plan.md` | 文件 | 发布中心实施方案 |
 | `specs/011-release-center/spec.md` | 文件 | 更新与扩展需求 |
 | `specs/011-release-center/tasks.md` | 文件 | 部署验证与剩余工作 |
+| `specs/012-home-release` | 目录 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/012-home-release/plan.md` | 文件 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/012-home-release/spec.md` | 文件 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/012-home-release/tasks.md` | 文件 | 首页布局及跨版本发布规格与验收记录 |
+| `specs/013-framework-release-policy` | 目录 | 框架发布规范与验收记录 |
+| `specs/013-framework-release-policy/plan.md` | 文件 | 规范维护范围 |
+| `specs/013-framework-release-policy/spec.md` | 文件 | 正式框架发布和客户端差异下载要求 |
+| `specs/013-framework-release-policy/tasks.md` | 文件 | 规范落盘进展与后续实施边界 |
+| `specs/014-framework-bundle` | 目录 | 整包发布实施与验收记录 |
+| `specs/014-framework-bundle/plan.md` | 文件 | 整包发布实施与验收记录 |
+| `specs/014-framework-bundle/spec.md` | 文件 | 整包发布实施与验收记录 |
+| `specs/014-framework-bundle/tasks.md` | 文件 | 整包发布实施与验收记录 |
 | `specs/ACTIVE` | 文件 | 当前进行中的 feature-id（pg new/use 维护） |
 | `specs/_template` | 目录 | SDD 模板（spec/plan/tasks） |
 | `specs/_template/plan.md` | 文件 | 技术方案模板 |
@@ -237,6 +261,7 @@
 | `tests/integration/api/test_wechat_workbench.py` | 文件 | 工具台私聊头像、通道隔离、出站回执和实时事件回归 |
 | `tests/integration/messaging` | 目录 | 消息队列与 Redis Streams 行为回归 |
 | `tests/integration/rehearse_docker_update.sh` | 文件 | 同机隔离 Docker 目录切换、冲突保留、回滚验证。 |
+| `tests/integration/test_framework_bundle.py` | 文件 | 签名清单与差异更新回归 |
 | `tests/integration/test_framework_mailbox.py` | 文件 | 网页确认、重复请求、重启恢复、Chrome 验收 |
 | `tests/integration/test_framework_switch.py` | 文件 | 冲突复核、独立 Xbot 进程切换及恢复检查 |
 | `tests/integration/test_release_rehearsal.py` | 文件 | 模拟官方目录下载，验证实际安装路由、加载管理器与失败恢复。 |
@@ -249,6 +274,7 @@
 | `tests/unit/core/test_hermes_context_policy.py` | 文件 | 上下文窗口、压缩策略及分群模型回归 |
 | `tests/unit/core/test_hermes_session_resolution.py` | 文件 | 验证 Hermes 压缩后的单级及多级会话续接 |
 | `tests/unit/core/test_migrations.py` | 文件 | 空库升级、回退、重建与 ORM 一致性检查 |
+| `tests/unit/test_framework_manifest.py` | 文件 | 签名清单与差异更新回归 |
 | `tests/unit/test_release_signature.py` | 文件 | 验证官方签名绑定类型、名称、版本和包内容。 |
 | `ui` | 目录 | React 控制台与 TypeScript、Vite 构建配置 |
 | `ui/index.html` | 文件 | Vite 构建和挂载控制台的 HTML 入口 |
