@@ -77,7 +77,8 @@ import { AgentWorkspace } from "./AgentWorkspace";
 import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
 import { SettingsHome } from './SettingsHome';
 import { version as frontendVersion } from '../../package.json';
-import { FrameworkUpdate } from './FrameworkUpdate';
+import { FrameworkUpdate, useAvailableUpdate } from './FrameworkUpdate';
+import { WechatBubble } from './WechatBubble';
 import { HomeDashboard, type WebSocketState } from "./HomeDashboard";
 import { PageHeading } from "./IllustrationHero";
 import { KnowledgeCenter } from "./KnowledgeCenter";
@@ -123,6 +124,7 @@ function readThemeMode(): ThemeMode {
 }
 
 export function App() {
+  const availableUpdate = useAvailableUpdate();
   const readView = () => navItems.find(item => `#/${item.id}` === window.location.hash)?.id ?? "home";
   const [view, changeView] = useState<View>(readView);
   function setView(next: View) { window.location.hash = `/${next}`; }
@@ -605,6 +607,7 @@ export function App() {
             <div className="sidebar__brand-info">
               <div className="sidebar__brand-name">
                 <span>xbot</span>
+                <FrameworkUpdate version={frontendVersion} available={availableUpdate} />
               </div>
               <div className="sidebar__brand-sub">智能工作台</div>
             </div>
@@ -881,6 +884,7 @@ export function App() {
             <div className="content-scroll">
               <PageHeading title="控制台设置" tagline="模型与控制台偏好" />
               <SettingsView
+                availableUpdate={availableUpdate}
                 key={settingsSection}
                 onChat={()=>setView('agentChat')}
                 status={status}
@@ -899,7 +903,6 @@ export function App() {
             onSave={saveWechatProfile}
           />
         )}
-        {view === 'settings' ? <span className="frontend-version">Xbot v{frontendVersion}</span> : <FrameworkUpdate version={frontendVersion} />}
       </main>
     </div>
   );
@@ -1188,9 +1191,7 @@ function WechatWorkbench({
                     {!isOutgoing && (
                       <span className="wechat-sender-tag">{m.sender_name || m.sender_id}</span>
                     )}
-                    <div className="wechat-bubble-box">
-                      {m.content}
-                    </div>
+                    <WechatBubble message={m} />
                     <span className="agent-msg-time" style={{ textAlign: isOutgoing ? "right" : "left" }}>
                       {formatTimeShort(m.timestamp)}
                     </span>
@@ -1959,12 +1960,14 @@ function Extensions({
    ========================================================================== */
 
 function SettingsView({
+  availableUpdate,
   onChat,
   status,
   themeMode,
   setThemeMode,
   onConfigApplied,
 }: {
+  availableUpdate: boolean;
   onChat: () => void;
   status: SystemStatus | null;
   themeMode: ThemeMode;
@@ -2024,7 +2027,7 @@ function SettingsView({
             </div>
           </div>
         </div>
-        <FrameworkUpdate version={frontendVersion} settings />
+        <FrameworkUpdate version={frontendVersion} available={availableUpdate} settings />
     </SettingsHome>
   );
 }

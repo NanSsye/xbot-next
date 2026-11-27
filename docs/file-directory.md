@@ -219,6 +219,10 @@
 | `specs/014-framework-bundle/plan.md` | 文件 | 整包发布实施与验收记录 |
 | `specs/014-framework-bundle/spec.md` | 文件 | 整包发布实施与验收记录 |
 | `specs/014-framework-bundle/tasks.md` | 文件 | 整包发布实施与验收记录 |
+| `specs/015-wechat-message-display` | 目录 | 微信消息与更新提醒规格及验收 |
+| `specs/015-wechat-message-display/plan.md` | 文件 | 微信消息与更新提醒规格及验收 |
+| `specs/015-wechat-message-display/spec.md` | 文件 | 微信消息与更新提醒规格及验收 |
+| `specs/015-wechat-message-display/tasks.md` | 文件 | 微信消息与更新提醒规格及验收 |
 | `specs/ACTIVE` | 文件 | 当前进行中的 feature-id（pg new/use 维护） |
 | `specs/_template` | 目录 | SDD 模板（spec/plan/tasks） |
 | `specs/_template/plan.md` | 文件 | 技术方案模板 |
@@ -276,6 +280,7 @@
 | `tests/unit/core/test_migrations.py` | 文件 | 空库升级、回退、重建与 ORM 一致性检查 |
 | `tests/unit/test_framework_manifest.py` | 文件 | 签名清单与差异更新回归 |
 | `tests/unit/test_release_signature.py` | 文件 | 验证官方签名绑定类型、名称、版本和包内容。 |
+| `tests/wechat-bubble-browser.cjs` | 文件 | 微信图片、引用及红点浏览器回归 |
 | `ui` | 目录 | React 控制台与 TypeScript、Vite 构建配置 |
 | `ui/index.html` | 文件 | Vite 构建和挂载控制台的 HTML 入口 |
 | `ui/package-lock.json` | 文件 | 锁定 React 控制台及其构建链的依赖版本和完整性 |
@@ -307,6 +312,7 @@
 | `ui/src/ui/MarkdownContent.tsx` | 文件 | 控制台消息 Markdown 渲染 |
 | `ui/src/ui/OfficialMarketplace.tsx` | 文件 | 用户端官方插件与技能市场。 |
 | `ui/src/ui/OperationsCenter.tsx` | 文件 | 后台任务、定时计划与运行事件管理 |
+| `ui/src/ui/WechatBubble.tsx` | 文件 | 聊天正文、媒体及引用呈现 |
 | `ui/src/ui/WechatPersonaPanel.tsx` | 文件 | 微信会话 Agent 人设编辑面板 |
 | `ui/src/ui/agent-workspace.css` | 文件 | 紧凑工作区、消息滚动与窄屏会话列表 |
 | `ui/src/ui/wechatChannelLabel.ts` | 文件 | 微信客户端通道统一展示名与旧提示转换 |

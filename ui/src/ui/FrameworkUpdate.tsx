@@ -1,11 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, CircleCheck, RefreshCw } from 'lucide-react';
 import { api } from '../api';
 
 const key = 'xbot.framework-update.job';
 const labels:Record<string,string> = {queued:'已提交，等待宿主机执行',running:'正在更新并检查服务',succeeded:'已更新，新版服务正常',rolled_back:'更新失败，旧版服务已恢复',failed:'更新失败，请检查宿主机',interrupted:'宿主机任务中断，需要检查',stale:'本地文件已变化，请重新检查更新'};
 
-export function FrameworkUpdate({version,settings=false}:{version:string;settings?:boolean}) {
+export function useAvailableUpdate() {
+  const [available,setAvailable] = useState(false);
+  useEffect(() => {
+    let active = true, pending = false;
+    async function refresh() {
+      if (document.hidden || pending) return;
+      pending = true;
+      try { const preview = await api.frameworkPreview(); if (active) setAvailable(!!preview.available); }
+      catch { if (active) setAvailable(false); }
+      finally { pending = false; }
+    }
+    void refresh(); const timer = window.setInterval(refresh, 60000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
+  }, []);
+  return available;
+}
+
+export function FrameworkUpdate({version,available,settings=false}:{version:string;available:boolean;settings?:boolean}) {
+  const headingId = useId();
+  const dot = available && <span className="update-dot" role="img" aria-label="有可用更新" />;
   const dialog = useRef<HTMLDialogElement>(null);
   const [plan,setPlan] = useState<Awaited<ReturnType<typeof api.frameworkPreview>>>();
   const [job,setJob] = useState(()=>localStorage.getItem(key)||'');
@@ -45,10 +65,10 @@ export function FrameworkUpdate({version,settings=false}:{version:string;setting
   function open(){dialog.current?.showModal();if(!job&&!busy)void check(settings);}
   return <>{settings ? <section className="card" aria-label="版本与更新">
     <h2 className="card__title">版本与更新</h2><p>当前前端版本：v{version}</p>
-    <button type="button" className="primary-button" onClick={open}><RefreshCw size={14}/>{job?'查看更新结果':'更新'}</button>
-  </section> : <button className="frontend-version" type="button" title="检查框架更新" onClick={open}>Xbot v{version} · 检查更新</button>}
-    <dialog ref={dialog} className="config-confirm-dialog framework-dialog" aria-labelledby="framework-update-title">
-      <header className="framework-dialog__header">{succeeded?<CircleCheck size={21} aria-hidden="true"/>:<RefreshCw size={19} aria-hidden="true"/>}<h2 id="framework-update-title">{succeeded?'更新完成':plan?.available?`更新至 ${plan.version}`:'框架更新'}</h2></header>
+    <button type="button" className="primary-button" onClick={open}><RefreshCw size={14}/>{job?'查看更新结果':'更新'}{dot}</button>
+  </section> : <button className="frontend-version sidebar__brand-tag" type="button" title={available?'有可用更新':'检查框架更新'} onClick={open}>v{version}{dot}</button>}
+    <dialog ref={dialog} className="config-confirm-dialog framework-dialog" aria-labelledby={headingId}>
+      <header className="framework-dialog__header">{succeeded?<CircleCheck size={21} aria-hidden="true"/>:<RefreshCw size={19} aria-hidden="true"/>}<h2 id={headingId}>{succeeded?'更新完成':plan?.available?`更新至 ${plan.version}`:'框架更新'}</h2></header>
       <p role="status">{message}</p>
       {(busy||job&&!terminal)&&<progress aria-label="更新进度" style={{width:'100%'}}/>}
       {plan?.available&&<><p>仅应用本次新增、修改和删除的文件。其他文件保持不变。</p>

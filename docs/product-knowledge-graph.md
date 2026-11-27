@@ -1,7 +1,7 @@
 # 产品知识图谱（可读视图）
 
-> 自动生成，图谱版本 `9d78d42+014-framework-bundle@20261127150859`。**请勿手改**；修改请用 `pg update`。
-> 数据源：`knowledge/graph/nodes.jsonl`（43 节点）、`edges.jsonl`（49 边）。
+> 自动生成，图谱版本 `f2d6627+015-wechat-message-display@20261127151832`。**请勿手改**；修改请用 `pg update`。
+> 数据源：`knowledge/graph/nodes.jsonl`（45 节点）、`edges.jsonl`（52 边）。
 
 ## 共享 / 业务（shared）
 
@@ -28,6 +28,7 @@
 | `spec.012-home-release` | 首页布局与后台增量发布 | active | specs/012-home-release/spec.md | 需求 012-home-release：首页布局与后台增量发布 |
 | `spec.013-framework-release-policy` | 框架更新发布规范 | active | specs/013-framework-release-policy/spec.md | 管理后台只上传一次完整的 Xbot 程序包，发布一个目标版本；客户端按需下载差异文件，兼容旧版可直接跨版本更新。已确认的要求，不表示已经上线。 |
 | `spec.014-framework-bundle` | 签名完整包与按需文件下载实现 | active | specs/014-framework-bundle/spec.md | 需求 014-framework-bundle：签名完整包与按需文件下载实现 |
+| `spec.015-wechat-message-display` | 微信消息附件、引用和品牌区更新提醒 | active | specs/015-wechat-message-display/spec.md | 需求 015-wechat-message-display：微信消息附件、引用和品牌区更新提醒 |
 
 ### doc
 
@@ -54,6 +55,7 @@
 |----|------|------|------|------|
 | `component.agent-model-settings` | Agent 模型设置 | active | ui/src/ui/ConfigCenter.tsx | 设置首页提供三组任务、中文搜索与右侧抽屉；按字段隔离保存，支持模型列表重试、手动模型和试聊入口。 |
 | `component.console-shell` | 控制台工作区外壳 | active | ui/src/styles-hardening.css | 按 SYNDEX 对话页建立中性明暗主题、紧凑导航和轻边框；复用通用页头。 浏览器标签复用 Xbot 吉祥物。 |
+| `component.wechat-bubble` | 微信消息气泡 | active | ui/src/ui/WechatBubble.tsx | 用工作台附件与引用数据渲染本机图片、引用块和失效提示。 |
 | `component.wechat-client-label` | 微信客户端通道显示名 | active | ui/src/ui/wechatChannelLabel.ts | 首页、通道、配置和事件展示统一为微信客户端通道，保留原 API 路径、配置键和内容数据。 |
 
 ### config
@@ -118,6 +120,8 @@
 | 微信工作台 API (`api.wechat-workbench`) | depends_on | 微信工作台出站消息入库 (`service.wechat-workbench-outgoing`) |
 | Agent 模型设置 (`component.agent-model-settings`) | implements | 按 SYNDEX 工作台重整 Xbot 控制台 (`spec.008-syndex-console-design`) |
 | 控制台工作区外壳 (`component.console-shell`) | implements | 按 SYNDEX 工作台重整 Xbot 控制台 (`spec.008-syndex-console-design`) |
+| 微信消息气泡 (`component.wechat-bubble`) | depends_on | 微信工作台 API (`api.wechat-workbench`) |
+| 微信消息气泡 (`component.wechat-bubble`) | implements | 微信消息附件、引用和品牌区更新提醒 (`spec.015-wechat-message-display`) |
 | 微信客户端通道显示名 (`component.wechat-client-label`) | implements | 统一微信客户端通道展示名称 (`spec.006-wechat-channel-label`) |
 | 独立实例 Compose (`config.clean-compose`) | depends_on | Hermes 固定发行版 (`config.hermes-release`) |
 | 独立实例 Compose (`config.clean-compose`) | depends_on | 独立实例空库基线 (`data_model.clean-schema`) |
@@ -146,6 +150,7 @@
 | 接入通道和通道配置 (`page.channel-management`) | depends_on | 微信客户端通道显示名 (`component.wechat-client-label`) |
 | 接入通道和通道配置 (`page.channel-management`) | implements | 接入通道卡片配置 (`spec.009-channel-config-cards`) |
 | 框架更新确认 (`page.framework-update`) | calls | 宿主机更新任务 (`api.framework-update`) |
+| 框架更新确认 (`page.framework-update`) | related_to | 微信消息附件、引用和品牌区更新提醒 (`spec.015-wechat-message-display`) |
 | 运行概览 (`page.home-dashboard`) | implements | 首页布局与后台增量发布 (`spec.012-home-release`) |
 | 官方市场 (`page.official-marketplace`) | calls | 客户端官方目录 (`integration.official-catalog`) |
 | 微信工作台 (`page.wechat-workbench`) | depends_on | 微信工作台 API (`api.wechat-workbench`) |
