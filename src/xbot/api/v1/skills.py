@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+import httpx
 
 from xbot.app.deps import get_context
 from xbot.runtime.context import AppContext
 
 router = APIRouter()
+
+
+@router.get('/catalog')
+async def official_catalog() -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            response = await client.get('https://xbot.catmi.si/api/catalog')
+            response.raise_for_status()
+            items = response.json()
+            if not isinstance(items, list):
+                raise ValueError('invalid catalog')
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(502, '暂时无法读取官方目录，请稍后重试。') from exc
+    return {'success': True, 'data': items}
 
 
 @router.get("")

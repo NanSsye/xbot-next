@@ -447,6 +447,16 @@ button {
   position: relative;
 }
 
+.frontend-version {
+  flex: none;
+  align-self: flex-end;
+  padding: 2px max(12px, env(safe-area-inset-right)) max(3px, env(safe-area-inset-bottom));
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
 .content-scroll {
   flex: 1;
   overflow-y: auto;

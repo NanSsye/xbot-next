@@ -36,6 +36,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Store,
   Sun,
   Tag,
   Trash2,
@@ -74,11 +75,14 @@ import type {
 } from "../types";
 import { AgentWorkspace } from "./AgentWorkspace";
 import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
+import { SettingsHome } from './SettingsHome';
+import { version as frontendVersion } from '../../package.json';
 import { HomeDashboard, type WebSocketState } from "./HomeDashboard";
 import { PageHeading } from "./IllustrationHero";
 import { KnowledgeCenter } from "./KnowledgeCenter";
 import { MarkdownContent } from "./MarkdownContent";
 import { OperationsCenter } from "./OperationsCenter";
+import { OfficialMarketplace } from "./OfficialMarketplace";
 import { WechatPersonaPanel } from "./WechatPersonaPanel";
 
 export type View =
@@ -91,6 +95,7 @@ export type View =
   | "operations"
   | "channels"
   | "extensions"
+  | "marketplace"
   | "settings";
 
 type ThemeMode = "system" | "light" | "dark";
@@ -105,6 +110,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof LayoutDashboard; d
   { id: "operations", label: "任务与自动化", icon: CalendarClock, desc: "后台任务、计划与活动流", section: "系统" },
   { id: "channels", label: "接入通道", icon: Network, desc: "协议网关与扫码鉴权", section: "系统" },
   { id: "extensions", label: "扩展与技能", icon: Package, desc: "插件工具箱与能力库", section: "系统" },
+  { id: "marketplace", label: "官方市场", icon: Store, desc: "官方插件与技能发行包", section: "系统" },
   { id: "settings", label: "控制台设置", icon: Settings, desc: "系统参数与运行配置", section: "系统" },
 ];
 
@@ -116,7 +122,14 @@ function readThemeMode(): ThemeMode {
 }
 
 export function App() {
-  const [view, setView] = useState<View>("home");
+  const readView = () => navItems.find(item => `#/${item.id}` === window.location.hash)?.id ?? "home";
+  const [view, changeView] = useState<View>(readView);
+  function setView(next: View) { window.location.hash = `/${next}`; }
+  useEffect(() => {
+    const sync = () => changeView(readView());
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
   const [settingsSection, setSettingsSection] = useState("");
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
@@ -840,11 +853,12 @@ export function App() {
             </div>
           )}
 
+          {view === "marketplace" && <OfficialMarketplace />}
           {view === "extensions" && (
             <div className="content-scroll">
               <PageHeading
                 title="扩展与技能"
-                tagline="插件与 Skill 管理"
+                tagline="管理本机已安装的插件与技能"
                 stats={[
                   { label: "已安装插件", value: plugins.length, tone: "purple" },
                   { label: "技能包数量", value: skills.length, tone: "primary" },
@@ -864,10 +878,10 @@ export function App() {
 
           {view === "settings" && (
             <div className="content-scroll">
-              <PageHeading title="控制台设置" tagline="模型、通道与控制台偏好" />
+              <PageHeading title="控制台设置" tagline="模型与控制台偏好" />
               <SettingsView
                 key={settingsSection}
-                initialSection={settingsSection}
+                onChat={()=>setView('agentChat')}
                 status={status}
                 themeMode={themeMode}
                 setThemeMode={setThemeMode}
@@ -884,6 +898,7 @@ export function App() {
             onSave={saveWechatProfile}
           />
         )}
+        <footer className="frontend-version" aria-label="前端版本">Xbot v{frontendVersion}</footer>
       </main>
     </div>
   );
@@ -1395,10 +1410,10 @@ function WechatProfilesView({
           padding: 14,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 260 }}>
+        <div className="community-filters">
+          <div className="community-picker">
           <select
-            className="input-text"
-            style={{ width: 220 }}
+            aria-label="筛选画像所属社群"
             value={selectedConversationId}
             onChange={(e) => setSelectedConversationId(e.target.value)}
           >
@@ -1409,6 +1424,7 @@ function WechatProfilesView({
               </option>
             ))}
           </select>
+          <ChevronDown size={15} aria-hidden="true" /></div>
 
           <div className="search-field" style={{ flex: 1 }}>
             <Search size={14} />
@@ -1548,20 +1564,21 @@ function GroupOpsView({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div className="card" style={{ display: "flex", alignItems: "center", gap: 14, padding: 14 }}>
-        <span style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap" }}>选择社群:</span>
+      <div className="card community-filters community-filters--members">
+        <div className="community-picker">
         <select
-          className="input-text"
-          style={{ width: 280 }}
+          aria-label="选择管理的社群"
           value={selectedConversationId}
           onChange={(e) => setSelectedConversationId(e.target.value)}
         >
+          {conversations.length === 0 && <option value="">暂无可选社群</option>}
           {conversations.map((c) => (
             <option key={c.id} value={c.id}>
               {c.title || c.raw_id}
             </option>
           ))}
         </select>
+        <ChevronDown size={15} aria-hidden="true" /></div>
 
         <div className="search-field" style={{ flex: 1 }}>
           <Search size={14} />
@@ -1678,6 +1695,8 @@ function Channels({
   onConfigApplied: (event: ConfigAppliedEvent) => Promise<void>;
 }) {
   const [showQrModal, setShowQrModal] = useState(false);
+  const [configAdapter, setConfigAdapter] = useState("");
+  const configDialog = useRef<HTMLDialogElement>(null);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1703,31 +1722,21 @@ function Channels({
                     <Network size={22} />
                   )}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className={`status-pill ${isRunning ? "status-pill--ok" : "status-pill--neutral"}`}>
-                    {isRunning ? "在线运行" : "已停止"}
-                  </span>
-                </div>
+                <h3 className="channel-name">{icon ? <button type="button" className="channel-open" title="通道配置"
+                    aria-label={`配置${channelDisplayName(ad.name)}`} aria-haspopup="dialog"
+                    onClick={() => { setConfigAdapter(ad.name); configDialog.current?.showModal(); }}>
+                    {channelDisplayName(ad.name)}
+                  </button> : channelDisplayName(ad.name)}</h3>
+                <button type="button" role="switch" aria-checked={ad.enabled} className="channel-switch"
+                  aria-label={`启用${channelDisplayName(ad.name)}`} title={ad.enabled ? "关闭通道" : "启用通道"}
+                  onClick={() => void toggleAdapter(ad.name, ad.enabled)} />
               </div>
 
-              <div>
-                <h3 style={{ margin: "0 0 4px 0", fontSize: 15, fontWeight: 700 }}>
-                  {channelDisplayName(ad.name)}
-                </h3>
-                <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
-                  {ad.name === "wechat869" ? "接入方式：客户端扫码" : <>协议通道标识: <code>{ad.name}</code> ({ad.platform})</>}
-                </p>
-              </div>
+              <p className="channel-description">{({wechat869: "微信客户端扫码接入", wechat_ilink: "微信 iLink 扫码接入", qq: "QQ 机器人消息", telegram: "Telegram Bot 消息", web: "网页对话入口"} as Record<string,string>)[ad.name] ?? ad.platform}</p>
 
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderTop: "1px solid var(--border-subtle)", paddingTop: 12 }}>
-                <button
-                  type="button"
-                  className={`ghost-button ${ad.enabled ? "danger" : ""}`}
-                  style={{ flex: 1, fontSize: 12 }}
-                  onClick={() => void toggleAdapter(ad.name, ad.enabled)}
-                >
-                  {ad.enabled ? "关闭通道" : "启用通道"}
-                </button>
+              <div className="channel-actions">
+                <span className={`status-pill ${isRunning ? "status-pill--ok" : "status-pill--neutral"}`}>{isRunning ? "运行中" : "已停止"}</span>
+                {icon && !ad.name.startsWith("wechat") && <span aria-hidden="true">配置 ›</span>}
 
                 {ad.name === "wechat_ilink" && (
                   <button
@@ -1761,6 +1770,15 @@ function Channels({
           );
         })}
       </div>
+
+      <dialog ref={configDialog} className="channel-config-dialog" aria-labelledby="channel-config-title"
+        onClose={event => { if (event.target === event.currentTarget) setConfigAdapter(""); }}>
+        <header className="modal-header">
+          <h2 className="modal-title" id="channel-config-title">{channelDisplayName(configAdapter)}配置</h2>
+          <button type="button" className="icon-button" aria-label="关闭通道配置" autoFocus onClick={() => configDialog.current?.close()}><X size={16} /></button>
+        </header>
+        {configAdapter && <ConfigCenter key={configAdapter} scope="channels" channel={configAdapter} onApplied={onConfigApplied} />}
+      </dialog>
 
       {showQrModal && (
         <div className="modal-backdrop" onClick={() => setShowQrModal(false)}>
@@ -1833,14 +1851,14 @@ function Extensions({
             className={tab === "plugins" ? "primary-button" : "ghost-button"}
             onClick={() => setTab("plugins")}
           >
-            🧩 插件生态 ({plugins.length})
+            本机插件
           </button>
           <button
             type="button"
             className={tab === "skills" ? "primary-button" : "ghost-button"}
             onClick={() => setTab("skills")}
           >
-            ⚡ Skill 技能库 ({skills.length})
+            本机技能
           </button>
         </div>
 
@@ -1853,7 +1871,7 @@ function Extensions({
         </button>
       </div>
 
-      <div className="extensions-grid">
+      <h3>本机已安装（{tab==='plugins'?plugins.length:skills.length}）</h3><div className="extensions-grid">
         {tab === "plugins" ? (
           plugins.map((p) => (
             <div key={p.name} className="extension-card">
@@ -1940,49 +1958,20 @@ function Extensions({
    ========================================================================== */
 
 function SettingsView({
-  initialSection,
+  onChat,
   status,
   themeMode,
   setThemeMode,
   onConfigApplied,
 }: {
-  initialSection: string;
+  onChat: () => void;
   status: SystemStatus | null;
   themeMode: ThemeMode;
   setThemeMode: (t: ThemeMode) => void;
   onConfigApplied: (event: ConfigAppliedEvent) => Promise<void>;
 }) {
-  const [tab, setTab] = useState<"system" | "channels" | "appearance">("system");
-
   return (
-    <div className="settings-layout">
-      <nav className="settings-tabs" aria-label="设置类别">
-        <button
-          type="button"
-          aria-current={tab === "system" ? "true" : undefined}
-          onClick={() => setTab("system")}
-        >
-          系统与模型
-        </button>
-        <button
-          type="button"
-          aria-current={tab === "channels" ? "true" : undefined}
-          onClick={() => setTab("channels")}
-        >
-          通道参数
-        </button>
-        <button
-          type="button"
-          aria-current={tab === "appearance" ? "true" : undefined}
-          onClick={() => setTab("appearance")}
-        >
-          外观与状态
-        </button>
-      </nav>
-
-      {tab === "system" && <ConfigCenter scope="system" initialSection={initialSection} onApplied={onConfigApplied} />}
-      {tab === "channels" && <ConfigCenter scope="channels" onApplied={onConfigApplied} />}
-      {tab === "appearance" && (
+    <SettingsHome onChat={onChat} onApplied={onConfigApplied}>
         <div className="settings-appearance-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
           <div className="card">
             <h2 className="card__title">主题</h2>
@@ -2034,8 +2023,7 @@ function SettingsView({
             </div>
           </div>
         </div>
-      )}
-    </div>
+    </SettingsHome>
   );
 }
 
