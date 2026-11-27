@@ -26,7 +26,9 @@ def build(old, new, output, version):
 
 
 def build_from_inventory(before, after, new, output, version):
-    identify = lambda files: hashlib.sha256(json.dumps(files,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    def identify(files):
+        encoded = json.dumps(files, sort_keys=True, separators=(',', ':')).encode()
+        return hashlib.sha256(encoded).hexdigest()
     changes = {k:{'before':before.get(k),'after':after.get(k)} for k in sorted(before.keys() | after.keys()) if before.get(k)!=after.get(k)}
     if not changes:
         raise ValueError('Nothing to release')

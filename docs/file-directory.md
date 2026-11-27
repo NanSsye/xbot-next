@@ -223,6 +223,10 @@
 | `specs/015-wechat-message-display/plan.md` | 文件 | 微信消息与更新提醒规格及验收 |
 | `specs/015-wechat-message-display/spec.md` | 文件 | 微信消息与更新提醒规格及验收 |
 | `specs/015-wechat-message-display/tasks.md` | 文件 | 微信消息与更新提醒规格及验收 |
+| `specs/016-updater-validation` | 目录 | 跨版本更新和合并门禁验收 |
+| `specs/016-updater-validation/plan.md` | 文件 | 宿主发现与任务回执验证方案 |
+| `specs/016-updater-validation/spec.md` | 文件 | 可信历史基线及兼容性要求 |
+| `specs/016-updater-validation/tasks.md` | 文件 | 本地验证结果与生产限制 |
 | `specs/ACTIVE` | 文件 | 当前进行中的 feature-id（pg new/use 维护） |
 | `specs/_template` | 目录 | SDD 模板（spec/plan/tasks） |
 | `specs/_template/plan.md` | 文件 | 技术方案模板 |

@@ -1,12 +1,12 @@
 """Stage an authenticated ZIP in a fresh directory outside the live tree."""
 
-from contextlib import contextmanager
-from io import BytesIO
-from pathlib import Path
 import shutil
 import stat
 import tempfile
 import zipfile
+from contextlib import contextmanager
+from io import BytesIO
+from pathlib import Path
 
 from xbot.services.release_signature import verify_release
 

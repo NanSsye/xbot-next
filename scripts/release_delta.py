@@ -20,7 +20,7 @@ def digest(path):
 
 
 def checked(root, name):
-    if not (name.startswith('ui/dist/') or name.startswith('src/xbot/')):
+    if not name.startswith(('ui/dist/', 'src/xbot/')):
         raise ValueError('Unmanaged path')
     p = root
     for part in name.split('/'):

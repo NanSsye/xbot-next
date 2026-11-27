@@ -8,8 +8,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-import uvicorn
 import pytest
+import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient

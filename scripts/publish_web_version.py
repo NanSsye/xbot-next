@@ -9,9 +9,8 @@ import tempfile
 from pathlib import Path
 
 import httpx
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
 from build_web_delta import build_from_inventory, inventory
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 
 def main():

@@ -12,7 +12,6 @@ from pathlib import Path
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
 from release_delta import checked
 from release_signature import verify_release
 

@@ -1,22 +1,22 @@
 import base64
 import hashlib
-from io import BytesIO
 import zipfile
+from io import BytesIO
+from types import SimpleNamespace
 
-import pytest
 import httpx
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from types import SimpleNamespace
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from xbot.plugins.loader import PluginLoader
-from xbot.skills.loader import SkillLoader
-from xbot.services.release_stage import staged_release
 from xbot.api.v1 import skills as endpoint
 from xbot.app.deps import get_context
 from xbot.core.config import PluginConfig, SkillConfig
+from xbot.plugins.loader import PluginLoader
 from xbot.plugins.manager import PluginManager
+from xbot.services.release_stage import staged_release
+from xbot.skills.loader import SkillLoader
 from xbot.skills.manager import SkillManager
 
 
@@ -52,9 +52,8 @@ def test_signed_extension_load(tmp_path, kind):
 
 def test_invalid_signed_archive_leaves_no_files(tmp_path):
     before = set(tmp_path.iterdir())
-    with pytest.raises(ValueError):
-        with staged_release(*signed('framework', {'../outside': 'invalid'}), tmp_path):
-            pytest.fail('invalid package was staged')
+    with pytest.raises(ValueError), staged_release(*signed('framework', {'../outside': 'invalid'}), tmp_path):
+        pytest.fail('invalid package was staged')
     assert set(tmp_path.iterdir()) == before
 
 

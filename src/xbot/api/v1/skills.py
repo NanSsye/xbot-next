@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from pathlib import Path
 import re
 import zipfile
+from pathlib import Path
 
+import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import APIRouter, Depends, HTTPException, Request
-import httpx
 
 from xbot.app.deps import get_context
 from xbot.runtime.context import AppContext
@@ -26,8 +26,8 @@ async def install_release(digest: str, request: Request, ctx: AppContext = Depen
     if not re.fullmatch('[0-9a-f]{64}', digest):
         raise HTTPException(400, '发行标识无效')
     try:
-        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(
-            Path('configs/release-signing.pub').read_text().strip(), validate=True))
+        encoded_key = await asyncio.to_thread(Path('configs/release-signing.pub').read_text)
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(encoded_key.strip(), validate=True))
     except (OSError, ValueError) as exc:
         raise HTTPException(503, '未配置官方发行公钥') from exc
     catalog = (await official_catalog())['data']
@@ -47,7 +47,7 @@ async def install_release(digest: str, request: Request, ctx: AppContext = Depen
             raise HTTPException(502, '下载发行包失败') from exc
         plugin = item['Kind'] == 'plugin'
         manager = ctx.plugins if plugin else ctx.skills
-        root = Path(manager.config.directory).resolve()
+        root = await asyncio.to_thread(Path(manager.config.directory).resolve)
         try:
             with staged_release(item, data, key, root.parent) as stage:
                 manifest = manager.loader.load_manifest(stage)

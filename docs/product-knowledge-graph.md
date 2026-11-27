@@ -1,7 +1,7 @@
 # 产品知识图谱（可读视图）
 
-> 自动生成，图谱版本 `f2d6627+015-wechat-message-display@20261127151832`。**请勿手改**；修改请用 `pg update`。
-> 数据源：`knowledge/graph/nodes.jsonl`（45 节点）、`edges.jsonl`（52 边）。
+> 自动生成，图谱版本 `3aeede2+016-updater-validation@20261127154842`。**请勿手改**；修改请用 `pg update`。
+> 数据源：`knowledge/graph/nodes.jsonl`（46 节点）、`edges.jsonl`（53 边）。
 
 ## 共享 / 业务（shared）
 
@@ -29,6 +29,7 @@
 | `spec.013-framework-release-policy` | 框架更新发布规范 | active | specs/013-framework-release-policy/spec.md | 管理后台只上传一次完整的 Xbot 程序包，发布一个目标版本；客户端按需下载差异文件，兼容旧版可直接跨版本更新。已确认的要求，不表示已经上线。 |
 | `spec.014-framework-bundle` | 签名完整包与按需文件下载实现 | active | specs/014-framework-bundle/spec.md | 需求 014-framework-bundle：签名完整包与按需文件下载实现 |
 | `spec.015-wechat-message-display` | 微信消息附件、引用和品牌区更新提醒 | active | specs/015-wechat-message-display/spec.md | 需求 015-wechat-message-display：微信消息附件、引用和品牌区更新提醒 |
+| `spec.016-updater-validation` | 验证跨版本宿主更新与修复合并门禁 | active | specs/016-updater-validation/spec.md | 需求 016-updater-validation：验证跨版本宿主更新与修复合并门禁 |
 
 ### doc
 
@@ -79,7 +80,7 @@
 
 | ID | 名称 | 状态 | 路径 | 说明 |
 |----|------|------|------|------|
-| `service.framework-stage` | 签名完整包差异暂存 | active | scripts/framework_stage.py | 基于可信完整程序清单，只取发生变化的目标对象，尚未部署。 |
+| `service.framework-stage` | 签名完整包差异暂存 | active | scripts/framework_stage.py | 校验签名完整基线；可信旧 Web 指纹需附官方历史清单并校验非 Web 文件。仅暂存目标差异，供宿主事务执行。 |
 | `service.release-switch` | 宿主机整版切换 | active | scripts/release_switch.py | 受控暂存目录切换和旧版本复验，尚未连接网页 |
 | `service.web-release-discovery` | 跨版本增量发现 | active | scripts/release_catalog.py | 按当前构建指纹筛选正式签名增量包；下载不触发安装 |
 | `service.wechat-workbench-outgoing` | 微信工作台出站消息入库 | active | src/xbot/runtime/engine.py | 同步和队列成功发送的 869 文本共用历史写入和 message.created 事件；不会把模型输出或发送失败投影成已发送。 |
@@ -157,6 +158,7 @@
 | 微信工作台 (`page.wechat-workbench`) | depends_on | 控制台工作区外壳 (`component.console-shell`) |
 | 微信工作台 (`page.wechat-workbench`) | implements | 微信工作台 869 头像与机器人回复回显 (`spec.005-wechat-workbench`) |
 | 签名完整包差异暂存 (`service.framework-stage`) | implements | 签名完整包与按需文件下载实现 (`spec.014-framework-bundle`) |
+| 签名完整包差异暂存 (`service.framework-stage`) | implements | 验证跨版本宿主更新与修复合并门禁 (`spec.016-updater-validation`) |
 | 签名完整包差异暂存 (`service.framework-stage`) | related_to | 宿主机更新任务 (`api.framework-update`) |
 | 宿主机整版切换 (`service.release-switch`) | depends_on | 发行就绪检查 (`api.release-readiness`) |
 | 跨版本增量发现 (`service.web-release-discovery`) | implements | 首页布局与后台增量发布 (`spec.012-home-release`) |
