@@ -7,7 +7,7 @@
 
 构建机按目标平台构建并导出镜像（生产发布需先通过镜像实机验收）：
 
-镜像使用 Python 3.14 与 `uv.lock`，构建时下载并校验固定 Hermes `v0.23.4`；部署端不需要源码或联网下载 Hermes。若升级独立实例，先备份 `state/data/hermes/`，不要用旧版打开已升级的状态库。
+镜像使用 Python 3.14 与 `uv.lock`，构建时下载并校验固定 Hermes `v0.23.4`；部署端不需要源码或联网下载 Hermes。若升级独立实例，先备份 `release/app/data/hermes/`，不要用旧版打开已升级的状态库。
 
 ```sh
 docker build --platform linux/amd64 -t xbot-next:clean-local .
@@ -32,8 +32,9 @@ docker compose up -d
 
 ## 持久化与升级
 
-`state/data/` 保存网页配置、Hermes 会话与产物；`state/logs/`、`state/files/` 和 `state/workspace/` 分别保存日志、发布文件和工作区。
-PostgreSQL、Redis 使用 Compose 项目的独立命名卷。备份时保留独立 `.env`、`state/`、PostgreSQL 数据及 Redis 持久化文件，保护凭据和会话数据。
+新安装只把 `release/app/` 整体映射到 Xbot 的 `/app`。其中 `data/` 保存配置、媒体和 Hermes 会话，`logs/` 保存日志，`files/` 保存附件，`workspace/`、`.agent-workspace/` 保存工作区。`/media` 是网页地址，不是数据库目录。
+宿主机同一目录下的 `database/postgres/`、`database/redis/` 分别交给数据库容器；Xbot 容器内同名目录被空的只读挂载遮挡。更新任务和签名发行包暂存留在 `updater/`，不属于应用数据。
+旧安装不能只改路径后直接启动。迁移前先备份 `.env`、应用状态和数据库，并验证备份可恢复。停写并正常关闭数据库后复制数据、保留原属主和权限，核对数据库版本及业务记录后再切换；不要复制运行中的 PostgreSQL 数据目录当作备份。
 
 新版本首次启动会执行 `fresh_0001`。它不会创建微伴社区表，也不能识别旧实例的 Alembic 版本。
 备份应包含完整 `release/app/`。修改映射中的兼容代码后重启应用即可；单独更换镜像不会替换宿主机已有代码。不要删除命名卷，也不要对实际使用的数据库运行初始迁移的 downgrade。

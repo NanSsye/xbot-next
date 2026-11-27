@@ -9,6 +9,7 @@ from xbot.api.v1 import (
     config,
     conversations,
     events,
+    framework,
     knowledge,
     messages,
     plugins,
@@ -18,6 +19,7 @@ from xbot.api.v1 import (
 )
 
 router = APIRouter()
+router.include_router(framework.router, prefix='/framework-update', tags=['system'])
 router.include_router(system.router, prefix="/system", tags=["system"])
 router.include_router(bot.router, prefix="/bot", tags=["bot"])
 router.include_router(adapters.router, prefix="/adapters", tags=["adapters"])

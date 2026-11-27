@@ -13,15 +13,22 @@ services:
         import os, pathlib, shutil, tempfile
         target = pathlib.Path('/release/app')
         if target.is_symlink(): raise SystemExit('Unexpected app symlink')
-        if target.exists() and any(target.iterdir()):
+        target.mkdir(exist_ok=True)
+        marker = target / '.xbot-layout-v2'
+        if marker.is_file():
             if not (target / '.venv/bin/xbot').is_file(): raise SystemExit('Existing app is incomplete; not overwriting')
         else:
+            if any(p.name != 'database' for p in target.iterdir()): raise SystemExit('Existing installation: migrate persistent data before enabling layout v2')
+            db = target / 'database'
+            if db.is_symlink() or (db.exists() and any(p.is_symlink() or not p.is_dir() or p.name not in ('postgres', 'redis') or any(p.iterdir()) for p in db.iterdir())): raise SystemExit('Existing database: manual migration required')
             with tempfile.TemporaryDirectory(dir=target.parent) as stage:
                 ready = pathlib.Path(stage) / 'app'
                 shutil.copytree('/app', ready, symlinks=True)
-                if not (ready / '.venv/bin/xbot').is_file(): raise SystemExit('Invalid runtime image')
-                os.replace(ready, target)
+                if not (ready / '.venv/bin/xbot').is_file() or (ready / 'database').exists(): raise SystemExit('Invalid runtime image')
+                for child in ready.iterdir(): child.rename(target / child.name)
+                marker.touch(exist_ok=False)
   xbot:
+    container_name: xbot-pro
     image: ${XBOT_IMAGE:?Set XBOT_IMAGE to the release image tag}
     pull_policy: never
     restart: unless-stopped
@@ -41,11 +48,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./release/app:/app
-      - ./state/data:/app/data
-      - ./state/logs:/app/logs
-      - ./state/files:/app/files
-      - ./state/workspace:/app/workspace
-      - ./state/agent-workspace:/app/.agent-workspace
+      - ./updater/requests:/run/xbot-updater/requests
+      - ./updater/status:/run/xbot-updater/status:ro
+    tmpfs:
+      - /app/database:ro,noexec,nosuid,nodev,size=4k
     depends_on:
       init-code:
         condition: service_completed_successfully
@@ -62,7 +68,10 @@ services:
       POSTGRES_DB: xbot
       POSTGRES_PASSWORD: ${XBOT_POSTGRES_PASSWORD:?Set a new database password}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./release/app/database/postgres:/var/lib/postgresql/data
+    depends_on:
+      init-code:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "xbot", "-d", "xbot"]
       interval: 5s
@@ -74,13 +83,13 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - redis_data:/data
+      - ./release/app/database/redis:/data
+    depends_on:
+      init-code:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
 
-volumes:
-  postgres_data:
-  redis_data:

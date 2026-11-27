@@ -77,6 +77,7 @@ import { AgentWorkspace } from "./AgentWorkspace";
 import { ConfigCenter, type ConfigAppliedEvent } from "./ConfigCenter";
 import { SettingsHome } from './SettingsHome';
 import { version as frontendVersion } from '../../package.json';
+import { FrameworkUpdate } from './FrameworkUpdate';
 import { HomeDashboard, type WebSocketState } from "./HomeDashboard";
 import { PageHeading } from "./IllustrationHero";
 import { KnowledgeCenter } from "./KnowledgeCenter";
@@ -898,7 +899,7 @@ export function App() {
             onSave={saveWechatProfile}
           />
         )}
-        <footer className="frontend-version" aria-label="前端版本">Xbot v{frontendVersion}</footer>
+        {view === 'settings' ? <span className="frontend-version">Xbot v{frontendVersion}</span> : <FrameworkUpdate version={frontendVersion} />}
       </main>
     </div>
   );
@@ -2023,6 +2024,7 @@ function SettingsView({
             </div>
           </div>
         </div>
+        <FrameworkUpdate version={frontendVersion} settings />
     </SettingsHome>
   );
 }

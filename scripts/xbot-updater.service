@@ -1,0 +1,16 @@
+[Unit]
+Description=Xbot framework update worker
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/xbot-updater.env
+ExecStart=/usr/bin/python3 /opt/xbot-updater/release_worker.py ${XBOT_DEPLOY_ROOT}
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
