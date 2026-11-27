@@ -1,0 +1,23 @@
+[Unit]
+Description=Xbot release center
+After=network.target
+
+[Service]
+DynamicUser=yes
+StateDirectory=xbot-release-center
+WorkingDirectory=/opt/xbot-release-center
+ExecStart=/opt/xbot-release-center/server
+EnvironmentFile=/etc/xbot-release-center.env
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
